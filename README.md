@@ -1,2 +1,3 @@
 # mb-radio
-radio function development for minibitx
+A companion to the minibitx project.  This is a simple text terminal based radio control panel.  
+
