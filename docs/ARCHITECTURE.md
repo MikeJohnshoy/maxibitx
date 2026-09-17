@@ -27,13 +27,23 @@ and picks between them via a new selector
 reachable remotely via a new rigctld command (`u`/`U FFTFILT`) and a new
 checkbox in `tools/rigctl_panel.py`'s RX Filter panel, so the operator
 can A/B the two on real signals before `narrow_filter_coeffs[]` is ever
-removed for good. See §10 for the actual measured/verified detail on all
-seven steps, and step 5's own entry for what still needs on-air
-re-verification on the TX side. What's left for RX specifically: the
-on-air listening comparison itself (step 7's own entry) — the code is
-complete and integration-tested (`src/rx_audio_test.c`), but "sounds at
-least as good for real CW copy" is the operator's judgment call on real
-hardware, not something bench-verifiable. This document is both the
+removed for good. **First on-air test of step 7 found real audio
+working**, plus two follow-ups: a startup-delay regression (RX's new,
+larger `FFTW_MEASURE` plan compounding with TX's pre-existing one —
+fixed by a new `filter_new_ex()` letting `rx_filter.c` use
+`FFTW_ESTIMATE` instead, construction time ~240ms→~0.2ms measured on
+this project's dev machine, per-block cost re-checked and still under
+0.2% of the real-time budget either way) and an open question (the FFT
+filter's audible effect versus the elliptic one being hard to notice —
+likely a genuinely subtle DSP-shape similarity rather than a bug, per
+§10 step 7's follow-up entry, but not yet confirmed either way). See §10
+for the actual measured/verified detail on all seven steps, and step 5's
+own entry for what still needs on-air re-verification on the TX side.
+What's left for RX specifically: the on-air listening comparison itself
+(step 7's own entry) — the code is complete and integration-tested
+(`src/rx_audio_test.c`), but "sounds at least as good for real CW copy"
+is the operator's judgment call on real hardware, not something
+bench-verifiable. This document is both the
 design rationale that justified starting `maxibitx` as its own repo
 (not a minibitx branch, not an sbitx fork-in-place) and the plan for
 §10's remaining steps. Everything below is grounded in minibitx's
@@ -645,6 +655,29 @@ for keying an external accessory's PTT, not this input line.)
   both the Pi Zero 2W and Pi 4 zbitx boards), but it's a cost class
   maxibitx didn't have before, and it folds into the `PERIOD_FRAMES`
   re-validation above.
+- **`FFTW_MEASURE` plan-creation cost at startup, not just per-block
+  cost while running.** Confirmed as a real, user-visible issue on
+  first on-air test (§10 step 7's follow-up entry) — two separate
+  `FFTW_MEASURE` searches (`tx_pipeline_new()` at N=2048,
+  `rx_filter_new()` at N=4096) both run during `maxibitx`'s own startup
+  sequence, with no wisdom-file cache to amortize either across process
+  restarts (this section's own first bullet already flagged the missing
+  cache; this is that cost actually showing up as a noticeable startup
+  delay, not just a theoretical one). `rx_filter.c` now uses
+  `FFTW_ESTIMATE` instead (via the new `filter_new_ex()`), which removed
+  its share of the delay — construction time dropped from ~240ms to
+  ~0.2ms on this project's dev machine (not the user's actual Pi Zero
+  2W — still needs on-hardware confirmation) with per-block cost
+  unaffected (~0.016ms either way, against a ~10.667ms budget).
+  `tx_pipeline_new()` still uses `FFTW_MEASURE` (unchanged, not yet
+  reconsidered) — if its own share of the startup delay is still
+  bothersome once RX's share is gone, the same `FFTW_ESTIMATE` trade is
+  available there too, not yet applied since the user hadn't reported it
+  as a standalone issue before RX's cost was added alongside it. A real
+  wisdom-file cache (sbitx's own `WISDOM_MODE`) would let `tx_pipeline.c`
+  keep `FFTW_MEASURE`'s per-block speed *and* avoid paying the search on
+  every restart — still not implemented, still the more complete fix if
+  startup time keeps mattering.
 
 ## 10. Proposed build order
 
@@ -982,6 +1015,82 @@ for keying an external accessory's PTT, not this input line.)
    something any bench harness can settle — `narrow_filter_coeffs[]`
    stays in the tree, and elliptic stays the default, until that
    judgment is made.
+
+   **Step 7 real-hardware follow-up (first on-air test).** The step 7
+   binary was actually run on real sBitx hardware for the first time,
+   and receive audio worked — the elliptic filter's own effectiveness
+   was reconfirmed. Two things came back from that test:
+   - **Startup got noticeably slower than minibitx's**, with specific
+     pauses right after `cw_init()`'s "CW straight key ready" printf and
+     right after `sound.c`'s "opened hw:0,0 ... playback" printf
+     (`maxibitx.c`'s own init sequence — traced line by line to confirm
+     this). Root cause: both pauses are `FFTW_MEASURE` plan-creation
+     cost — `rx_filter_new()` (inside `rx_audio_init()`, called right
+     after the first printf) at the new `RX_FILTER_N=4096`, and
+     `tx_pipeline_new()` (inside `sound_thread_start()`, called right
+     after the second) at `TX_PIPELINE_N=2048` — the RX cost is newly
+     added by step 6/7 and is now paid in addition to TX's pre-existing
+     one, on every process start, with no wisdom-file cache to amortize
+     either (a pre-existing limitation — see this section's own earlier
+     note on wisdom files). Fixed by adding `fft_filter.c`/`.h`'s
+     `filter_new_ex(block_len, impulse_len, fftw_flags)` — an additive,
+     non-breaking generalization of `filter_new()` (which now just calls
+     it with `FFTW_MEASURE`, so every existing caller — `tx_pipeline.c`,
+     both bench harnesses — is unaffected) — and switching
+     `rx_filter_new()` to call it with `FFTW_ESTIMATE` instead, the same
+     "good enough, chosen immediately, no benchmarking search" trade
+     `window_filter()`'s own throwaway per-retune plans already made, now
+     applied to `rx_filter.c`'s one persistent, per-block-reused plan
+     too. Measured on this project's own dev sandbox (a different, and
+     probably substantially faster, machine than the user's Pi Zero
+     2W — this number is directional, not a Pi measurement):
+     `filter_new_ex(FFTW_MEASURE)` at `RX_FILTER_N=4096` took 240.1ms to
+     construct; `filter_new_ex(FFTW_ESTIMATE)` took 0.2ms — essentially
+     removing that half of the startup delay. Per-block cost (the thing
+     that actually has to fit the 96kHz/1024-sample ~10.667ms real-time
+     budget, not just startup) was checked, not assumed: both the
+     MEASURE-built and ESTIMATE-built plans measured ~0.016ms per
+     `filter_forward()`+`filter_inverse()` call on this same sandbox —
+     under 0.2% of budget either way, and identical between the two
+     (ESTIMATE only changes *which* startup search is skipped, not the
+     transform algorithm's own big-O cost at this size). This is real
+     margin, not a razor-thin one, so it's very likely the Pi Zero 2W
+     (slower per-operation, but not by 500x) still has comfortable
+     headroom too — but that is this fix's one open item: it hasn't
+     been re-measured on the user's actual board yet, only reasoned
+     about from a healthy safety margin measured elsewhere. All four
+     bench harnesses (`test-fft-filter`, `test-tx-pipeline`,
+     `test-rx-filter`, `test-rx-audio`) were re-run after this change and
+     produced identical readings to before (0.00dB passband, 267Hz -3dB
+     width, 1.05 RMS ratio, etc.) — `FFTW_ESTIMATE` changes which
+     algorithm variant FFTW picks, not the frequency-domain design math,
+     so no DSP behavior changed, only construction-time cost.
+   - **"Use FFT filter" produced no noticeable audible effect.** Not a
+     code bug as far as this can be verified without the user's own
+     console log: `rx_audio_test.c`'s Case B independently confirms the
+     selector really does switch which buffer feeds stage 4 (a real,
+     measured 1.05 RMS ratio between the two, not a "didn't crash"
+     check), and both filters really do have different, live-measured
+     shapes (step 6: FFT ~267Hz -3dB width, 2.04:1 shape factor, 16ms
+     group delay; elliptic: ~300Hz, ~1.9:1, ~2.6ms). The likely
+     explanation is that this is a genuinely subtle DSP difference, not
+     a missing one — both are already narrow ~300Hz CW filters with a
+     similar shape factor, so switching *between* them doesn't produce
+     the dramatic, easy-to-hear change that switching the narrow filter
+     *off* (bypass) does; the user's own report ("the narrow cw filter
+     is still very effective") is consistent with this — the narrowing
+     itself clearly works, just not distinguishably differently between
+     the two implementations, at their current default widths, to this
+     operator's ear. Ruling in/out a real wiring bug instead (the FFTFILT
+     toggle silently not reaching `rx_audio.c`, or the block-size-
+     mismatch fallback silently always engaging) needs information only
+     available from the user's own running console log: whether toggling
+     the checkbox prints `hamlib.c`'s `"rigctl: U FFTFILT %d -> ..."`
+     confirmation line, and whether `rx_audio.c`'s own
+     `"rx_audio: block size ... falling back to the elliptic filter"`
+     warning ever appears (it should not, in normal operation — the audio
+     thread always calls in fixed `RX_FILTER_BLOCK_LEN`-sized blocks).
+     Not yet confirmed either way.
 8. First on-air SSB TX test, CAT-triggered PTT, one band, conservative
    drive level — measure actual sideband rejection before touching
    power calibration at all.
