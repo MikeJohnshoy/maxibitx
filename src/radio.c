@@ -116,6 +116,22 @@ int radio_rit_enabled(void) {
   return rit_enabled;
 }
 
+// current_mode: the real, single-owner mode state described in
+// radio.h's enum radio_mode comment. Defaults to CW - the one mode
+// minibitx can actually transmit today - rather than either control
+// surface's old, independently-chosen cosmetic default (hamlib.c's was
+// "USB", usb_gadget.c's Kenwood CAT was CW already; this makes both
+// agree on the one that was actually honest).
+static enum radio_mode current_mode = RADIO_MODE_CW;
+
+void radio_set_mode(enum radio_mode m) {
+  current_mode = m;
+}
+
+enum radio_mode radio_get_mode(void) {
+  return current_mode;
+}
+
 // TX transitions run on this dedicated worker thread rather than
 // whatever thread calls radio_set_tx() - see
 // docs/05_process_and_threading_model.md for why (short version: cw.c
