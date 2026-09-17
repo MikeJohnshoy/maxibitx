@@ -1,11 +1,23 @@
 # 03 — TX processing pipeline
 
-**This document describes today's inherited (minibitx) TX pipeline —
-CW only, direct to the DAC.** It is the accurate starting point for
-[`ARCHITECTURE.md`](ARCHITECTURE.md)'s planned replacement (one shared
-FFT overlap-save pipeline for CW and SSB TX, and the RX narrow CW
-filter too), not a description of that plan. See `ARCHITECTURE.md` for
-where this is headed; nothing below reflects that yet.
+**As of `ARCHITECTURE.md` build order step 5, this document is
+historical, not current.** It describes minibitx's original,
+inherited direct-to-DAC CW scheme (a second, IF-shifted oscillator in
+`cw.c`, a matching residual correction in `radio.c`'s
+`radio_tx_apply()`) - real code that ran on real hardware for a real
+stretch of this project, and the actual starting point
+[`ARCHITECTURE.md`](ARCHITECTURE.md)'s replacement was designed
+against, but no longer what the shipped `maxibitx` binary runs. Step 5
+replaced that scheme with `tx_pipeline.c`'s shared FFT pipeline (an
+explicit sideband-zero plus a bin-rotate doing the same IF-placement
+job in the frequency domain instead) - see `ARCHITECTURE.md` §10 step
+4/5 for the current mechanism, its derivation, and its bench numbers.
+Kept here rather than deleted because most of the *analog* chain this
+document describes (the crystal filter, both mixers, the PA, the LPF
+bank) didn't change at all - only how the baseband/IF waveform
+reaching the DAC gets constructed digitally did; this remains the
+right reference for that hardware, just not for `cw.c`'s own math
+below.
 
 Status: CW TX implemented and bench-verified, including single-sideband
 image suppression (~40dB, confirmed on-air on two independent SDR
