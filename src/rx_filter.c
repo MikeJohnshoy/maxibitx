@@ -10,13 +10,41 @@
 // bookkeeping filter_tune_real() needs.
 
 #include "rx_filter.h"
+#include <stdio.h>
 
 struct rx_filter *rx_filter_new(float pitch_hz, float width_hz)
 {
 	struct rx_filter *r = malloc(sizeof(struct rx_filter));
-	// FFTW_ESTIMATE, not filter_new()'s FFTW_MEASURE - see this
-	// function's header comment in rx_filter.h for why.
-	r->filt = filter_new_ex(RX_FILTER_BLOCK_LEN, RX_FILTER_IMPULSE_LEN, FFTW_ESTIMATE);
+
+	// FFTW_ESTIMATE by default (not filter_new()'s FFTW_MEASURE - see
+	// this function's header comment in rx_filter.h for why), but
+	// overridable at runtime via MAXIBITX_RX_FILTER_FFTW_MEASURE - a
+	// deliberate, temporary diagnostic knob added after a real-hardware
+	// report (docs/ARCHITECTURE.md §10 step 7's follow-up) of an ALSA
+	// playback xrun flood a few seconds into a run on a Pi Zero 2W,
+	// AFTER switching to FFTW_ESTIMATE fixed the startup delay it was
+	// meant to fix. Two live hypotheses this exists to bisect between:
+	// (a) FFTW_ESTIMATE's un-benchmarked algorithm choice happens to run
+	// meaningfully slower per block than FFTW_MEASURE's on this specific
+	// ARM core (a real, known FFTW characteristic - ESTIMATE trades
+	// speed for a fast, un-searched choice, and how much speed varies by
+	// machine), independent of anything else changing; or (b) the
+	// pre-existing "run both stage-3 filters every block regardless of
+	// selection" design (rx_audio.c, step 7) was already right at this
+	// board's real-time ceiling and nobody had run it long enough to
+	// notice before this session. Setting this environment variable to
+	// any non-empty value forces FFTW_MEASURE back (slow startup, like
+	// before this fix) so the two can be told apart: if the xrun flood
+	// goes away, it's (a) and the real fix is a wisdom-file cache (still
+	// not implemented - see §9); if it persists, it's (b) and the real
+	// fix is in rx_audio.c's "always run both filters" design, not here.
+	const char *force_measure = getenv("MAXIBITX_RX_FILTER_FFTW_MEASURE");
+	unsigned flags = (force_measure && *force_measure) ? FFTW_MEASURE : FFTW_ESTIMATE;
+	printf("rx_filter: using %s for its FFTW plan (RX_FILTER_N=%d)%s\n",
+	       flags == FFTW_MEASURE ? "FFTW_MEASURE" : "FFTW_ESTIMATE", RX_FILTER_N,
+	       flags == FFTW_MEASURE ? " - MAXIBITX_RX_FILTER_FFTW_MEASURE set, expect a slower startup" : "");
+
+	r->filt = filter_new_ex(RX_FILTER_BLOCK_LEN, RX_FILTER_IMPULSE_LEN, flags);
 	rx_filter_retune(r, pitch_hz, width_hz);
 	return r;
 }
