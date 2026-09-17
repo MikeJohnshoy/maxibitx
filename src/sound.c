@@ -566,41 +566,103 @@ static void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output
 #define BLOCK_TIMING_WINDOW_NS 5000000000L /* 5 seconds */
 #define BLOCK_PERIOD_BUDGET_MS (1000.0 * PERIOD_FRAMES / SAMPLE_RATE) /* 10.667ms */
 
-struct block_timing_tracker {
+// A first version of this only timed sound_process() - a real-hardware
+// run (docs/ARCHITECTURE.md §10 step 7's follow-up) showed that alone
+// avg=1.9-2.7ms/max=3.3ms, comfortably under the 10.667ms/block budget,
+// with NO visible spike even in the same 5s windows where the playback
+// xrun flood was actively happening - ruling out sound_process() itself
+// (the DSP path steps 6/7 touched) as the cause. Since the flood is real
+// but invisible here, the missing time has to be hiding somewhere this
+// wasn't looking: the blocking `snd_pcm_readi()` call (which should
+// normally take ~one period's worth of time as its own natural pacing,
+// but would reveal an upstream capture-side stall if it ever took much
+// more or less than that), the `snd_pcm_writei()` call plus the
+// buffer-fill work around it, or genuinely unaccounted time between one
+// iteration's write and the next iteration's read (`cw_poll_key()`, or a
+// scheduling gap this thread didn't get to run through). This widens the
+// same periodic report to all of those phases, plus the whole loop
+// iteration's own period (measured start-of-read to start-of-read, which
+// is what a healthy system should hold near 10.667ms exactly, no more,
+// no less), so whichever phase is actually where the missing time goes
+// shows up directly instead of needing another guess-and-recompile
+// round trip.
+struct phase_stats {
   long sum_ns;
   long max_ns;
   int count;
+};
+
+static void phase_note(struct phase_stats *p, long elapsed_ns) {
+  p->sum_ns += elapsed_ns;
+  if (elapsed_ns > p->max_ns)
+    p->max_ns = elapsed_ns;
+  p->count++;
+}
+
+static void phase_reset(struct phase_stats *p) {
+  p->sum_ns = 0;
+  p->max_ns = 0;
+  p->count = 0;
+}
+
+static void phase_print(const struct phase_stats *p, const char *label) {
+  double avg_ms = p->count ? (p->sum_ns / (double)p->count) / 1e6 : 0.0;
+  double max_ms = p->max_ns / 1e6;
+  fprintf(stderr, "  %-8s avg=%.3fms max=%.3fms (n=%d)\n", label, avg_ms, max_ms, p->count);
+}
+
+struct loop_timing_tracker {
+  struct phase_stats read, process, write, period;
   struct timespec window_start;
+  struct timespec last_loop_top;
   int started;
 };
 
-static void block_timing_note(struct block_timing_tracker *t, long elapsed_ns) {
+// One call per loop iteration, right at the top (before snd_pcm_readi());
+// records the read/process/write phases *from the previous* iteration
+// (all three are already-elapsed durations the caller measured) and this
+// iteration's period (time since the previous iteration's own top-of-loop
+// timestamp) - then, once BLOCK_TIMING_WINDOW_NS has elapsed, prints all
+// four and resets. Pass -1 for any phase not applicable this iteration
+// (e.g. write when pcm_playback is NULL).
+static void loop_timing_note(struct loop_timing_tracker *t, long read_ns, long process_ns,
+                              long write_ns) {
   struct timespec now;
   clock_gettime(CLOCK_MONOTONIC, &now);
 
   if (!t->started) {
     t->window_start = now;
+    t->last_loop_top = now;
     t->started = 1;
+    return; // no previous top-of-loop timestamp yet to measure a period against
   }
 
-  t->sum_ns += elapsed_ns;
-  if (elapsed_ns > t->max_ns)
-    t->max_ns = elapsed_ns;
-  t->count++;
+  long period_ns = (now.tv_sec - t->last_loop_top.tv_sec) * 1000000000L +
+                    (now.tv_nsec - t->last_loop_top.tv_nsec);
+  t->last_loop_top = now;
+
+  if (read_ns >= 0)
+    phase_note(&t->read, read_ns);
+  if (process_ns >= 0)
+    phase_note(&t->process, process_ns);
+  if (write_ns >= 0)
+    phase_note(&t->write, write_ns);
+  phase_note(&t->period, period_ns);
 
   long elapsed_window_ns = (now.tv_sec - t->window_start.tv_sec) * 1000000000L +
                             (now.tv_nsec - t->window_start.tv_nsec);
-  if (elapsed_window_ns >= BLOCK_TIMING_WINDOW_NS && t->count > 0) {
-    double avg_ms = (t->sum_ns / (double)t->count) / 1e6;
-    double max_ms = t->max_ns / 1e6;
+  if (elapsed_window_ns >= BLOCK_TIMING_WINDOW_NS && t->period.count > 0) {
     fprintf(stderr,
-            "sound: sound_process() timing over last %ds: avg=%.3fms max=%.3fms "
-            "(budget %.3fms/block, %d blocks)\n",
-            (int)(BLOCK_TIMING_WINDOW_NS / 1000000000L), avg_ms, max_ms,
-            BLOCK_PERIOD_BUDGET_MS, t->count);
-    t->sum_ns = 0;
-    t->max_ns = 0;
-    t->count = 0;
+            "sound: loop timing over last %ds (budget %.3fms/block period):\n",
+            (int)(BLOCK_TIMING_WINDOW_NS / 1000000000L), BLOCK_PERIOD_BUDGET_MS);
+    phase_print(&t->read, "read");
+    phase_print(&t->process, "process");
+    phase_print(&t->write, "write");
+    phase_print(&t->period, "period");
+    phase_reset(&t->read);
+    phase_reset(&t->process);
+    phase_reset(&t->write);
+    phase_reset(&t->period);
     t->window_start = now;
   }
 }
@@ -620,10 +682,15 @@ static void *audio_loop(void *arg) {
 
   static struct xrun_tracker capture_xrun = {0};
   static struct xrun_tracker playback_xrun = {0};
-  static struct block_timing_tracker block_timing = {0};
+  static struct loop_timing_tracker loop_timing = {0};
 
   while (g_running) {
+    struct timespec t_read0, t_read1;
+    clock_gettime(CLOCK_MONOTONIC, &t_read0);
     snd_pcm_sframes_t frames = snd_pcm_readi(pcm_capture, cap_buf, PERIOD_FRAMES);
+    clock_gettime(CLOCK_MONOTONIC, &t_read1);
+    long read_ns = (t_read1.tv_sec - t_read0.tv_sec) * 1000000000L +
+                   (t_read1.tv_nsec - t_read0.tv_nsec);
     if (frames < 0) {
       xrun_note(&capture_xrun, "capture");
       if (xrun_recover(pcm_capture, (int)frames) < 0) {
@@ -646,8 +713,7 @@ static void *audio_loop(void *arg) {
     clock_gettime(CLOCK_MONOTONIC, &t0);
     sound_process(rx_buf, mic_buf, spk_buf, tx_buf, n);
     clock_gettime(CLOCK_MONOTONIC, &t1);
-    block_timing_note(&block_timing, (t1.tv_sec - t0.tv_sec) * 1000000000L +
-                                          (t1.tv_nsec - t0.tv_nsec));
+    long process_ns = (t1.tv_sec - t0.tv_sec) * 1000000000L + (t1.tv_nsec - t0.tv_nsec);
 
     // Once per audio block - checks the key, manages the CW keying
     // burst's hang timer, and asserts/releases PTT via radio_set_tx()
@@ -659,7 +725,10 @@ static void *audio_loop(void *arg) {
     // burst - see docs/08_troubleshooting_and_bringup.md for why
     // (ALSA underrun detection is tied to the hardware clock, not to
     // whether writei() is called).
+    long write_ns = -1; // stays -1 (not counted) if pcm_playback is NULL
+    struct timespec t_write0, t_write1;
     if (pcm_playback) {
+      clock_gettime(CLOCK_MONOTONIC, &t_write0);
       if (cw_tx_active()) {
         // Per-band calibrated scale (see the TX_SAMPLE_HEADROOM
         // comment above) - looked up once per block, not per
@@ -787,7 +856,12 @@ static void *audio_loop(void *arg) {
           pcm_playback = NULL;
         }
       }
+      clock_gettime(CLOCK_MONOTONIC, &t_write1);
+      write_ns = (t_write1.tv_sec - t_write0.tv_sec) * 1000000000L +
+                 (t_write1.tv_nsec - t_write0.tv_nsec);
     }
+
+    loop_timing_note(&loop_timing, read_ns, process_ns, write_ns);
   }
 
   return NULL;
