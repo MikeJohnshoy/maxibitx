@@ -4,21 +4,26 @@
 #define CW_H
 
 // Sidetone/keying pitch - what the operator actually hears on the local
-// monitor (see cw_get_sample() / SIDETONE_SCALE in sound.c). This is what
-// a real CW pitch control would adjust. It is NOT the frequency written
-// to the DAC's TX-feeding (right) channel - see TX_IF_OFFSET_HZ in cw.c
-// and cw_get_tx_sample().
+// monitor (see cw_get_sample()). This is what a real CW pitch control
+// would adjust. As of docs/ARCHITECTURE.md build order step 5, this is
+// also the ONLY frequency cw.c ever generates - the same real-valued,
+// envelope-shaped tone at CW_PITCH_HZ feeds both the local sidetone
+// monitor AND (as the shared TX pipeline's `i_sample`, sound.c) the
+// actual TX-modulating waveform, matching real sbitx's own
+// `output_speaker[j] = i_sample * sidetone` pattern (one signal, two
+// uses) instead of a second, IF-shifted NCO of its own.
 //
-// Shared with radio.c: cw.c's TX carrier sits at CW_PITCH_HZ +
-// TX_IF_OFFSET_HZ rather than at RX_IF_FREQ_HZ (radio.h), which - left
-// uncorrected - makes the transmitted RF frequency land CW_PITCH_HZ
-// below the tuned dial frequency (bench-confirmed; see
-// docs/03_tx_processing_pipeline.md's "Known limitations" for the
-// derivation). radio.c's radio_tx_apply() applies a +CW_PITCH_HZ
-// correction to clk2 for the duration of TX to cancel this out - the
-// mirror of real sbitx's own rx_pitch TX correction, applied here at the
-// one place all TX (straight key via cw.c, and remote MOX via
-// hpsdr_p1.c) funnels through.
+// Before step 5, cw.c generated a SECOND tone here, at
+// CW_PITCH_HZ + TX_IF_OFFSET_HZ (a now-removed constant - see this
+// file's git history / docs/ARCHITECTURE.md §5 for the derivation),
+// specifically to land the actual TX product inside the crystal
+// filter's passband without a phasing/Hilbert stage. That whole
+// IF-shifted-NCO/residual-correction scheme (and the matching
+// `- CW_PITCH_HZ` term `radio_tx_apply()`, radio.c, used to apply to
+// clk2 for the same reason) is now handled instead by tx_pipeline.c's
+// shared IF bin-rotate, bench-derived and verified in
+// docs/ARCHITECTURE.md §10 step 4 - see radio.c's radio_tx_apply() for
+// the current clk2 formula and derivation.
 #define CW_PITCH_HZ 700
 
 // Call once at startup, after radio_hw_gpio_init() (CW_KEY must already
@@ -38,16 +43,14 @@ int cw_tx_active(void);
 // Call once per audio sample while cw_tx_active() is true. Returns the
 // next output sample: the sidetone, scaled by the attack/decay envelope
 // as the key goes down/up. Range is approximately [-1, 1]. Owns the
-// envelope advance - call this before cw_get_tx_sample() for the same
-// sample, not after.
+// envelope advance.
+//
+// This is now the ONLY sample cw.c produces (see CW_PITCH_HZ's comment
+// above) - sound.c uses it two ways every TX sample: directly, for the
+// local sidetone monitor (unchanged), and as tx_pipeline.c's `i_sample`
+// input, one full TX_PIPELINE_BLOCK_LEN-sized block at a time, to
+// produce the actual TX-modulating waveform. There is no longer a
+// second, IF-shifted function to call afterward.
 double cw_get_sample(void);
-
-// Call once per audio sample, immediately after cw_get_sample(), while
-// cw_tx_active() is true. Returns the actual TX-modulating waveform -
-// same envelope position cw_get_sample() just advanced to, but at the
-// IF-shifted carrier (CW_PITCH_HZ + TX_IF_OFFSET_HZ) that lands inside
-// the crystal filter's passband instead of producing two RF tones. See
-// cw.c's TX_IF_OFFSET_HZ comment. Range is approximately [-1, 1].
-double cw_get_tx_sample(void);
 
 #endif /* CW_H */
