@@ -9,6 +9,15 @@
 
 #include <stdint.h>
 
+// Which stage-3 ("single signal" selectivity) implementation is in use -
+// see rx_audio_set_narrow_filter_impl() below and rx_audio.c's file
+// header ("docs/ARCHITECTURE.md build order step 6/7") for what each one
+// is.
+enum rx_narrow_filter_impl {
+	RX_NARROW_FILTER_ELLIPTIC, // the original fixed 8-pole elliptic IIR (default)
+	RX_NARROW_FILTER_FFT,      // the shared FFT overlap-save filter (src/rx_filter.c)
+};
+
 // Call once at startup, after vfo_init_phase_table().
 void rx_audio_init(void);
 
@@ -25,14 +34,27 @@ int rx_audio_get_volume(void);
 // centered on CW_PITCH_HZ - a separate stage from the wide image-reject
 // filter upstream of it (see rx_audio.c's file header and
 // docs/dsp_design_notes/rx_audio_demod_design.md §7/§8 for why those two
-// are deliberately independent) - is a fixed 8-pole elliptic design, not
-// runtime-adjustable. An earlier revision had a rx_audio_set_filter_bw()
-// here; it's gone deliberately, not an oversight - see rx_audio.c's
-// "Why elliptic, and why fixed" for why: the SHAPE (coefficients) is
-// fixed. Whether the operator hears it at all is a different, much
-// cheaper question - rx_audio_set_narrow_filter() below just switches
-// between the filter's output and its bypass, no coefficient math
-// involved, so it doesn't reopen that earlier decision.
+// are deliberately independent) - originally a fixed 8-pole elliptic
+// design, not runtime-adjustable. An earlier revision had a
+// rx_audio_set_filter_bw() here; it's gone deliberately, not an
+// oversight - see rx_audio.c's "Why elliptic, and why fixed" for why:
+// the SHAPE (coefficients) was fixed. Whether the operator hears it at
+// all is a different, much cheaper question - rx_audio_set_narrow_filter()
+// below just switches between the filter's output and its bypass, no
+// coefficient math involved, so it doesn't reopen that earlier decision.
+//
+// docs/ARCHITECTURE.md build order step 6/7: a second stage-3
+// implementation now exists alongside the elliptic one - src/rx_filter.c/
+// .h, the same shared FFT overlap-save engine tx_pipeline.c uses, with
+// pitch/width as live parameters instead of a baked-in design. Both
+// implementations run continuously regardless of which one is currently
+// selected (same "keep it warm so switching doesn't thump" reasoning the
+// enable/bypass toggle already used, just extended to cover switching
+// BETWEEN implementations too, not only on/off) - see
+// rx_audio_set_narrow_filter_impl() below and rx_audio.c's own comment
+// on why. Elliptic stays the default; this is meant for an on-air
+// listening comparison (§10 step 7), not a cutover - narrow_filter_coeffs[]
+// stays in the tree until that comparison says it's safe to remove.
 
 // Enable (1, the default) or bypass (0) stage 3, the narrow filter
 // above. The filter itself keeps running either way (its history stays
@@ -47,6 +69,20 @@ void rx_audio_set_narrow_filter(int enable);
 // back what it didn't itself just set" reasoning as
 // rx_audio_get_volume().
 int rx_audio_get_narrow_filter(void);
+
+// Which stage-3 implementation is selected when the narrow filter above
+// is enabled: 0 = the original elliptic IIR (the default - not yet
+// verified on air), 1 = the new shared FFT filter (src/rx_filter.c,
+// docs/ARCHITECTURE.md step 6). Wired to rigctld's "u"/"U FFTFILT"
+// (hamlib.c) for the same remote on-air A/B comparison this exists for -
+// see rx_audio.c's rx_audio_process() for how both implementations stay
+// warm regardless of which is selected.
+void rx_audio_set_narrow_filter_impl(int use_fft);
+
+// Current implementation selection, 0 or 1 (same meaning as
+// rx_audio_set_narrow_filter_impl()'s argument) - same readback
+// reasoning as rx_audio_get_narrow_filter().
+int rx_audio_get_narrow_filter_impl(void);
 
 // Demodulates one block's worth of already-mixed baseband I/Q (the same
 // i_samples[]/q_samples[] sound.c's sound_process() already computes for
