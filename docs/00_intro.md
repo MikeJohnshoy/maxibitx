@@ -28,10 +28,13 @@ to the growing collection of high quality SDR applications.
 
 ## What this is not
 
-minibitx has no waterfall and no mode logic — `m`/`M` (mode get/set)
-exist on the rigctld control port purely so a client's mode selector
-doesn't error out, minibitx doesn't act on the value in any way. It also
-has essentially no onboard demodulation for the SDR-facing path: an
+minibitx has no waterfall. Mode *state* is real as of `ARCHITECTURE.md`
+step 3 — `radio_get_mode()`/`radio_set_mode()` (`radio.c`) is the one
+place `m`/`M` (rigctld) and `MD` (Kenwood CAT) both read/write, instead
+of each keeping its own independently-cosmetic copy — but mode still
+doesn't *do* anything: nothing downstream reads it yet (that's steps
+4/5). It also has essentially no onboard demodulation for the SDR-facing
+path: an
 external SDR application is still expected to do everything downstream
 of baseband I/Q. The one exception is a single, fixed-mode local CW
 audio monitor (`rx_audio.c`) that lets the box be used as a standalone
@@ -43,10 +46,11 @@ minibitx was built by extracting the minimum set of functions from sbitx
 needed to let an external SDR app drive the hardware, and runs
 stand-alone.
 
-(maxibitx changes the mode-logic and TX-pipeline parts of this section
-once [`ARCHITECTURE.md`](ARCHITECTURE.md)'s plan is implemented — `m`/
-`M`/`MD` become real, and CW/SSB TX share one pipeline. Not yet done;
-this section still describes the inherited, current behavior.)
+(maxibitx changes the TX-pipeline part of this section once
+[`ARCHITECTURE.md`](ARCHITECTURE.md)'s remaining steps are implemented
+— CW/SSB TX sharing one pipeline, and mode actually selecting something.
+Not yet done; this section otherwise still describes the inherited
+behavior, mode state above being the one exception so far.)
 
 ## Status
 
