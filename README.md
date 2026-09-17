@@ -67,9 +67,16 @@ speaker - reading comparably low noise levels under both filters, well
 below the unfiltered reading. The FFT filter really is rejecting a
 similar amount of total noise energy; the elliptic filter's own
 resonant ripple just makes that rejection sound far more dramatic to
-this operator's ear. Elliptic stays the default on that basis. See
-`ARCHITECTURE.md` §10 for the measured/verified detail on all seven
-steps, including these follow-ups.
+this operator's ear. That account was then checked directly against
+both filters' actual measured frequency response (the FFT filter's live
+`fir_coeff`, read straight from the running code, against the elliptic
+cascade evaluated analytically) rather than left as a guess - the FFT
+filter turned out to be the narrower, deeper filter of the two by every
+measure (tighter -3dB width, a stopband floor 20-30dB below the
+elliptic's own ripple-limited one), so it isn't quietly under-filtering;
+the resonance-vs-flat-response explanation holds up. Elliptic stays the
+default on that basis. See `ARCHITECTURE.md` §10 for the
+measured/verified detail on all seven steps, including these follow-ups.
 
 ---
 
