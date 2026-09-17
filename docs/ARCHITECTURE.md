@@ -44,7 +44,14 @@ shows the FFT filter genuinely rejecting a comparable amount of total
 noise energy to the elliptic filter — not a bug — but the elliptic
 filter's own resonant ripple makes that rejection *sound* far more
 dramatic to this operator's ear, so elliptic stays the sensible default
-per §10 step 7's follow-up entry. See §10 for the actual measured/verified
+per §10 step 7's follow-up entry. That explanation was then checked
+directly against both filters' actual measured shapes (`fir_coeff` read
+live, elliptic's biquad cascade evaluated analytically) rather than
+left as an assumption — the FFT filter turned out to be the *narrower,
+deeper* filter of the two by every measure (-3dB width, stopband floor),
+so "little effect on the hiss" isn't the FFT filter under-filtering;
+it's consistent with the same resonance-vs-flat-response explanation,
+now on firmer footing. See §10 for the actual measured/verified
 detail on all seven steps, and step 5's own entry for what still needs
 on-air re-verification on the TX side.
 What's left for RX specifically: the on-air listening comparison itself
@@ -1379,6 +1386,37 @@ for keying an external accessory's PTT, not this input line.)
      effective) for anyone who prefers its flatter, ripple-free
      character, or for a future step that might narrow its width further
      to make the effect more assertive.
+   - **Follow-up: the FFT filter's actual measured shape, checked
+     directly rather than assumed.** The user's own description of the
+     FFT filter ("sounds like very wideband noise... little effect on
+     the hiss") was specific enough to warrant checking the psychoacoustic
+     hypothesis above against the filters' real frequency responses,
+     rather than resting on it. A small standalone tool (not part of the
+     maxibitx tree) read `rx_filter.c`'s live `fir_coeff` array directly
+     - the exact per-bin gain `filter_forward()` multiplies every block
+     by, at the shipped default 700Hz/300Hz tuning - and evaluated
+     `narrow_filter_coeffs[]`'s 4-section biquad cascade analytically at
+     the same frequencies, both normalized to 0dB at their own measured
+     passband peak. Result: the FFT filter is **not** the wider or
+     weaker of the two. Its -3dB width is 265Hz vs. elliptic's 325Hz, its
+     -40dB width 495Hz vs. 575Hz, and its stopband keeps falling smoothly
+     the further out you go, reaching -85dB by 4kHz. The elliptic
+     filter's stopband, by contrast, is a genuine ripple: two narrow,
+     very deep nulls (its design's transmission zeros, near 260Hz and
+     1790Hz) but sitting back up around only -50 to -60dB almost
+     everywhere else - exactly its spec'd "50dB stopband," never much
+     better, even 3kHz away from the passband. So the FFT filter isn't
+     failing to narrow the band or leaking more noise through by design
+     - if anything the measured data says the opposite. This *strengthens*
+     the resonance-vs-flat-response explanation above rather than
+     replacing it: with the FFT filter measurably at least as selective,
+     the most likely account for "little effect on the hiss" is still
+     that the elliptic filter's in-band ripple gives the CW tone a
+     resonant lift right where the ear is listening, making its noise
+     reduction sound obvious, while the FFT filter's flatter cut removes
+     comparable (here, more) energy with no such emphasis to draw the
+     ear's attention. Elliptic stays the default on the same basis as
+     before.
    - **RX dial accuracy, confirmed on air:** the user reports receiving
      W1AW (ARRL HQ's own station, a well-known reference signal hams use
      for exactly this kind of check) at 7.0475 MHz and finding it exactly
