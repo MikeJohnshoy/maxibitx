@@ -1,18 +1,22 @@
 # maxibitx — architecture and design rationale
 
-Status: §10 steps 1-3 done. Step 1: this tree is minibitx's `src/`,
+Status: §10 steps 1-4 done. Step 1: this tree is minibitx's `src/`,
 `docs/`, `data/`, and `tools/` carried over unchanged (only
 `src/maxibitx.c`'s filename and the Makefile's output binary name
 changed), confirmed building and running on real hardware. Step 2: the
 shared FFT overlap-save filter (`src/fft_filter.c`/`.h`) is ported and
 bench-verified against synthetic tones (`src/fft_filter_test.c`). Step
 3: mode is a real, single-owner value now (`radio_set_mode()`/
-`radio_get_mode()`, `radio.c`), agreed on by both control surfaces — see
-§10 for the actual measured/verified detail on both. Nothing past that
-has started: `cw.c`'s separate TX carrier and `rx_audio.c`'s fixed
-narrow filter are still exactly as minibitx shipped them, and neither
-the shared filter nor the real mode state is wired into an actual audio
-decision yet (steps 4-5). This document is both the
+`radio_get_mode()`, `radio.c`), agreed on by both control surfaces. Step
+4: a new, parallel shared TX pipeline module (`src/tx_pipeline.c`/`.h`)
+implements CW's slice of §5's plan and is bench-verified against a
+synthetic stand-in for `cw.c`'s sidetone (`src/tx_pipeline_test.c`) — see
+§10 for the actual measured/verified detail on all four. Nothing past
+that has started: `cw.c`'s own TX carrier and `rx_audio.c`'s fixed
+narrow filter are still exactly as minibitx shipped them and are what
+the real, running binary still transmits with — step 4's new module is
+bench-only, not wired into `sound.c`/`cw.c` yet (step 5 is next). This
+document is both the
 design rationale that justified starting `maxibitx` as its own repo
 (not a minibitx branch, not an sbitx fork-in-place) and the plan for
 §10's remaining steps. Everything below is grounded in minibitx's
@@ -398,9 +402,12 @@ pipeline this block (the keyer's envelope output for CW, mic audio for
 USB/LSB, and for `DIGITAL` the same mic/line-in audio as SSB, sourced
 from a host PC's digital-mode app instead of a human voice) and which
 sideband-zero branch applies — the same single mode check `tx_process()`
-already uses for these decisions. That's steps 4/5, once the shared
-pipeline itself is wired into `cw.c`/`rx_audio.c`; mode being real is
-the precondition for that, not that work itself.
+already uses for these decisions. The pipeline module itself exists and
+is bench-proven for CW's slice as of step 4 (`src/tx_pipeline.c`/`.h`),
+but nothing reads `radio_get_mode()` yet to pick an `i_sample` source or
+a sideband at runtime — that's step 5 (CW's own live cutover) and, for
+the USB/LSB/DIGITAL branches, step 7; mode being real was the
+precondition for this, not this work itself.
 
 **Open question, not yet answered by the existing hardware layer: what
 triggers PTT for voice?** `DIGITAL` doesn't add a new answer here —
@@ -610,7 +617,7 @@ for keying an external accessory's PTT, not this input line.)
      instead of sbitx's `1/N` (one of the two FFT round-trips inside
      `window_filter()` was going uncompensated) — verified back to
      0.00dB. This port's filter is unity-gain by construction; any gain
-     constant added later (step 7) calibrates real analog/mixer gain,
+     constant added later (step 8) calibrates real analog/mixer gain,
      not partly undoing an unlabeled FFT-normalization artifact too.
    - **Sideband separation (the central decision, §4)**: two tones at
      ±1031.25Hz inside a shared ±3000Hz passband — without the explicit
@@ -627,9 +634,10 @@ for keying an external accessory's PTT, not this input line.)
    - New dependency confirmed at build time, not just anticipated:
      `libfftw3-dev`, linked via `-lfftw3f` (single precision) — not yet
      installed/tested on an actual Pi, only in this bench environment.
-   Not yet done: wiring this into the real pipeline (steps 3-5 below),
-   or a wisdom-file cache for `filter_new()`'s `FFTW_MEASURE` plans
-   (see `fft_filter.c`'s comment on why that's deferred, not skipped).
+   Not yet done: wiring this into the real pipeline (later steps in this
+   build order), or a wisdom-file cache for `filter_new()`'s
+   `FFTW_MEASURE` plans (see `fft_filter.c`'s comment on why that's
+   deferred, not skipped).
 3. **Done, state only.** `radio_set_mode()`/`radio_get_mode()` added to
    `radio.c` (`enum radio_mode`: `CW`/`USB`/`LSB`/`DIGITAL`) and wired
    into both control surfaces — `hamlib.c`'s `m`/`M` (translated to/from
@@ -650,19 +658,99 @@ for keying an external accessory's PTT, not this input line.)
    not confirmed against a real WSJT-X rigctld session or a QMX packet
    capture — low-stakes for now since nothing reads `RADIO_MODE_DIGITAL`
    yet either.
-4. Migrate CW TX onto the shared pipeline (still bench-only), re-verifying
-   dial accuracy and image rejection against the same on-air numbers
-   `docs/03_tx_processing_pipeline.md` already recorded for the old
-   direct-to-DAC path, plus the envelope/block-boundary check from §9 —
-   before ever touching SSB on the air.
-5. Migrate `rx_audio.c`'s stage 3 onto the same shared pipeline (§5),
+4. **Done, bench-only.** Wrote a new, parallel shared TX pipeline module
+   (`src/tx_pipeline.c`/`.h`) implementing §5's plan for CW's own slice
+   of it: `fft_filter.c`'s passband filter (300-3000Hz, beta 5 — the
+   CW/USB-grouped passband real sbitx's own `tx_process()` uses, per §9),
+   an explicit sideband-zero (CW groups with USB's "keep the upper half"
+   treatment), and a shared IF bin-rotate meant to eventually replace
+   `cw.c`'s own `cw_tx_carrier`/`TX_IF_OFFSET_HZ` NCO *and*
+   `radio_tx_apply()`'s `CW_PITCH_HZ` residual correction on clk2 — not
+   just the NCO. Bench-verified against a synthetic stand-in for `cw.c`'s
+   real sidetone (`src/tx_pipeline_test.c`,
+   `make test-tx-pipeline && ./test-tx-pipeline`, same "not part of the
+   shipped binary" convention as step 2's harness). **`cw.c`/`radio.c`/
+   `sound.c` are completely untouched by this step** — this is a proven,
+   parallel replacement, not a live one; the real running binary still
+   transmits CW exactly as it did after step 1, unchanged. Real numbers:
+   - **IF placement**: the ideal shift (`bfo_freq - xtal_filter_center -
+     CW_PITCH_HZ` = 22600 - 700 = 21900Hz — landing the wanted mixing
+     product exactly on `xtal_filter_center`, with **no** residual
+     correction needed anywhere downstream) rounds to the nearest bin at
+     this pipeline's Fs/N = 46.875Hz resolution: 467 bins = 21890.625Hz
+     actual, a **9.375Hz residual** — a real, honestly-quantified cost of
+     moving IF placement into the FFT domain, but roughly **75x smaller**
+     than the old direct-NCO scheme's fixed 700Hz residual
+     (`docs/03_tx_processing_pipeline.md`'s "Known limitations"), and
+     small enough that it may not need a compensating correction at all
+     once this is ever wired in live (to be confirmed on air, not
+     assumed).
+   - **Placement/gain accuracy (Case A)**: the wanted tone measures
+     **0.00dB** at the predicted 22590.625Hz (700 + 21890.625) — exactly
+     where the derivation above predicts, at unity gain.
+   - **Sideband/image rejection (Case B)**: using CW_PITCH_HZ's real,
+     non-bin-aligned 700Hz (not a substituted bin-aligned stand-in, since
+     this is meant to prove the actual system, not an idealized one) and
+     a long (64-block, ~680ms) coherent integration to get a clean
+     reading despite that: without the explicit zero, wanted and image
+     measure identically (0dB each — the filter alone genuinely can't
+     tell them apart, confirming the zero is what does the work, not the
+     filter's rolloff, the same finding step 2's own case C already
+     made); with it, the image drops to **-70.05dB** — comfortably past
+     the crystal filter's own ~40dB analog rejection this whole scheme is
+     meant to preserve or improve on.
+   - **Block-boundary sanity (Case C, §9's flagged check)**: a synthetic
+     480-sample linear key-up ramp (standing in for `cw.c`'s real
+     Blackman-Harris envelope, private to that file) straddling an
+     internal 1024-sample block-processing seam shows no localized
+     discontinuity — max sample-to-sample 2nd-derivative magnitude
+     within ±8 samples of the seam (1.812) is not larger than the max
+     across the whole ramp (1.821); overlap-save's history carry-over
+     handles an amplitude change across the boundary as cleanly as it
+     already handled a steady tone in step 2.
+   - **Two real bugs caught by this bench harness before either would
+     have reached hardware** (the same discipline that caught step 2's
+     gain bug): (1) a naive per-block bin-rotate is not phase-continuous
+     across block boundaries unless `shift_bins * L / N` is an integer —
+     it isn't here (`L/N` is exactly 1/2 by this pipeline's fixed
+     1024/1025 sizing, and 467 is odd), so an early version silently
+     flipped the carrier's sign 180° every other block, measuring the
+     wanted tone at **-97.75dB** instead of ~0dB; fixed with a per-block
+     correction that, thanks to `L/N=1/2` exactly, collapses to a plain
+     alternating ±1 (no trig, no float drift) rather than a general
+     running-phase NCO. (2) constructing single-sideband audio by
+     zeroing one spectral half and taking the real part inherently halves
+     the amplitude (a real input tone splits into two equal-amplitude
+     complex exponentials; discarding one and taking the real part of
+     what's left reproduces only that surviving half) — measured as a
+     real **-6.02dB**, fixed with an explicit ×2 gain, keeping this
+     pipeline unity-gain by construction rather than letting a future,
+     unrelated calibration constant silently absorb it (exactly the
+     failure mode step 2's writeup above already flags in real sbitx's
+     own `filter_tune()`).
+   Not yet done: actually wiring this into `cw.c`/`sound.c` for a live
+   CW cutover (step 5 below), or retuning/reusing this module for SSB's
+   mic-audio `i_sample` source (`tx_pipeline_retune()` exists for LSB's
+   mirrored passband but is untested — nothing has called it yet).
+5. Wire `tx_pipeline.c` into `cw.c`/`sound.c` for CW only — the actual
+   live cutover from `cw.c`'s direct-to-DAC path (`cw_tx_carrier`/
+   `TX_IF_OFFSET_HZ`) to step 4's now bench-proven module, dropping
+   `radio_tx_apply()`'s `CW_PITCH_HZ` residual correction on clk2 in the
+   same change (step 4's derivation makes it unnecessary). Needs its own
+   on-air re-verification against the same dial-accuracy and ~40dB
+   image-rejection numbers `docs/03_tx_processing_pipeline.md` already
+   recorded for the path being replaced — the explicit on-air CW
+   re-confirmation checkpoint the original version of this build order
+   didn't have (it went straight from "still bench-only" to RX/SSB work
+   below without ever specifying a live CW cutover step at all).
+6. Migrate `rx_audio.c`'s stage 3 onto the same shared pipeline (§5),
    with pitch/width as live parameters — bench-verified against
    synthetic signals first (same `test_rx_audio.c`-style methodology),
    then an on-air listening comparison against the existing elliptic
    filter per §9's skirt-quality check, before removing
    `narrow_filter_coeffs[]` for good.
-6. First on-air SSB TX test, CAT-triggered PTT, one band, conservative
+7. First on-air SSB TX test, CAT-triggered PTT, one band, conservative
    drive level — measure actual sideband rejection before touching
    power calibration at all.
-7. Power/ALC calibration for voice, per §9.
-8. Physical PTT input (if wanted) once CAT-only testing is done.
+8. Power/ALC calibration for voice, per §9.
+9. Physical PTT input (if wanted) once CAT-only testing is done.
