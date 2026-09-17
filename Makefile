@@ -46,7 +46,8 @@ maxibitx: $(OBJ)
 	-sudo setcap cap_sys_nice,cap_dac_override+ep $@
 
 clean:
-	rm -f $(OBJ) maxibitx test-fft-filter src/fft_filter.o src/fft_filter_test.o
+	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline \
+		src/fft_filter.o src/fft_filter_test.o src/tx_pipeline.o src/tx_pipeline_test.o
 
 # docs/ARCHITECTURE.md step 2: fft_filter.c/.h, the shared FFT
 # overlap-save filter, and its standalone bench harness
@@ -58,3 +59,15 @@ clean:
 # that's steps 3-5, once this primitive is bench-proven.
 test-fft-filter: src/fft_filter.c src/fft_filter_test.c src/fft_filter.h
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/fft_filter.c src/fft_filter_test.c -o $@ -lfftw3f -lm
+
+# docs/ARCHITECTURE.md step 4: tx_pipeline.c/.h, the shared TX pipeline
+# (passband filter + explicit sideband-zero + IF bin-rotate) that's meant
+# to eventually replace cw.c's own cw_tx_carrier/TX_IF_OFFSET_HZ NCO, and
+# its standalone bench harness (tx_pipeline_test.c). Same "not part of
+# the build" convention as test-fft-filter above - a verification tool,
+# not something the shipped maxibitx binary links yet. Depends on
+# fft_filter.c/.h (step 2) and cw.h (CW_PITCH_HZ only - NOT cw.c itself,
+# see tx_pipeline_test.c's header comment for why). Not yet wired into
+# sound.c/cw.c - that's a later step, once this is bench-proven.
+test-tx-pipeline: src/tx_pipeline.c src/tx_pipeline_test.c src/tx_pipeline.h src/fft_filter.c src/fft_filter.h src/cw.h
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/fft_filter.c src/tx_pipeline.c src/tx_pipeline_test.c -o $@ -lfftw3f -lm
