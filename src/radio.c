@@ -1,6 +1,5 @@
 // radio.c
 
-#include "cw.h"
 #include "radio.h"
 #include "radio_hw.h"
 #include "si5351.h"
@@ -22,14 +21,19 @@ int in_tx = 0;
 int xtal_filter_center = 40012400;
 
 // bfo_freq: the real si5351 clk1 frequency used only while transmitting
-// (radio_tx_apply(), below). Deliberately NOT xtal_filter_center - it
-// sits TX_IF_OFFSET_HZ (cw.c) above it, which is what separates the
-// wanted CW TX product from its image (full derivation in cw.c's
-// TX_IF_OFFSET_HZ comment). bfo_freq == xtal_filter_center +
-// TX_IF_OFFSET_HZ by calibration, not enforced in code - changing
-// bfo_freq without re-deriving TX_IF_OFFSET_HZ to match throws away the
-// CW image suppression that constant depends on. RX is unaffected
-// either way (adjust xtal_filter_center for that).
+// (radio_tx_apply(), below). Deliberately NOT xtal_filter_center - the
+// TX-modulating waveform (tx_pipeline.c, via sound.c) is placed by its
+// own shared IF bin-rotate (docs/ARCHITECTURE.md §10 step 4's
+// derivation) at bfo_freq - xtal_filter_center - CW_PITCH_HZ above 0Hz,
+// specifically so bfo_freq's single real mixer produces a difference
+// product landing almost exactly on xtal_filter_center while the sum
+// product lands safely out in the crystal filter's stopband - the same
+// "BFO at the filter's edge" placement real sbitx's own design article
+// describes. bfo_freq == xtal_filter_center + ~22.6kHz by calibration,
+// not enforced in code - changing bfo_freq without re-deriving
+// tx_pipeline.c's TX_IF_SHIFT_HZ to match throws away that image
+// suppression. RX is unaffected either way (adjust xtal_filter_center
+// for that).
 int bfo_freq = 40035000;
 struct vfo lo;
 
@@ -40,10 +44,11 @@ struct vfo lo;
 // ON/OFF button. Both start at 0/disabled, and both go back to 0/
 // disabled on every radio_tune_to() call. Deliberately NOT involved in
 // clk1 (bfo_freq) at all: clk1's two jobs (RX centering vs TX
-// edge-placement for image rejection, see cw.c's TX_IF_OFFSET_HZ
-// comment) are both fixed offsets from the crystal filter's measured
-// center, unrelated to the tuned dial frequency - RIT only ever adjusts
-// the dial-frequency term that clk2 carries, and only for RX.
+// edge-placement for image rejection, see tx_pipeline.h's
+// TX_IF_SHIFT_HZ comment) are both fixed offsets from the crystal
+// filter's measured center, unrelated to the tuned dial frequency -
+// RIT only ever adjusts the dial-frequency term that clk2 carries, and
+// only for RX.
 static int rit_offset = 0;
 static int rit_enabled = 0;
 
@@ -145,21 +150,33 @@ static pthread_once_t tx_worker_once = PTHREAD_ONCE_INIT;
 
 static void radio_tx_apply(int tx_on) {
   if (tx_on) {
-    // clk1 -> bfo_freq, clk2 -> freq_hdr + xtal_filter_center -
-    // CW_PITCH_HZ (a real, deliberate residual from TX_IF_OFFSET_HZ's
-    // bench calibration - see cw.c - not an oversight). Algebraically
-    // identical to the pre-split formula this replaced - see
-    // docs/03_tx_processing_pipeline.md "Known limitations" if that
-    // needs re-deriving. This is the one place all TX (straight key
-    // via cw.c, remote MOX via hpsdr_p1.c) funnels through, rather
-    // than radio_tune_to() itself, which is also used for plain RX
-    // retuning. Capture is muted first - before PTT/the relay/either
-    // clock, i.e. before any TX RF exists at all - see
-    // sound_set_rx_capture()'s comment (sound.c) for why, and the
-    // tx_off branch below for the matching restore.
+    // clk1 -> bfo_freq, clk2 -> freq_hdr + xtal_filter_center - the same
+    // plain formula radio_tune_to() uses for RX, no correction term.
+    //
+    // Before docs/ARCHITECTURE.md build order step 5, cw.c generated its
+    // TX-modulating tone at a fixed, bench-derived IF offset
+    // (TX_IF_OFFSET_HZ) chosen to land the wanted mixing product close
+    // to, but CW_PITCH_HZ short of, xtal_filter_center - a small,
+    // deliberate residual baked into that one fixed NCO frequency (see
+    // cw.c's git history, or docs/03_tx_processing_pipeline.md's "Known
+    // limitations" for the old derivation), which this function used to
+    // cancel by subtracting that same CW_PITCH_HZ from clk2 instead.
+    // Step 5 replaced cw.c's IF-shifted NCO with tx_pipeline.c's shared
+    // FFT bin-rotate (sound.c), which is aimed directly at
+    // xtal_filter_center in the first place (docs/ARCHITECTURE.md §10
+    // step 4's derivation: shift_hz = bfo_freq - xtal_filter_center -
+    // CW_PITCH_HZ, landing the product on-center to within a
+    // bin-quantization residual of ~9Hz, not ~700Hz) - so this function
+    // no longer needs a compensating correction of its own. This is the
+    // one place all TX (straight key via cw.c, remote MOX via
+    // hpsdr_p1.c) funnels through, rather than radio_tune_to() itself,
+    // which is also used for plain RX retuning. Capture is muted first -
+    // before PTT/the relay/either clock, i.e. before any TX RF exists at
+    // all - see sound_set_rx_capture()'s comment (sound.c) for why, and
+    // the tx_off branch below for the matching restore.
     sound_set_rx_capture(0);
     si5351bx_setfreq(1, bfo_freq);
-    si5351bx_setfreq(2, freq_hdr + xtal_filter_center - CW_PITCH_HZ);
+    si5351bx_setfreq(2, freq_hdr + xtal_filter_center);
     radio_hw_set_ptt(1);
     usleep(20000); // let PTT assert before keying the relay
     radio_hw_set_tx_relay(1);
