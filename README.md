@@ -8,7 +8,7 @@ better," per the specific bugs already root-caused on sbitx/zbitx. The
 full rationale, the shared-FFT-pipeline design decision, and the build
 order are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-**Current state: build order steps 1-5 of `ARCHITECTURE.md`.**
+**Current state: build order steps 1-6 of `ARCHITECTURE.md`.**
 Step 1 carried minibitx over unchanged. Step 2 added the shared FFT
 overlap-save filter as a standalone, bench-verified primitive
 (`src/fft_filter.c`/`.h`, `make test-fft-filter && ./test-fft-filter`).
@@ -26,10 +26,18 @@ see that doc's own updated intro and `ARCHITECTURE.md` §10 step 5 for
 what actually runs today, its bench provenance, and what's still
 outstanding (on-air re-verification of dial accuracy, image rejection,
 and transmitted power against a wattmeter - not yet done on real
-hardware, only bench-proven so far). `rx_audio.c`'s fixed narrow filter
-is the one piece of the original plan still untouched (step 6 next).
-See `ARCHITECTURE.md` §10 for the measured/verified detail on all five
-steps.
+hardware, only bench-proven so far). **Step 6 added the RX-side
+counterpart, bench-only**: a new `src/rx_filter.c`/`.h` module
+(`make test-rx-filter && ./test-rx-filter`) replaces `rx_audio.c`'s
+fixed 8-pole elliptic "single signal" filter with the same shared FFT
+engine, pitch/width now live parameters instead of a baked-in design -
+`rx_audio.c` itself is completely untouched so far, same "bench first"
+discipline step 4 used before step 5's live TX cutover. Wiring
+`rx_filter.c` into `rx_audio.c` for a real, on-air listening comparison
+against the existing elliptic filter (before that filter is ever removed
+for good) is step 7, the one piece of the original plan not yet even
+started. See `ARCHITECTURE.md` §10 for the measured/verified detail on
+all six steps.
 
 ---
 
