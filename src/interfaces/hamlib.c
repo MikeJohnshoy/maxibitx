@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>  // strcasecmp() - name_to_mode() below
 #include <stdint.h>
 #include <unistd.h>
 #include <errno.h>
@@ -26,11 +27,52 @@ static int listen_fd = -1;
 static volatile int running = 0;
 static pthread_t accept_thread;
 
-// Cosmetic-only "current mode" state - minibitx has no onboard demod
-// (the SDR app does all mode selection/filtering in software), so M/m
-// just let a client believe its mode selection stuck, without minibitx
-// acting on it in any way.
-static char current_mode[32] = "USB";
+// Mode itself is real now - radio_get_mode()/radio_set_mode() (radio.h)
+// are the single owner both control surfaces agree on - see radio.h's
+// enum radio_mode comment. current_passband stays a local, cosmetic-
+// only stand-in: minibitx has no onboard demod (the SDR app does all
+// filtering in software), so there is no real passband-width setting
+// anywhere to actually apply this to yet.
+//
+// mode_to_name()/name_to_mode() translate between radio.h's enum and
+// the Hamlib RIG_MODE string names rigctld clients actually send/
+// expect. PKTUSB for RADIO_MODE_DIGITAL is a best-effort choice - the
+// standard Hamlib name for "USB with a digital-mode modem attached",
+// which is the closest existing name to what that placeholder mode is
+// for (see ARCHITECTURE.md §5) - not yet confirmed against a real
+// WSJT-X rigctld session, same "flag it, don't block on it" spirit as
+// usb_gadget.c's own MD/IF comments about the QMX CAT convention.
+static const struct { enum radio_mode mode; const char *name; } mode_names[] = {
+    { RADIO_MODE_CW,      "CW"     },
+    { RADIO_MODE_USB,     "USB"    },
+    { RADIO_MODE_LSB,     "LSB"    },
+    { RADIO_MODE_DIGITAL, "PKTUSB" },
+};
+#define MODE_NAMES_COUNT (sizeof(mode_names) / sizeof(mode_names[0]))
+
+static const char *mode_to_name(enum radio_mode m)
+{
+    for (size_t i = 0; i < MODE_NAMES_COUNT; i++)
+        if (mode_names[i].mode == m)
+            return mode_names[i].name;
+    return "CW"; // unreachable given the enum's own values; a safe fallback if that ever changes
+}
+
+// Returns 1 and sets *out on a recognized name, 0 (leaving *out
+// untouched) otherwise - so the caller can reject an unrecognized mode
+// name with RPRT -1, same convention as J's out-of-range RIT check,
+// rather than silently accepting (and thereby misrepresenting) it.
+static int name_to_mode(const char *name, enum radio_mode *out)
+{
+    for (size_t i = 0; i < MODE_NAMES_COUNT; i++) {
+        if (strcasecmp(name, mode_names[i].name) == 0) {
+            *out = mode_names[i].mode;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int current_passband = 2400;
 
 #define LINE_MAX_LEN 256
@@ -155,27 +197,41 @@ static int handle_line(int fd, char *line)
     }
 
     if (cmd[0] == 'm' && (cmd[1] == '\0' || cmd[1] == ' ')) {
-        // get_mode - two lines: mode, then passband
+        // get_mode - two lines: mode, then passband. Mode itself is
+        // real (radio_get_mode()); passband stays cosmetic - see the
+        // comment above current_passband.
         char buf[64];
-        snprintf(buf, sizeof(buf), "%s\n%d\n", current_mode, current_passband);
+        const char *name = mode_to_name(radio_get_mode());
+        snprintf(buf, sizeof(buf), "%s\n%d\n", name, current_passband);
         send_line(fd, buf);
-        printf("rigctl: m -> %s %d\n", current_mode, current_passband);
+        printf("rigctl: m -> %s %d\n", name, current_passband);
         return 0;
     }
 
     if (cmd[0] == 'M' && (cmd[1] == '\0' || cmd[1] == ' ')) {
-        // set_mode <mode> <passband> - cosmetic only, see comment above
+        // set_mode <mode> <passband> - mode is validated against
+        // radio.h's real enum now; passband is accepted and echoed
+        // back by get_mode above but not applied anywhere (see
+        // current_passband's comment). An unrecognized mode name is
+        // rejected outright (RPRT -1) rather than silently accepted -
+        // same convention as J's out-of-range RIT check - since there
+        // is now a real, meaningful value underneath it that a bogus
+        // name would otherwise misrepresent.
         char mode[32] = "";
         int passband = current_passband;
         sscanf(cmd + 1, "%31s %d", mode, &passband);
-        if (mode[0]) {
-            strncpy(current_mode, mode, sizeof(current_mode) - 1);
-            current_mode[sizeof(current_mode) - 1] = '\0';
+        enum radio_mode m;
+        if (mode[0] && !name_to_mode(mode, &m)) {
+            send_rprt(fd, -1);
+            printf("rigctl: M %s -> unrecognized mode, ignored\n", mode);
+            return 0;
         }
+        if (mode[0])
+            radio_set_mode(m);
         current_passband = passband;
         send_rprt(fd, 0);
-        printf("rigctl: M %s %d -> ok (cosmetic, not applied)\n",
-               current_mode, current_passband);
+        printf("rigctl: M %s %d -> ok\n",
+               mode_to_name(radio_get_mode()), current_passband);
         return 0;
     }
 
