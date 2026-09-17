@@ -46,4 +46,15 @@ maxibitx: $(OBJ)
 	-sudo setcap cap_sys_nice,cap_dac_override+ep $@
 
 clean:
-	rm -f $(OBJ) maxibitx
+	rm -f $(OBJ) maxibitx test-fft-filter src/fft_filter.o src/fft_filter_test.o
+
+# docs/ARCHITECTURE.md step 2: fft_filter.c/.h, the shared FFT
+# overlap-save filter, and its standalone bench harness
+# (fft_filter_test.c). Deliberately NOT part of `all`/$(SRC)/$(OBJ)
+# above - same "not part of the build" convention
+# docs/dsp_design_notes/rx_audio_demod_design.md describes for
+# test_rx_audio.c: a verification tool, not something the shipped
+# maxibitx binary links. Not yet wired into sound.c/cw.c/rx_audio.c -
+# that's steps 3-5, once this primitive is bench-proven.
+test-fft-filter: src/fft_filter.c src/fft_filter_test.c src/fft_filter.h
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/fft_filter.c src/fft_filter_test.c -o $@ -lfftw3f -lm
