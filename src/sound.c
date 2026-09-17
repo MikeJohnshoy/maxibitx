@@ -10,6 +10,7 @@
 #include "radio.h"
 #include "rx_audio.h"
 #include "sound.h"
+#include "tx_pipeline.h"
 #include "usb_gadget.h"
 #include <alsa/asoundlib.h>
 #include <math.h>
@@ -101,6 +102,16 @@ static snd_pcm_t *pcm_capture = NULL;
 static snd_pcm_t *pcm_playback = NULL;
 static pthread_t audio_thread;
 static volatile int g_running = 0;
+
+// The shared FFT TX pipeline (tx_pipeline.c) - one persistent instance,
+// created once at sound_thread_start() and freed at sound_thread_stop(),
+// same lifetime pattern as pcm_capture/pcm_playback above. Owns real
+// FFTW plans (FFTW_MEASURE - a real one-time setup cost, see
+// tx_pipeline.c/fft_filter.c's own comments on why), so it must not be
+// created/destroyed per TX burst. CW is the only mode wired up to it so
+// far (docs/ARCHITECTURE.md build order step 5) - USB/LSB/DIGITAL's mic
+// audio is future work (step 7), sharing this same instance.
+static struct tx_pipeline *cw_tx_pipeline = NULL;
 
 /* ------------------------------------------------------------------ */
 /*  ALSA mixer helper                                                 */
@@ -594,19 +605,77 @@ static void *audio_loop(void *arg) {
         double band_scale = hw_settings_tx_scale(freq_hdr);
         double amp = TX_SAMPLE_HEADROOM * TX_DRIVE * band_scale * TX_GAIN_CORRECTION;
 
-        for (int i = 0; i < n; i++) {
-          // cw_get_sample() owns the envelope advance for this
-          // sample - must be called first. cw_get_tx_sample()
-          // reads the same envelope position but at the
-          // IF-shifted carrier that lands inside the crystal
-          // filter's passband instead of producing two RF tones
-          // (see cw.c's TX_IF_OFFSET_HZ comment).
-          double sidetone = cw_get_sample();
-          double tx_wave = cw_get_tx_sample();
+        // cw_get_sample() owns the envelope advance for this sample -
+        // must be called exactly once per real audio sample (its
+        // envelope timing depends on elapsed samples, not on how the
+        // pipeline below batches them), and its result now does two
+        // jobs (real sbitx's own "one signal, two uses" pattern - see
+        // cw.h): the local sidetone monitor directly (unchanged), and
+        // tx_pipeline.c's shared FFT pipeline's `i_sample` input, one
+        // full TX_PIPELINE_BLOCK_LEN-sample block at a time (that
+        // pipeline owns persistent overlap-save history across calls,
+        // so it needs exactly this many new samples every call - see
+        // docs/ARCHITECTURE.md §10 step 4). sidetone_buf is sized
+        // MAX_FRAMES, matching every other per-block buffer in this
+        // function (mic_buf/rx_buf/etc. above) - n is bounded by
+        // MAX_FRAMES already (see the clamp right after snd_pcm_readi()
+        // above), so this can never overrun regardless of what n turns
+        // out to be.
+        static double sidetone_buf[MAX_FRAMES];
+        static float cw_in[TX_PIPELINE_BLOCK_LEN];
+        static float cw_out[TX_PIPELINE_BLOCK_LEN];
 
-          // R = the WM8731's PA-feeding channel - the IF-shifted
-          // TX waveform, at the full wattmeter-calibrated amplitude.
-          double raw_tx = tx_wave * amp;
+        for (int i = 0; i < n; i++)
+          sidetone_buf[i] = cw_get_sample();
+
+        if (n == TX_PIPELINE_BLOCK_LEN) {
+          for (int i = 0; i < TX_PIPELINE_BLOCK_LEN; i++)
+            cw_in[i] = (float)sidetone_buf[i];
+          tx_pipeline_process_block(cw_tx_pipeline, TX_PIPELINE_KEEP_UPPER, cw_in, cw_out);
+        } else {
+          // n is negotiated once at snd_pcm_hw_params_set_period_size_
+          // near() and PERIOD_FRAMES==TX_PIPELINE_BLOCK_LEN by design
+          // (see fft_filter.c's comment on why those two numbers
+          // match), and snd_pcm_readi() above is called with exactly
+          // PERIOD_FRAMES as its size, so in ordinary operation n
+          // always equals TX_PIPELINE_BLOCK_LEN here; this branch only
+          // fires on a genuinely abnormal read (short/interrupted, or
+          // the negotiated hardware period turning out to differ from
+          // what was requested). Feeding anything other than exactly
+          // TX_PIPELINE_BLOCK_LEN new samples into the pipeline would
+          // corrupt its overlap-save history's alignment for every
+          // block after this one - far worse than one silent block -
+          // so this skips the pipeline entirely and outputs silence on
+          // the exciter channel this block (the sidetone above is
+          // unaffected either way, since it doesn't share that state).
+          memset(cw_out, 0, sizeof(cw_out));
+          // Logged once, not every occurrence: if this ever fires from
+          // a genuinely mismatched negotiated period (rather than a
+          // rare one-off short read), it would otherwise repeat on
+          // every single TX block forever.
+          static int warned = 0;
+          if (!warned) {
+            fprintf(stderr,
+                    "sound: TX block size %d != %d (tx_pipeline's fixed "
+                    "block length) - skipping tx_pipeline until this "
+                    "resolves, sidetone unaffected (further occurrences "
+                    "not logged)\n",
+                    n, TX_PIPELINE_BLOCK_LEN);
+            warned = 1;
+          }
+        }
+
+        for (int i = 0; i < n; i++) {
+          // R = the WM8731's PA-feeding channel - tx_pipeline.c's IF-
+          // placed TX waveform, at the full wattmeter-calibrated
+          // amplitude. tx_pipeline.c is unity-gain by construction for
+          // a steady full-scale tone (bench-verified,
+          // docs/ARCHITECTURE.md §10 step 4) - TX_GAIN_CORRECTION
+          // below is carried over unchanged from the old direct-NCO
+          // scheme on that basis, not yet independently re-checked
+          // with a wattmeter against a real keyed envelope through
+          // this new path; worth confirming on first power-up.
+          double raw_tx = (i < TX_PIPELINE_BLOCK_LEN ? cw_out[i] : 0.0f) * amp;
           if (raw_tx > TX_SAMPLE_CLAMP)
             raw_tx = TX_SAMPLE_CLAMP;
           if (raw_tx < -TX_SAMPLE_CLAMP)
@@ -616,7 +685,7 @@ static void *audio_loop(void *arg) {
           // at the sidetone pitch, at a fixed comfort level - see
           // SIDETONE_PEAK_AMPLITUDE above. Never reaches the PA,
           // and no longer moves when TX_GAIN_CORRECTION does.
-          double raw_side = sidetone * SIDETONE_PEAK_AMPLITUDE;
+          double raw_side = sidetone_buf[i] * SIDETONE_PEAK_AMPLITUDE;
           if (raw_side > TX_SAMPLE_CLAMP)
             raw_side = TX_SAMPLE_CLAMP;
           if (raw_side < -TX_SAMPLE_CLAMP)
@@ -681,6 +750,12 @@ int sound_thread_start(const char *device_name) {
     printf("sound: playback unavailable, CW sidetone output disabled\n");
   }
 
+  // The shared TX pipeline (tx_pipeline.c) - one persistent instance for
+  // this run's lifetime, same as pcm_capture/pcm_playback above (its
+  // FFTW_MEASURE plans are a real setup cost that must not be paid per
+  // TX burst - see tx_pipeline.c/fft_filter.c's own comments).
+  cw_tx_pipeline = tx_pipeline_new();
+
   g_running = 1;
 
   // Real-time priority, requested up front via pthread_attr_t so
@@ -733,6 +808,11 @@ void sound_thread_stop(void) {
     snd_pcm_close(pcm_playback);
   }
   pcm_capture = pcm_playback = NULL;
+
+  if (cw_tx_pipeline) {
+    tx_pipeline_free(cw_tx_pipeline);
+    cw_tx_pipeline = NULL;
+  }
 
   printf("sound: stopped\n");
 }
