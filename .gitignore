@@ -3,5 +3,11 @@ minibitx
 maxibitx
 test-fft-filter
 test-tx-pipeline
+test-rx-filter
+test-rx-audio
 src/*.o
 *.o
+
+# Python bytecode cache (tools/rigctl_panel.py)
+__pycache__/
+*.pyc
