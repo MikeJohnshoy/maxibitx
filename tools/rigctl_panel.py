@@ -22,6 +22,12 @@ beyond the two commands it actually exercises:
                             same as a real rig's S-meter)
     u NARROW / U NARROW <0|1>  get / set the narrow (~300Hz) post-demod
                                 CW filter (rx_audio.c stage 3) on/off
+    u FFTFILT / U FFTFILT <0|1>  get / set WHICH stage-3 implementation
+                                  NARROW's "on" state uses - 0 = the
+                                  original elliptic IIR (default), 1 =
+                                  the shared FFT filter (rx_filter.c,
+                                  docs/ARCHITECTURE.md step 6/7) - lets
+                                  an operator A/B the two on real signals
 
 It also shows a live spectrum, fed by a second, independent UDP
 connection to src/interfaces/iq_stream.c's lightweight I/Q telemetry stream (UDP
@@ -350,6 +356,8 @@ class Panel(tk.Tk):
         # guard exists for, just via a plain before/after flag instead
         # since there's no focus-in-progress signal for a checkbox.
         self._syncing_narrow = False
+        # Same guard, same reasoning, for the FFT-filter selector below.
+        self._syncing_fftfilt = False
 
         cfg = load_config()
 
@@ -443,6 +451,17 @@ class Panel(tk.Tk):
         self.narrow_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(nf, text="Narrow CW filter (~300Hz)", variable=self.narrow_var,
                          command=self.on_narrow_toggled).grid(row=0, column=0, sticky="w")
+
+        # Which stage-3 implementation NARROW's "on" state uses -
+        # rigctld's u/U FFTFILT (this server's own extension, same as
+        # NARROW above - see hamlib.c's u/U comment). Elliptic (unchecked)
+        # is the server's own default; this exists specifically so an
+        # operator can A/B it against the newer shared FFT filter
+        # (rx_filter.c, docs/ARCHITECTURE.md step 6/7) on a real signal,
+        # not to steer anyone toward one or the other.
+        self.fftfilt_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(nf, text="Use FFT filter (experimental)", variable=self.fftfilt_var,
+                         command=self.on_fftfilt_toggled).grid(row=1, column=0, sticky="w")
 
         # --- signal strength ("l STRENGTH") ---
         # Read-only, like a real rig's S-meter - no slider/checkbox to
@@ -558,15 +577,17 @@ class Panel(tk.Tk):
         rit_reply = self.client.query("j")
         vol_reply = self.client.query("l AF")
         narrow_reply = self.client.query("u NARROW")
+        fftfilt_reply = self.client.query("u FFTFILT")
         strength_reply = self.client.query("l STRENGTH")
         if freq_reply is None or rit_reply is None or vol_reply is None \
-                or narrow_reply is None or strength_reply is None:
+                or narrow_reply is None or fftfilt_reply is None or strength_reply is None:
             self.after(0, self.disconnect)
             return
         self.after(0, lambda: self.apply_freq(freq_reply))
         self.after(0, lambda: self.apply_rit(rit_reply))
         self.after(0, lambda: self.apply_volume(vol_reply))
         self.after(0, lambda: self.apply_narrow(narrow_reply))
+        self.after(0, lambda: self.apply_fftfilt(fftfilt_reply))
         self.after(0, lambda: self.apply_strength(strength_reply))
 
     def apply_freq(self, reply):
@@ -660,6 +681,16 @@ class Panel(tk.Tk):
         self.narrow_var.set(enabled)
         self._syncing_narrow = False
 
+    def apply_fftfilt(self, reply):
+        try:
+            use_fft = int(reply) != 0
+        except ValueError:
+            return
+        # Same guard, same reasoning, as apply_narrow() above.
+        self._syncing_fftfilt = True
+        self.fftfilt_var.set(use_fft)
+        self._syncing_fftfilt = False
+
     # ---- user actions ----
 
     def on_tune_clicked(self):
@@ -732,6 +763,15 @@ class Panel(tk.Tk):
             return
         enable = 1 if self.narrow_var.get() else 0
         threading.Thread(target=lambda: self.client.query(f"U NARROW {enable}"),
+                          daemon=True).start()
+
+    def on_fftfilt_toggled(self):
+        if self._syncing_fftfilt:
+            return  # apply_fftfilt() is syncing from a poll reply, not an operator click
+        if not self.client.connected():
+            return
+        use_fft = 1 if self.fftfilt_var.get() else 0
+        threading.Thread(target=lambda: self.client.query(f"U FFTFILT {use_fft}"),
                           daemon=True).start()
 
     # ---- spectrum ----
