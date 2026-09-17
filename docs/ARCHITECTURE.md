@@ -669,15 +669,18 @@ for keying an external accessory's PTT, not this input line.)
   ~0.2ms on this project's dev machine (not the user's actual Pi Zero
   2W — still needs on-hardware confirmation) with per-block cost
   unaffected (~0.016ms either way, against a ~10.667ms budget).
-  `tx_pipeline_new()` still uses `FFTW_MEASURE` (unchanged, not yet
-  reconsidered) — if its own share of the startup delay is still
-  bothersome once RX's share is gone, the same `FFTW_ESTIMATE` trade is
-  available there too, not yet applied since the user hadn't reported it
-  as a standalone issue before RX's cost was added alongside it. A real
-  wisdom-file cache (sbitx's own `WISDOM_MODE`) would let `tx_pipeline.c`
-  keep `FFTW_MEASURE`'s per-block speed *and* avoid paying the search on
-  every restart — still not implemented, still the more complete fix if
-  startup time keeps mattering.
+  `tx_pipeline_new()` now makes the same trade (§10 step 7's second
+  follow-up entry) — turned out not to be optional once a real xrun
+  flood traced back to exactly this search running, synchronously,
+  *after* `sound_thread_start()` primed the playback buffer but *before*
+  the audio thread that keeps it fed was created, long enough (186.7ms
+  measured on this dev machine, vs. the primed buffer's own ~42.7ms) to
+  drain that buffer before real writes ever resumed. A real wisdom-file
+  cache (sbitx's own `WISDOM_MODE`) would still be the more complete fix
+  if `FFTW_ESTIMATE`'s per-block cost (checked and fine on this dev
+  machine for both N=2048 and N=4096, not yet independently confirmed on
+  the user's Pi) ever turns out to matter on some board — still not
+  implemented.
 
 ## 10. Proposed build order
 
@@ -1212,6 +1215,64 @@ for keying an external accessory's PTT, not this input line.)
      Pi that the flood is actually gone, since this sandbox can't
      reproduce ALSA hardware timing at all - that's the one remaining
      open item.
+
+     **Priming alone didn't fix it either - the real cause was the gap
+     it was primed into.** Same exact signature on real hardware even
+     with the primed buffer in place: burst of ~10 xruns right at
+     "sound: running", then rock-solid `read`/`process`/`write`/`period`
+     readings for the rest of the run (the one `write` max=20.448ms in
+     the first window is - again - `xrun_note()`'s own `usleep(20000)`
+     backoff firing once, not a new stall). That ruled the priming fix
+     out cleanly, and pointed straight at the one thing this fix
+     deliberately left alone: `sound_thread_start()` calls
+     `tx_pipeline_new()` - which was still using `FFTW_MEASURE` - *after*
+     opening and priming `pcm_playback`, but *before* creating the audio
+     thread that actually keeps it fed. That ordering means the primed
+     buffer sits completely unattended for the entire length of
+     `tx_pipeline_new()`'s own `FFTW_MEASURE` search - on this sandbox,
+     186.7ms for `TX_PIPELINE_N=2048` (measured the same way as
+     `rx_filter_new()`'s own construction-time check) - which is nearly
+     4.4x longer than the primed buffer's own ~42.7ms of silence. The
+     buffer drains and starts underrunning well before the audio thread
+     that's supposed to refill it ever gets to run, reproducing the exact
+     same startup burst regardless of how much was primed into it. This
+     also explains why forcing `rx_filter_new()` back to `FFTW_MEASURE`
+     earlier made no difference: RX's own plan search happens in
+     `rx_audio_init()`, well before `sound_thread_start()` is even
+     called, so it was never part of this particular gap at all - a
+     different, real fix (removing RX's own share of the startup delay)
+     for a different problem, not a red herring, just not this one.
+
+     **Fix, two parts:**
+     - `tx_pipeline_new()` now makes the exact same trade
+       `rx_filter_new()` made: `filter_new_ex(..., FFTW_ESTIMATE)`
+       instead of `filter_new()`'s `FFTW_MEASURE`, overridable via
+       `MAXIBITX_TX_PIPELINE_FFTW_MEASURE` (same diagnostic pattern as
+       RX's own env var). Measured the same way as RX's: construction
+       time 186.7ms → 0.0ms on this sandbox, per-block cost identical
+       between the two (~0.007ms, against `TX_PIPELINE_N=2048`'s share of
+       the same 10.667ms/block budget) - not yet re-measured on the
+       user's actual Pi, same open item as RX's own version of this
+       trade.
+     - `sound_thread_start()` now calls `tx_pipeline_new()` *before*
+       priming `pcm_playback`, and does the priming immediately before
+       `pthread_create()` instead of immediately after opening the
+       device - closing the gap between "buffer gets filled" and "the
+       thread that keeps it filled starts running" down to essentially
+       nothing, rather than trying to out-buffer whatever that gap's
+       length happens to be. This is the more robust half of the fix:
+       even if some future step adds another real setup cost between
+       opening playback and starting the audio thread, priming
+       immediately before `pthread_create()` keeps this race closed
+       regardless, where the first attempt's placement (prime, then pay
+       an unrelated setup cost, then start the thread) could reopen it
+       again.
+     All four bench harnesses re-run clean after both changes
+     (`test-tx-pipeline`'s own numbers - 0.00dB passband, -70.05dB image
+     rejection - unchanged, confirming `FFTW_ESTIMATE` didn't touch TX's
+     frequency-domain math any more than it touched RX's). Not yet
+     re-confirmed on the user's Pi that the flood is actually gone -
+     that's the real test this sandbox still can't run.
    - **"Use FFT filter" produced no noticeable audible effect.** Not a
      code bug as far as this can be verified without the user's own
      console log: `rx_audio_test.c`'s Case B independently confirms the
