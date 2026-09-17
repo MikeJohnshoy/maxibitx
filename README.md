@@ -8,12 +8,15 @@ better," per the specific bugs already root-caused on sbitx/zbitx. The
 full rationale, the shared-FFT-pipeline design decision, and the build
 order are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-**Current state: step-1 bootstrap only.** Everything below this point
-in this README, and the rest of `docs/`, still describes what this tree
-does *today* — which is exactly what minibitx does, unchanged, since
-that's the whole point of a step-1 skeleton (prove the fork didn't
-break anything before any new code exists). None of `ARCHITECTURE.md`'s
-pipeline work has been built yet.
+**Current state: build order steps 1-2 of `ARCHITECTURE.md`.**
+Everything below this point in this README, and the rest of `docs/`,
+still describes what the actual radio pipeline does *today* — which is
+exactly what minibitx does, unchanged (step 1). Step 2 added the shared
+FFT overlap-save filter as a standalone, bench-verified primitive
+(`src/fft_filter.c`/`.h`, `make test-fft-filter && ./test-fft-filter`)
+— proven against synthetic tones, not yet wired into the real audio
+path. `cw.c`/`rx_audio.c`/mode handling are all still untouched; see
+`ARCHITECTURE.md` §10 for the measured bench numbers and what's next.
 
 ---
 
@@ -131,4 +134,4 @@ architecture and roadmap:
 
 - Inspired by Ashhar Farhan's (VU2ESE) original sbitx code
 - Code was based on JJ's 64-bit repository at https://github.com/drexjj/sbitx
-- hpsdrsim.c from the piHPSDR project 
+- hpsdrsim.c from the piHPSDR project
