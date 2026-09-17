@@ -1132,9 +1132,40 @@ for keying an external accessory's PTT, not this input line.)
      confirm an intermittent stall rather than sustained overload, and
      would point the investigation somewhere else entirely (another
      thread's blocking I/O, a lock, a kernel/USB/thermal event) rather
-     than at `rx_filter.c`'s own per-block cost. Not yet resolved —
-     waiting on what the timing log and the `MAXIBITX_RX_FILTER_FFTW_
-     MEASURE` A/B report from the user's actual Pi.
+     than at `rx_filter.c`'s own per-block cost.
+
+     **Both diagnostics came back from the Pi, and they're decisive.**
+     `sound_process()` timing: avg 1.4-2.7ms, max 2.2-3.3ms, every 5s
+     window, budget 10.667ms — comfortable margin, no visible spike, in
+     *both* runs. `MAXIBITX_RX_FILTER_FFTW_MEASURE=1` (forcing the old,
+     slower startup back): the xrun flood still happened, at
+     indistinguishable timing from the `FFTW_ESTIMATE` run. That rules
+     out hypothesis (a) outright — this has nothing to do with which
+     FFTW plan `rx_filter.c` picks, so the startup-delay fix itself
+     (§10 step 7's earlier follow-up entry) stands as correct and
+     unrelated to this issue. It also weakens (b): `sound_process()`
+     (which is where "run both stage-3 filters every block" actually
+     happens) is measurably fine in both runs, with no spike anywhere
+     in the windows shown, including ones containing active flooding.
+     The missing time has to be somewhere this measurement wasn't
+     looking — `sound.c`'s own `snd_pcm_readi()`/`snd_pcm_writei()`
+     calls, or unaccounted gaps between them (`cw_poll_key()`, or a
+     scheduling delay before this thread got to run again) — so the
+     single `sound_process()`-only timing report was widened into a
+     four-part one covering all of it: `read`, `process` (unchanged),
+     `write` (the whole `if (pcm_playback)` block, buffer-fill plus the
+     actual ALSA write), and `period` (top-of-loop to top-of-loop, which
+     a healthy system should hold right at 10.667ms — not more, not
+     less). Whichever of these is actually where the time goes will show
+     up directly in the next run's log instead of needing another guess.
+     Current leading suspicion, given the evidence so far points away
+     from anything steps 6/7 added: this may be a pre-existing
+     characteristic of `sound.c`'s full-duplex ALSA setup (`hw:0,0`
+     opened as two independent capture/playback handles, never
+     `snd_pcm_link()`-ed) that simply hadn't been run long enough,
+     attentively enough, to notice before this session — not a
+     regression from the RX filter work at all. Not yet confirmed;
+     waiting on the four-part timing log from the user's Pi.
    - **"Use FFT filter" produced no noticeable audible effect.** Not a
      code bug as far as this can be verified without the user's own
      console log: `rx_audio_test.c`'s Case B independently confirms the
