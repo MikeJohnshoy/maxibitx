@@ -128,7 +128,11 @@ static void window_filter(int L, int M, complex float *response, float beta)
 	fftwf_destroy_plan(rev);
 }
 
-int filter_tune(struct filter *f, float low, float high, float kaiser_beta)
+// Shared by filter_tune()/filter_tune_real() below - builds the
+// brick-wall passband and rounds its edges via window_filter(); `mirror`
+// is the only difference between the two public entry points (see their
+// header comments for why that one bit matters).
+static int filter_tune_ex(struct filter *f, float low, float high, float kaiser_beta, int mirror)
 {
 	if (isnan(low) || isnan(high) || isnan(kaiser_beta))
 		return -1;
@@ -137,6 +141,9 @@ int filter_tune(struct filter *f, float low, float high, float kaiser_beta)
 	// inside [low, high), zero outside - same normalized-frequency
 	// convention as real sbitx's filter_tune() (s in [-0.5, 0.5) per
 	// bin, folded so bins n > N/2 represent negative frequencies).
+	// `mirror` additionally passes [-high, -low] - see
+	// filter_tune_real()'s header comment for why a real-signal filter
+	// needs that second interval too.
 	//
 	// gain = 1/N^2, not real sbitx's 1/N: window_filter() below is a
 	// backward-FFT/window/forward-FFT round trip, and FFTW normalizes
@@ -159,7 +166,10 @@ int filter_tune(struct filter *f, float low, float high, float kaiser_beta)
 	float gain = 1. / ((float)f->N * (float)f->N);
 	for (int n = 0; n < f->N; n++) {
 		float s = (n <= f->N / 2) ? (float)n / f->N : (float)(n - f->N) / f->N;
-		f->fir_coeff[n] = (s >= low && s <= high) ? gain : 0;
+		int pass = (s >= low && s <= high);
+		if (mirror && !pass)
+			pass = (s >= -high && s <= -low);
+		f->fir_coeff[n] = pass ? gain : 0;
 	}
 
 	// Then round-trip it through window_filter() to replace that brick
@@ -168,6 +178,16 @@ int filter_tune(struct filter *f, float low, float high, float kaiser_beta)
 	// docs/ARCHITECTURE.md §4's derivation of what beta actually buys.
 	window_filter(f->L, f->M, f->fir_coeff, kaiser_beta);
 	return 0;
+}
+
+int filter_tune(struct filter *f, float low, float high, float kaiser_beta)
+{
+	return filter_tune_ex(f, low, high, kaiser_beta, 0);
+}
+
+int filter_tune_real(struct filter *f, float low, float high, float kaiser_beta)
+{
+	return filter_tune_ex(f, low, high, kaiser_beta, 1);
 }
 
 void filter_forward(struct filter *f, const complex float *in)
