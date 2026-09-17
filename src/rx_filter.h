@@ -103,6 +103,20 @@ struct rx_filter {
 // RX_FILTER_FS_HZ (matching rx_audio.c's own SAMPLE_RATE_HZ - both are
 // minibitx's fixed 96kHz audio thread rate, not independently
 // configurable).
+//
+// Internally calls fft_filter.h's filter_new_ex() with FFTW_ESTIMATE,
+// not plain filter_new()'s FFTW_MEASURE - a real-hardware finding from
+// step 7's first on-air test: RX_FILTER_N=4096 is bigger than
+// tx_pipeline.c's TX_PIPELINE_N=2048, and rx_audio_init() (which calls
+// this) runs during maxibitx's own startup, right alongside
+// tx_pipeline_new()'s own pre-existing FFTW_MEASURE search - the two
+// compounded into a noticeably longer startup than minibitx's. ESTIMATE
+// trades that search away for an immediately-chosen, good-enough plan;
+// see docs/ARCHITECTURE.md §10 step 7's follow-up entry for the actual
+// measured per-block cost this was checked against before shipping it
+// (this filter's block period is ~10.7ms at 96kHz/1024 samples - the
+// real-time budget ESTIMATE's plan has to fit inside, same as MEASURE's
+// plan did).
 struct rx_filter *rx_filter_new(float pitch_hz, float width_hz);
 
 // Re-tunes the passband to a new pitch/width, live - the whole point of
