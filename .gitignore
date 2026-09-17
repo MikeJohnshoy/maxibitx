@@ -1,0 +1,7 @@
+# Build output
+minibitx
+maxibitx
+test-fft-filter
+test-tx-pipeline
+src/*.o
+*.o
