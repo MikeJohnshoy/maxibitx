@@ -51,8 +51,9 @@ maxibitx: $(OBJ)
 	-sudo setcap cap_sys_nice,cap_dac_override+ep $@
 
 clean:
-	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline \
-		src/fft_filter.o src/fft_filter_test.o src/tx_pipeline.o src/tx_pipeline_test.o
+	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter \
+		src/fft_filter.o src/fft_filter_test.o src/tx_pipeline.o src/tx_pipeline_test.o \
+		src/rx_filter.o src/rx_filter_test.o
 
 # docs/ARCHITECTURE.md step 2: fft_filter.c/.h's own standalone bench
 # harness (fft_filter_test.c) against synthetic tones - fft_filter.c
@@ -74,3 +75,16 @@ test-fft-filter: src/fft_filter.c src/fft_filter_test.c src/fft_filter.h
 # tx_pipeline_test.c's header comment for why).
 test-tx-pipeline: src/tx_pipeline.c src/tx_pipeline_test.c src/tx_pipeline.h src/fft_filter.c src/fft_filter.h src/cw.h
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/fft_filter.c src/tx_pipeline.c src/tx_pipeline_test.c -o $@ -lfftw3f -lm
+
+# docs/ARCHITECTURE.md step 6: rx_filter.c/.h's own standalone bench
+# harness (rx_filter_test.c) against synthetic tones, standing in for
+# rx_audio.c stage 2's real demodulated audio - rx_filter.c is NOT yet
+# real, shipped code (not part of $(SRC)/$(OBJ) above - unlike
+# fft_filter.c/tx_pipeline.c, this hasn't had its "step 5"-equivalent
+# live-wiring step yet, see ARCHITECTURE.md §10 step 6/7), so this stays
+# a pure bench-only harness for now, same convention as the other two
+# targets above. Depends on fft_filter.c/.h (step 2, including its new
+# filter_tune_real()) and cw.h (CW_PITCH_HZ only - NOT cw.c/rx_audio.c
+# themselves, same "no hardware deps in a bench test" precedent).
+test-rx-filter: src/rx_filter.c src/rx_filter_test.c src/rx_filter.h src/fft_filter.c src/fft_filter.h src/cw.h
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/fft_filter.c src/rx_filter.c src/rx_filter_test.c -o $@ -lfftw3f -lm
