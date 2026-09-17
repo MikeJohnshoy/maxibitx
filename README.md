@@ -8,7 +8,7 @@ better," per the specific bugs already root-caused on sbitx/zbitx. The
 full rationale, the shared-FFT-pipeline design decision, and the build
 order are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-**Current state: build order steps 1-6 of `ARCHITECTURE.md`.**
+**Current state: build order steps 1-7 of `ARCHITECTURE.md`.**
 Step 1 carried minibitx over unchanged. Step 2 added the shared FFT
 overlap-save filter as a standalone, bench-verified primitive
 (`src/fft_filter.c`/`.h`, `make test-fft-filter && ./test-fft-filter`).
@@ -26,18 +26,25 @@ see that doc's own updated intro and `ARCHITECTURE.md` §10 step 5 for
 what actually runs today, its bench provenance, and what's still
 outstanding (on-air re-verification of dial accuracy, image rejection,
 and transmitted power against a wattmeter - not yet done on real
-hardware, only bench-proven so far). **Step 6 added the RX-side
-counterpart, bench-only**: a new `src/rx_filter.c`/`.h` module
-(`make test-rx-filter && ./test-rx-filter`) replaces `rx_audio.c`'s
-fixed 8-pole elliptic "single signal" filter with the same shared FFT
-engine, pitch/width now live parameters instead of a baked-in design -
-`rx_audio.c` itself is completely untouched so far, same "bench first"
-discipline step 4 used before step 5's live TX cutover. Wiring
-`rx_filter.c` into `rx_audio.c` for a real, on-air listening comparison
-against the existing elliptic filter (before that filter is ever removed
-for good) is step 7, the one piece of the original plan not yet even
-started. See `ARCHITECTURE.md` §10 for the measured/verified detail on
-all six steps.
+hardware, only bench-proven so far). Step 6 added the RX-side
+counterpart, bench-only: a new `src/rx_filter.c`/`.h` module
+(`make test-rx-filter && ./test-rx-filter`) implementing the same shared
+FFT engine for `rx_audio.c`'s stage 3, pitch/width now live parameters
+instead of a baked-in design. **Step 7 wired it into `rx_audio.c` for
+real**: both the original 8-pole elliptic filter and the new FFT filter
+now run continuously side by side, with a new selector
+(`rx_audio_set_narrow_filter_impl()`, reachable remotely via rigctld's
+new `u`/`U FFTFILT` and a new checkbox in `tools/rigctl_panel.py`'s RX
+Filter panel) choosing which one the operator actually hears - elliptic
+stays the default. `src/rx_audio_test.c`
+(`make test-rx-audio && ./test-rx-audio`) integration-tests this new
+wiring directly. What's still outstanding: the on-air listening
+comparison itself (does the FFT filter sound at least as good for real
+CW copy) - the code is complete and tested, but that judgment can only
+be made on real hardware, not on a bench; `rx_audio.c`'s
+`narrow_filter_coeffs[]` stays in the tree until it is. See
+`ARCHITECTURE.md` §10 for the measured/verified detail on all seven
+steps.
 
 ---
 
