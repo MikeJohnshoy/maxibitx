@@ -660,14 +660,51 @@ static volatile int cat_running = 0;
 static int cat_fd = -1;
 static pthread_t cat_thread_tid;
 
-// Cosmetic-only "current mode" state, same idea as hamlib.c's current_mode -
-// minibitx has no onboard demod and (as of this writing) can only actually
-// transmit CW, so "3" (Kenwood's MD code for CW) is the honest default
-// rather than pretending to support modes nothing downstream can produce.
-// MD set requests are still accepted and stored, same as Hamlib's M/m, in
-// case a future TX audio path (see the FLRig/WSJT-X design discussion)
-// makes other modes real.
-static char cat_current_mode[2] = "3";
+// Mode itself is real now - radio_get_mode()/radio_set_mode() (radio.h)
+// are the single owner this surface and hamlib.c's rigctld M/m now both
+// agree on - see radio.h's enum radio_mode comment.
+//
+// mode_to_kenwood_digit()/kenwood_digit_to_mode() below translate
+// between that enum and the single-digit Kenwood MD codes this CAT
+// surface actually sends/parses. 1/2/3 (LSB/USB/CW) are the standard
+// Kenwood convention every TS-480-alike (QMX included) agrees on; 9 for
+// RADIO_MODE_DIGITAL is this project's own best-effort guess at what a
+// real QMX sends for its DATA mode (a data-capable rig's own extension
+// to the base Kenwood set, not itself part of the original TS-480
+// convention) - NOT yet confirmed against a real QMX/FLRig packet
+// capture, same "flag it, don't block on it" spirit as the IF command's
+// own comment on its field layout below. If FLRig ever shows the wrong
+// mode name for MD9 while FA/RT/TQ all work fine, this is the first
+// place to check.
+static const struct { enum radio_mode mode; char digit; } mode_digits[] = {
+  { RADIO_MODE_LSB,     '1' },
+  { RADIO_MODE_USB,     '2' },
+  { RADIO_MODE_CW,      '3' },
+  { RADIO_MODE_DIGITAL, '9' },
+};
+#define MODE_DIGITS_COUNT (sizeof(mode_digits) / sizeof(mode_digits[0]))
+
+static char mode_to_kenwood_digit(enum radio_mode m) {
+  for (size_t i = 0; i < MODE_DIGITS_COUNT; i++)
+    if (mode_digits[i].mode == m)
+      return mode_digits[i].digit;
+  return '3'; // unreachable given the enum's own values; a safe fallback if that ever changes
+}
+
+// Returns 1 and sets *out on a recognized digit, 0 otherwise - so an
+// MD set for a digit this table doesn't know stays "anything else is
+// silently ignored", same as every other unrecognized CAT command on
+// this surface (see cat_handle_command()'s comment), rather than
+// silently mapping it to some arbitrary mode.
+static int kenwood_digit_to_mode(char digit, enum radio_mode *out) {
+  for (size_t i = 0; i < MODE_DIGITS_COUNT; i++) {
+    if (mode_digits[i].digit == digit) {
+      *out = mode_digits[i].mode;
+      return 1;
+    }
+  }
+  return 0;
+}
 
 static void cat_send(const char *s) {
   if (cat_fd < 0)
@@ -862,19 +899,26 @@ static void cat_handle_command(char *cmd) {
     return;
   }
 
-  // --- MD: mode - cosmetic only, see cat_current_mode's comment above. ---
+  // --- MD: mode - real now, see mode_to_kenwood_digit()'s comment above. ---
   if (len >= 2 && cmd[0] == 'M' && cmd[1] == 'D') {
     if (len == 2) {
       static char last[8] = "";
       char buf[8], log_line[32];
-      snprintf(buf, sizeof(buf), "MD%s;", cat_current_mode);
+      snprintf(buf, sizeof(buf), "MD%c;", mode_to_kenwood_digit(radio_get_mode()));
       cat_send(buf);
-      snprintf(log_line, sizeof(log_line), "cat: MD -> %s\n", cat_current_mode);
+      snprintf(log_line, sizeof(log_line), "cat: MD -> %c\n", mode_to_kenwood_digit(radio_get_mode()));
       cat_log_get(last, sizeof(last), buf, log_line);
     } else {
-      cat_current_mode[0] = cmd[2];
-      cat_current_mode[1] = '\0';
-      printf("cat: MD%c -> ok (cosmetic, not applied)\n", cmd[2]);
+      enum radio_mode m;
+      if (kenwood_digit_to_mode(cmd[2], &m)) {
+        radio_set_mode(m);
+        printf("cat: MD%c -> ok\n", cmd[2]);
+      } else {
+        // Unrecognized digit - same "anything else is silently
+        // ignored" convention as any other unhandled CAT command, see
+        // kenwood_digit_to_mode()'s comment above.
+        printf("cat: MD%c -> unrecognized, ignored\n", cmd[2]);
+      }
     }
     return;
   }
@@ -903,12 +947,12 @@ static void cat_handle_command(char *cmd) {
     char buf[40], log_line[96];
     int rit = radio_get_rit();
     int rit_on = radio_rit_enabled();
-    snprintf(buf, sizeof(buf), "IF%011d00000%+05d%d00%02d%d%s00000000;", freq_hdr,
+    snprintf(buf, sizeof(buf), "IF%011d00000%+05d%d00%02d%d%c00000000;", freq_hdr,
              rit, rit_on ? 1 : 0,
-             0 /* memory channel */, in_tx ? 1 : 0, cat_current_mode);
+             0 /* memory channel */, in_tx ? 1 : 0, mode_to_kenwood_digit(radio_get_mode()));
     cat_send(buf);
-    snprintf(log_line, sizeof(log_line), "cat: IF -> sent (freq %d, RIT %+d%s, %s, mode %s)\n",
-             freq_hdr, rit, rit_on ? " on" : " (off)", in_tx ? "TX" : "RX", cat_current_mode);
+    snprintf(log_line, sizeof(log_line), "cat: IF -> sent (freq %d, RIT %+d%s, %s, mode %c)\n",
+             freq_hdr, rit, rit_on ? " on" : " (off)", in_tx ? "TX" : "RX", mode_to_kenwood_digit(radio_get_mode()));
     cat_log_get(last, sizeof(last), buf, log_line);
     return;
   }
