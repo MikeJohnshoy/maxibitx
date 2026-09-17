@@ -27,7 +27,14 @@
 //      fixed design (not runtime-adjustable; see "Why elliptic, and why
 //      fixed" below), chosen to approach a classic CW crystal filter's
 //      shape factor rather than the gentler resonator-cascade shape v3
-//      shipped with initially.
+//      shipped with initially. docs/ARCHITECTURE.md build order step 6/7:
+//      a second implementation of this same stage now exists too -
+//      rx_filter.c, the shared FFT overlap-save engine tx_pipeline.c
+//      uses, with pitch/width as live parameters instead of this fixed
+//      design. Both run continuously; rx_audio_set_narrow_filter_impl()
+//      (rx_audio.h) picks which one's output actually reaches stage 4 -
+//      elliptic stays the default until an on-air comparison says
+//      otherwise (§10 step 7).
 //   4. An AGC (envelope-following automatic gain control) that
 //      normalizes toward a fixed target output level - see
 //      AGC_TARGET_AMPLITUDE below for why a fixed multiplier alone
@@ -128,8 +135,10 @@
 
 #include "rx_audio.h"
 #include "cw.h"
+#include "rx_filter.h"
 #include "vfo.h"
 #include <math.h>
+#include <stdio.h>
 
 #define SAMPLE_RATE_HZ 96000
 
@@ -454,6 +463,27 @@ static double rx_volume = 0.5;         // 0.0-1.0 - see rx_audio_set_volume()
 // directly). See rx_audio_set_narrow_filter().
 static int narrow_filter_enabled = 1;
 
+// Which stage-3 implementation narrow_filter_enabled's "on" state uses -
+// see rx_audio_set_narrow_filter_impl() (rx_audio.h) and
+// docs/ARCHITECTURE.md §10 step 7. Elliptic stays the default: the FFT
+// filter is bench-proven (step 6) but not yet verified on air, and this
+// selector exists specifically to make that on-air A/B comparison
+// possible without a rebuild, not to switch the default.
+static enum rx_narrow_filter_impl narrow_filter_impl = RX_NARROW_FILTER_ELLIPTIC;
+
+// The shared FFT stage-3 filter (src/rx_filter.c) - one persistent
+// instance, created in rx_audio_init(), same "real FFTW plans, must not
+// be rebuilt per block" reasoning as sound.c's cw_tx_pipeline. Runs every
+// block regardless of narrow_filter_impl's current value (see
+// rx_audio_process()) so its overlap-save history stays warm and
+// switching to it mid-signal doesn't thump - same idea as the elliptic
+// filter's own "always run it" comment above, just extended to a second
+// implementation. Unlike cw_tx_pipeline, there's no matching free() call
+// anywhere (rx_audio.c has no deinit/shutdown path at all - same as
+// cw_init() - so this is reclaimed by the OS at process exit, not a new
+// gap this module introduces).
+static struct rx_filter *rx_fft_filter;
+
 // AGC envelope follower state - agc_env tracks a smoothed magnitude
 // estimate of the RAW input I/Q, before stage 1 even runs (see "Why the
 // AGC samples the raw input, not stage 2 or stage 3" in the file
@@ -515,6 +545,13 @@ void rx_audio_init(void) {
     agc_release_alpha = onepole_alpha_from_ms(AGC_RELEASE_MS);
     agc_env = 0.0;
     meter_env = 0.0;
+
+    // Pitch matches bfo's own fixed CW_PITCH_HZ above (stage 2 always
+    // mixes there today - neither is independently live-adjustable yet);
+    // width is rx_filter.h's own bench-derived default, the same
+    // starting comparison point step 6's harness measured against the
+    // elliptic filter's own ~300Hz design point.
+    rx_fft_filter = rx_filter_new((float)CW_PITCH_HZ, RX_FILTER_DEFAULT_WIDTH_HZ);
 }
 
 void rx_audio_set_volume(int percent) {
@@ -535,6 +572,14 @@ void rx_audio_set_narrow_filter(int enable) {
 
 int rx_audio_get_narrow_filter(void) {
     return narrow_filter_enabled;
+}
+
+void rx_audio_set_narrow_filter_impl(int use_fft) {
+    narrow_filter_impl = use_fft ? RX_NARROW_FILTER_FFT : RX_NARROW_FILTER_ELLIPTIC;
+}
+
+int rx_audio_get_narrow_filter_impl(void) {
+    return narrow_filter_impl == RX_NARROW_FILTER_FFT;
 }
 
 double rx_audio_debug_agc_envelope(void) {
@@ -616,8 +661,31 @@ int rx_audio_get_strength_db(void) {
     return (int)(rel >= 0.0 ? rel + 0.5 : rel - 0.5);  // round half away from zero
 }
 
+// Largest n this function is ever called with - matches sound.c's
+// MAX_FRAMES (sound_process()'s own clamp before calling here). Sized so
+// the per-block buffering rx_filter.c's stage-3 option needs below never
+// overruns regardless of what n turns out to be, same reasoning as every
+// other per-block buffer in this tree (e.g. sound.c's sidetone_buf).
+#define RX_AUDIO_MAX_BLOCK 4096
+
 void rx_audio_process(const double *i_samples, const double *q_samples,
                        int n, int32_t *out) {
+    // Stage 2's output and both stage-3 candidates, buffered across this
+    // whole call - needed because rx_filter.c's FFT filter is block-based
+    // (one call per RX_FILTER_BLOCK_LEN new samples), unlike stage 1/2/
+    // the elliptic filter/stage 4, which are all per-sample recursive.
+    // Splitting this into two passes (fill these buffers, then pick a
+    // source per sample below) is what lets both stage-3 implementations
+    // run exactly once per sample/block regardless of which one
+    // narrow_filter_impl currently selects.
+    static float audio_buf[RX_AUDIO_MAX_BLOCK];
+    static float elliptic_buf[RX_AUDIO_MAX_BLOCK];
+    static float fft_buf[RX_AUDIO_MAX_BLOCK];
+    int have_fft = 0;
+
+    if (n > RX_AUDIO_MAX_BLOCK)
+        n = RX_AUDIO_MAX_BLOCK;
+
     for (int k = 0; k < n; k++) {
         // Stage 1: wide complex bandpass - image rejection only, see the
         // file header for why this replaced v2's single combined filter.
@@ -631,14 +699,55 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
         double c = (double)bfo_cos / 1073741824.0;
         double s = (double)bfo_sin / 1073741824.0;
         double audio = fi * c - fq * s;
+        audio_buf[k] = (float)audio;
 
-        // Stage 3: narrow real bandpass - the actual single-signal
-        // selectivity, decoupled from stage 1's image rejection.
-        // Always run, even when bypassed below, so its history stays
-        // warm and there's no settling-time thump the moment the
-        // operator switches it back on mid-signal.
-        double filtered = narrow_filter_apply(&narrow_filter, audio);
-        double narrowed = narrow_filter_enabled ? filtered : audio;
+        // Stage 3 (elliptic): narrow real bandpass, the original
+        // single-signal selectivity. Always run, even when bypassed or
+        // when the FFT implementation is selected below, so its history
+        // stays warm and there's no settling-time thump the moment the
+        // operator switches back to it mid-signal - same reasoning as
+        // ever, just no longer the only stage-3 candidate.
+        elliptic_buf[k] = (float)narrow_filter_apply(&narrow_filter, audio);
+    }
+
+    // Stage 3 (FFT, docs/ARCHITECTURE.md step 6/7): block-based, so it
+    // runs once per call rather than per sample - and, like the elliptic
+    // filter above, unconditionally (regardless of narrow_filter_impl),
+    // so ITS overlap-save history stays warm too and switching TO it
+    // mid-signal doesn't thump either. Only valid when this call supplies
+    // exactly RX_FILTER_BLOCK_LEN new samples (matches sound.c's
+    // PERIOD_FRAMES by design, same as tx_pipeline.c's identical
+    // requirement) - feeding it anything else would corrupt its
+    // persistent overlap-save history alignment for every call after
+    // this one, so an off-size call just skips it for this one block
+    // (falling back to the elliptic output below, not silence - unlike
+    // sound.c's TX-side guard, an RX audio dropout has no compensating
+    // upside here) rather than risk that.
+    if (n == RX_FILTER_BLOCK_LEN) {
+        rx_filter_process_block(rx_fft_filter, audio_buf, fft_buf);
+        have_fft = 1;
+    } else if (narrow_filter_impl == RX_NARROW_FILTER_FFT) {
+        static int warned = 0;
+        if (!warned) {
+            fprintf(stderr,
+                    "rx_audio: block size %d != %d (rx_filter's fixed "
+                    "block length) - falling back to the elliptic filter "
+                    "for this block only (further occurrences not "
+                    "logged)\n",
+                    n, RX_FILTER_BLOCK_LEN);
+            warned = 1;
+        }
+    }
+
+    for (int k = 0; k < n; k++) {
+        double audio = audio_buf[k];
+        double narrowed;
+        if (!narrow_filter_enabled)
+            narrowed = audio;
+        else if (narrow_filter_impl == RX_NARROW_FILTER_FFT && have_fft)
+            narrowed = fft_buf[k];
+        else
+            narrowed = elliptic_buf[k];
 
         // Stage 4: AGC - track a smoothed envelope of the RAW input
         // magnitude sqrt(i^2+q^2) - before even stage 1 runs - see "Why
