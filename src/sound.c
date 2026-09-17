@@ -625,6 +625,29 @@ struct loop_timing_tracker {
 // timestamp) - then, once BLOCK_TIMING_WINDOW_NS has elapsed, prints all
 // four and resets. Pass -1 for any phase not applicable this iteration
 // (e.g. write when pcm_playback is NULL).
+// Whether to actually print the periodic report below - checked once
+// (getenv() itself is cheap, but this runs every single audio block, so
+// caching beats re-checking ~94 times a second forever). Opt-in via
+// MAXIBITX_LOOP_TIMING, not on by default: this instrumentation did its
+// job (traced the real xrun-flood cause to tx_pipeline_new()'s FFTW_
+// MEASURE search draining the primed playback buffer - see
+// sound_thread_start()'s own comment and docs/ARCHITECTURE.md §10 step
+// 7's follow-up entries - now fixed and confirmed clean on the user's
+// real hardware), so a normal run no longer needs to print a status
+// block every 5 seconds forever. The tracking itself (a handful of
+// clock_gettime()/phase_note() calls per block) stays unconditional -
+// its own overhead is negligible next to sound_process() - so this knob
+// costs nothing to leave in place for whenever the next real hardware
+// mystery shows up.
+static int loop_timing_should_print(void) {
+  static int cached = -1;
+  if (cached < 0) {
+    const char *v = getenv("MAXIBITX_LOOP_TIMING");
+    cached = (v && *v) ? 1 : 0;
+  }
+  return cached;
+}
+
 static void loop_timing_note(struct loop_timing_tracker *t, long read_ns, long process_ns,
                               long write_ns) {
   struct timespec now;
@@ -652,13 +675,15 @@ static void loop_timing_note(struct loop_timing_tracker *t, long read_ns, long p
   long elapsed_window_ns = (now.tv_sec - t->window_start.tv_sec) * 1000000000L +
                             (now.tv_nsec - t->window_start.tv_nsec);
   if (elapsed_window_ns >= BLOCK_TIMING_WINDOW_NS && t->period.count > 0) {
-    fprintf(stderr,
-            "sound: loop timing over last %ds (budget %.3fms/block period):\n",
-            (int)(BLOCK_TIMING_WINDOW_NS / 1000000000L), BLOCK_PERIOD_BUDGET_MS);
-    phase_print(&t->read, "read");
-    phase_print(&t->process, "process");
-    phase_print(&t->write, "write");
-    phase_print(&t->period, "period");
+    if (loop_timing_should_print()) {
+      fprintf(stderr,
+              "sound: loop timing over last %ds (budget %.3fms/block period):\n",
+              (int)(BLOCK_TIMING_WINDOW_NS / 1000000000L), BLOCK_PERIOD_BUDGET_MS);
+      phase_print(&t->read, "read");
+      phase_print(&t->process, "process");
+      phase_print(&t->write, "write");
+      phase_print(&t->period, "period");
+    }
     phase_reset(&t->read);
     phase_reset(&t->process);
     phase_reset(&t->write);
