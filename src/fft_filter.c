@@ -10,7 +10,7 @@
 #include <math.h>
 #include "fft_filter.h"
 
-struct filter *filter_new(int block_len, int impulse_len)
+struct filter *filter_new_ex(int block_len, int impulse_len, unsigned fftw_flags)
 {
 	struct filter *f = malloc(sizeof(struct filter));
 	f->L = block_len;
@@ -27,21 +27,28 @@ struct filter *filter_new(int block_len, int impulse_len)
 	memset(f->time, 0, f->N * sizeof(complex float));
 	memset(f->freq, 0, f->N * sizeof(complex float));
 
-	// FFTW_MEASURE: worth the one-time startup cost (benchmarks a few
-	// candidate algorithms against this actual machine) because this
-	// plan is reused every filter_forward()/filter_inverse() call - once
-	// per audio block (~10.7ms at minibitx's 96kHz/PERIOD_FRAMES=1024 -
-	// see sound.c - which is also exactly this L, not a coincidence:
-	// it's the block size this filter was designed to match). No wisdom
+	// fftw_flags is normally FFTW_MEASURE (via filter_new() below):
+	// worth the one-time startup cost (benchmarks a few candidate
+	// algorithms against this actual machine) because this plan is
+	// reused every filter_forward()/filter_inverse() call - once per
+	// audio block (~10.7ms at minibitx's 96kHz/PERIOD_FRAMES=1024 - see
+	// sound.c - which is also exactly this L, not a coincidence: it's
+	// the block size this filter was designed to match). No wisdom
 	// file yet (unlike sbitx's WISDOM_MODE, which caches a MEASURE
 	// search's result across process restarts) - see
 	// docs/ARCHITECTURE.md's open questions; on the Pi this means every
-	// process start pays the MEASURE search once at filter_new() time,
-	// not on every block.
-	f->plan_fwd = fftwf_plan_dft_1d(f->N, f->time, f->freq, FFTW_FORWARD, FFTW_MEASURE);
-	f->plan_rev = fftwf_plan_dft_1d(f->N, f->freq, f->time, FFTW_BACKWARD, FFTW_MEASURE);
+	// process start pays the MEASURE search once per filter_new_ex()
+	// call, not on every block. rx_filter.c instead passes
+	// FFTW_ESTIMATE here - see filter_new_ex()'s own header comment.
+	f->plan_fwd = fftwf_plan_dft_1d(f->N, f->time, f->freq, FFTW_FORWARD, fftw_flags);
+	f->plan_rev = fftwf_plan_dft_1d(f->N, f->freq, f->time, FFTW_BACKWARD, fftw_flags);
 
 	return f;
+}
+
+struct filter *filter_new(int block_len, int impulse_len)
+{
+	return filter_new_ex(block_len, impulse_len, FFTW_MEASURE);
 }
 
 // Modified Bessel function of the 0th kind - the Kaiser window's
