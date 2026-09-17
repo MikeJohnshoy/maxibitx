@@ -27,11 +27,16 @@ CC      := gcc
 # only - see docs/ARCHITECTURE.md). The only maxibitx-specific change
 # here is the output binary's name; src/maxibitx.c is minibitx's
 # src/minibitx.c, renamed to match this project, not yet rewritten.
+# -lfftw3f: single-precision FFTW, needed since docs/ARCHITECTURE.md
+# build order step 5 wired src/tx_pipeline.c/src/fft_filter.c (the
+# shared FFT TX pipeline, step 4) into sound.c for real, live CW TX -
+# see fft_filter.h/tx_pipeline.h for why fftwf (not the double-precision
+# fftw3) specifically.
 CFLAGS  := -O3 -march=native -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces
-LDFLAGS := -lm -lasound -lpthread -ldl
+LDFLAGS := -lm -lasound -lpthread -ldl -lfftw3f
 SRC := src/maxibitx.c src/radio.c src/radio_hw.c src/interfaces/hpsdr_p1.c src/interfaces/usb_gadget.c src/i2c.c \
      src/si5351v2.c src/sound.c src/vfo.c src/interfaces/hamlib.c src/hw_settings.c src/antialias.c src/decim48k.c src/cw.c \
-     src/rx_audio.c src/gpio.c src/interfaces/iq_stream.c
+     src/rx_audio.c src/gpio.c src/interfaces/iq_stream.c src/fft_filter.c src/tx_pipeline.c
 OBJ := $(SRC:.c=.o)
 
 all: maxibitx
@@ -49,25 +54,23 @@ clean:
 	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline \
 		src/fft_filter.o src/fft_filter_test.o src/tx_pipeline.o src/tx_pipeline_test.o
 
-# docs/ARCHITECTURE.md step 2: fft_filter.c/.h, the shared FFT
-# overlap-save filter, and its standalone bench harness
-# (fft_filter_test.c). Deliberately NOT part of `all`/$(SRC)/$(OBJ)
-# above - same "not part of the build" convention
-# docs/dsp_design_notes/rx_audio_demod_design.md describes for
-# test_rx_audio.c: a verification tool, not something the shipped
-# maxibitx binary links. Not yet wired into sound.c/cw.c/rx_audio.c -
-# that's steps 3-5, once this primitive is bench-proven.
+# docs/ARCHITECTURE.md step 2: fft_filter.c/.h's own standalone bench
+# harness (fft_filter_test.c) against synthetic tones - fft_filter.c
+# itself is real, shipped code now (part of $(SRC)/$(OBJ) above, since
+# step 5), but this harness stays separate, same "not part of the
+# build" convention docs/dsp_design_notes/rx_audio_demod_design.md
+# describes for test_rx_audio.c: a verification tool, not something the
+# shipped maxibitx binary links.
 test-fft-filter: src/fft_filter.c src/fft_filter_test.c src/fft_filter.h
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/fft_filter.c src/fft_filter_test.c -o $@ -lfftw3f -lm
 
-# docs/ARCHITECTURE.md step 4: tx_pipeline.c/.h, the shared TX pipeline
-# (passband filter + explicit sideband-zero + IF bin-rotate) that's meant
-# to eventually replace cw.c's own cw_tx_carrier/TX_IF_OFFSET_HZ NCO, and
-# its standalone bench harness (tx_pipeline_test.c). Same "not part of
-# the build" convention as test-fft-filter above - a verification tool,
-# not something the shipped maxibitx binary links yet. Depends on
-# fft_filter.c/.h (step 2) and cw.h (CW_PITCH_HZ only - NOT cw.c itself,
-# see tx_pipeline_test.c's header comment for why). Not yet wired into
-# sound.c/cw.c - that's a later step, once this is bench-proven.
+# docs/ARCHITECTURE.md step 4: tx_pipeline.c/.h's own standalone bench
+# harness (tx_pipeline_test.c) against a synthetic stand-in for cw.c's
+# sidetone - tx_pipeline.c itself is real, shipped code now (part of
+# $(SRC)/$(OBJ) above, wired into sound.c/cw.c for live CW TX as of
+# step 5), but this harness stays separate, same "not part of the
+# build" convention as test-fft-filter above. Depends on fft_filter.c/.h
+# (step 2) and cw.h (CW_PITCH_HZ only - NOT cw.c itself, see
+# tx_pipeline_test.c's header comment for why).
 test-tx-pipeline: src/tx_pipeline.c src/tx_pipeline_test.c src/tx_pipeline.h src/fft_filter.c src/fft_filter.h src/cw.h
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/fft_filter.c src/tx_pipeline.c src/tx_pipeline_test.c -o $@ -lfftw3f -lm
