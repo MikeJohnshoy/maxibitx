@@ -46,9 +46,9 @@ be made on real hardware, not on a bench; `rx_audio.c`'s
 
 **First real on-air test of step 7** found receive audio working and the
 elliptic filter still effective, plus follow-ups (`ARCHITECTURE.md` §10
-step 7's own entries have the full detail), now all resolved except one.
-Startup was noticeably slower than minibitx's - root cause was
-`rx_filter.c`'s new, larger `FFTW_MEASURE` plan search compounding with
+step 7's own entries have the full detail), all now resolved. Startup
+was noticeably slower than minibitx's - root cause was `rx_filter.c`'s
+new, larger `FFTW_MEASURE` plan search compounding with
 `tx_pipeline.c`'s pre-existing one, both paid at every process start -
 fixed by a new `fft_filter.c` `filter_new_ex()` that lets both use
 `FFTW_ESTIMATE` instead. A real xrun flood also showed up on playback -
@@ -59,11 +59,15 @@ the audio thread that keeps it fed ever got to run - fixed by
 reordering `sound_thread_start()` so the buffer is primed right before
 that thread starts, not before an unrelated setup cost gets to run in
 between. Confirmed clean on the user's own hardware: no more xruns, loop
-timing rock-solid for the whole run. Still open: "Use FFT filter" not
-yet producing a clearly noticeable audible difference from the elliptic
-filter, which looks like a genuinely subtle DSP-shape similarity between
-the two filters rather than a wiring bug as far as this can be checked
-without hardware in hand, but isn't fully confirmed either way yet. See
+timing rock-solid for the whole run. And "Use FFT filter" not producing
+a clearly noticeable audible difference from the elliptic filter turned
+out not to be a bug either: the user's own console log shows rigctld's
+`STRENGTH` S-meter - fed by the exact same signal that drives the
+speaker - reading comparably low noise levels under both filters, well
+below the unfiltered reading. The FFT filter really is rejecting a
+similar amount of total noise energy; the elliptic filter's own
+resonant ripple just makes that rejection sound far more dramatic to
+this operator's ear. Elliptic stays the default on that basis. See
 `ARCHITECTURE.md` §10 for the measured/verified detail on all seven
 steps, including these follow-ups.
 
