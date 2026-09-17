@@ -31,12 +31,16 @@ CC      := gcc
 # build order step 5 wired src/tx_pipeline.c/src/fft_filter.c (the
 # shared FFT TX pipeline, step 4) into sound.c for real, live CW TX -
 # see fft_filter.h/tx_pipeline.h for why fftwf (not the double-precision
-# fftw3) specifically.
+# fftw3) specifically. src/rx_filter.c joined SRC/OBJ below at step 7,
+# for the same reason - rx_audio.c now calls it directly (as a
+# selectable stage-3 option, not yet the default - see rx_audio.h's
+# rx_audio_set_narrow_filter_impl()), even though FFTW itself was
+# already a real link dependency by then.
 CFLAGS  := -O3 -march=native -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces
 LDFLAGS := -lm -lasound -lpthread -ldl -lfftw3f
 SRC := src/maxibitx.c src/radio.c src/radio_hw.c src/interfaces/hpsdr_p1.c src/interfaces/usb_gadget.c src/i2c.c \
      src/si5351v2.c src/sound.c src/vfo.c src/interfaces/hamlib.c src/hw_settings.c src/antialias.c src/decim48k.c src/cw.c \
-     src/rx_audio.c src/gpio.c src/interfaces/iq_stream.c src/fft_filter.c src/tx_pipeline.c
+     src/rx_audio.c src/gpio.c src/interfaces/iq_stream.c src/fft_filter.c src/tx_pipeline.c src/rx_filter.c
 OBJ := $(SRC:.c=.o)
 
 all: maxibitx
@@ -51,9 +55,9 @@ maxibitx: $(OBJ)
 	-sudo setcap cap_sys_nice,cap_dac_override+ep $@
 
 clean:
-	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter \
+	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio \
 		src/fft_filter.o src/fft_filter_test.o src/tx_pipeline.o src/tx_pipeline_test.o \
-		src/rx_filter.o src/rx_filter_test.o
+		src/rx_filter.o src/rx_filter_test.o src/rx_audio_test.o
 
 # docs/ARCHITECTURE.md step 2: fft_filter.c/.h's own standalone bench
 # harness (fft_filter_test.c) against synthetic tones - fft_filter.c
@@ -78,13 +82,24 @@ test-tx-pipeline: src/tx_pipeline.c src/tx_pipeline_test.c src/tx_pipeline.h src
 
 # docs/ARCHITECTURE.md step 6: rx_filter.c/.h's own standalone bench
 # harness (rx_filter_test.c) against synthetic tones, standing in for
-# rx_audio.c stage 2's real demodulated audio - rx_filter.c is NOT yet
-# real, shipped code (not part of $(SRC)/$(OBJ) above - unlike
-# fft_filter.c/tx_pipeline.c, this hasn't had its "step 5"-equivalent
-# live-wiring step yet, see ARCHITECTURE.md §10 step 6/7), so this stays
-# a pure bench-only harness for now, same convention as the other two
-# targets above. Depends on fft_filter.c/.h (step 2, including its new
-# filter_tune_real()) and cw.h (CW_PITCH_HZ only - NOT cw.c/rx_audio.c
-# themselves, same "no hardware deps in a bench test" precedent).
+# rx_audio.c stage 2's real demodulated audio - rx_filter.c itself is
+# real, shipped code now (part of $(SRC)/$(OBJ) above, since step 7
+# wired it into rx_audio.c as a selectable stage-3 option), but this
+# harness stays separate, same "not part of the build" convention as the
+# other two targets above. Depends on fft_filter.c/.h (step 2, including
+# its new filter_tune_real()) and cw.h (CW_PITCH_HZ only - NOT cw.c/
+# rx_audio.c themselves, same "no hardware deps in a bench test"
+# precedent).
 test-rx-filter: src/rx_filter.c src/rx_filter_test.c src/rx_filter.h src/fft_filter.c src/fft_filter.h src/cw.h
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/fft_filter.c src/rx_filter.c src/rx_filter_test.c -o $@ -lfftw3f -lm
+
+# docs/ARCHITECTURE.md step 7: rx_audio_test.c - an integration smoke
+# test for rx_audio.c's OWN new wiring (the implementation selector, the
+# two-pass buffering, the block-mismatch fallback), distinct from
+# rx_filter_test.c above (which never touches rx_audio.c at all, and
+# only re-tests rx_filter.c's own DSP correctness). Links vfo.c directly
+# (no hardware deps - see vfo.c's own #include list) alongside
+# rx_audio.c/fft_filter.c/rx_filter.c; cw.h is header-only here too
+# (CW_PITCH_HZ), same as the other harnesses.
+test-rx-audio: src/rx_audio.c src/rx_audio_test.c src/rx_audio.h src/vfo.c src/vfo.h src/fft_filter.c src/rx_filter.c src/cw.h
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/rx_audio.c src/vfo.c src/fft_filter.c src/rx_filter.c src/rx_audio_test.c -o $@ -lfftw3f -lm
