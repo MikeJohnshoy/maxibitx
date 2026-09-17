@@ -68,7 +68,28 @@ struct filter *filter_new(int block_len, int impulse_len);
 // docs/ARCHITECTURE.md §4's Kaiser-beta derivation). Safe to call again
 // at any time (e.g. live pitch/width changes) - it only touches
 // fir_coeff, not the running overlap-save state in history/time/freq.
+//
+// This is a single, one-sided passband interval - correct for isolating
+// one sideband of an analytic/SSB-style signal under construction
+// (docs/ARCHITECTURE.md §5's TX pipeline, tx_pipeline.c), where the
+// *other* half of the spectrum is deliberately unwanted image content.
+// It is the wrong tool for filtering a genuinely real-valued signal
+// (e.g. rx_audio.c's stage 3, post-demodulation audio) - a real time
+// series always has a conjugate-symmetric spectrum by construction
+// (energy at +f and -f are the SAME signal's own mirror images, not an
+// image to reject), so passing only [low, high] and zeroing its mirror
+// would discard half of that signal's own real energy. filter_tune_real()
+// below is for that case.
 int filter_tune(struct filter *f, float low, float high, float kaiser_beta);
+
+// (Re)designs the passband as a REAL bandpass: passes both [low, high]
+// and its mirror image [-high, -low] (same normalized-frequency
+// convention as filter_tune() above), so a genuinely real-valued
+// signal's energy on both sides of 0 Hz survives intact - see
+// filter_tune()'s own comment for why plain filter_tune() would instead
+// discard half of it. First user: rx_filter.c (rx_audio.c's stage 3,
+// docs/ARCHITECTURE.md §5/§10 step 6).
+int filter_tune_real(struct filter *f, float low, float high, float kaiser_beta);
 
 // Phase 1 of filter_run(): prepends the saved M-1-sample history to
 // `in`'s L new complex samples, forward-FFTs the result, and multiplies
