@@ -1,6 +1,6 @@
 # maxibitx — architecture and design rationale
 
-Status: §10 steps 1-5 done. Step 1: this tree is minibitx's `src/`,
+Status: §10 steps 1-6 done. Step 1: this tree is minibitx's `src/`,
 `docs/`, `data/`, and `tools/` carried over unchanged (only
 `src/maxibitx.c`'s filename and the Makefile's output binary name
 changed), confirmed building and running on real hardware. Step 2: the
@@ -14,12 +14,20 @@ synthetic stand-in for `cw.c`'s sidetone (`src/tx_pipeline_test.c`). Step
 5: `tx_pipeline.c` is wired into `cw.c`/`sound.c` for real — CW TX now
 runs on the shared FFT pipeline live, not just on the bench;
 `cw_tx_carrier`/`TX_IF_OFFSET_HZ` and `radio_tx_apply()`'s
-`CW_PITCH_HZ` clk2 correction are gone — see §10 for the actual
-measured/verified detail on all five steps, and this step's own entry
-for what still needs on-air re-verification before it's trusted the way
-the path it replaced was. `rx_audio.c`'s fixed narrow filter is the one
-piece of the original plan untouched so far (step 6). This
-document is both the
+`CW_PITCH_HZ` clk2 correction are gone. Step 6: a new, parallel RX
+narrow-filter module (`src/rx_filter.c`/`.h`) implements §5's RX plan —
+the same shared FFT engine, with pitch/width as live parameters instead
+of `rx_audio.c`'s baked-in elliptic design — bench-verified against
+synthetic tones (`src/rx_filter_test.c`); `fft_filter.c` gained
+`filter_tune_real()` for this (a real, symmetric bandpass, distinct from
+`filter_tune()`'s one-sided SSB-style interval). See §10 for the actual
+measured/verified detail on all six steps, and step 5's own entry for
+what still needs on-air re-verification before it's trusted the way the
+TX path it replaced was. `rx_audio.c` itself is still completely
+untouched — step 6 is bench-only, same discipline step 4 used for TX;
+wiring `rx_filter.c` in live for a real on-air comparison against the
+existing elliptic filter is step 7, the one piece of the original plan
+not yet even started. This document is both the
 design rationale that justified starting `maxibitx` as its own repo
 (not a minibitx branch, not an sbitx fork-in-place) and the plan for
 §10's remaining steps. Everything below is grounded in minibitx's
@@ -373,16 +381,36 @@ signal.
 `rx_audio.c`'s stage 3 (currently `narrow_filter_coeffs[]`, a fixed
 8-pole elliptic bandpass) is replaced by an FFT overlap-save stage built
 the same way as TX's — `filter_new()`/`filter_tune()`/`window_filter()`,
-same block size, same Kaiser-window construction — operating on the
-already-demodulated audio coming out of stage 2. Two live parameters
+same Kaiser-window construction, though NOT the same block/impulse
+sizing (see §10 step 6 for why a narrow ~300Hz CW passband needs a much
+longer impulse response than TX's wide 300-3000Hz one) — operating on
+the already-demodulated audio coming out of stage 2. Two live parameters
 instead of zero: pitch (where stage 2 already mixes to, unchanged) and
-width (now a real `filter_tune()` passband argument instead of a
-baked-in 300Hz). No coefficient regeneration, no rebuild, for either.
+width (now a real, live-tunable passband argument instead of a baked-in
+300Hz). No coefficient regeneration, no rebuild, for either.
+
+**Step 6, done, bench-only:** built as its own module, `src/rx_filter.c`/
+`.h` (`rx_filter_new()`/`rx_filter_retune(pitch_hz, width_hz)`/
+`rx_filter_process_block()`/`rx_filter_free()`), not a direct reuse of
+`tx_pipeline.c` — this filter shapes an already-real signal in place
+rather than building a one-sided analytic signal and moving it to an IF,
+so it needed a genuinely different passband primitive:
+`fft_filter.c`/`.h`'s new `filter_tune_real()`, which passes a mirrored
+pair of intervals (`[low,high]` and `[-high,-low]`) instead of
+`filter_tune()`'s single one-sided one — a real signal's spectrum is
+symmetric about 0Hz by construction, and a plain `filter_tune()` passband
+would discard that mirror half as if it were an unwanted image, the same
+mistake `tx_pipeline.c`'s sideband-zero step deliberately (and
+correctly) makes on purpose for SSB construction. Bench-verified against
+synthetic tones (`src/rx_filter_test.c`) — see §10 step 6 for the
+measured passband/shape/retune/latency numbers. `rx_audio.c` itself is
+untouched by this step; wiring `rx_filter.c` in for a live, on-air
+comparison against the existing elliptic filter is step 7.
 
 This directly resolves the original "how do we handle `CW_PITCH_HZ`
 changing" question from earlier in this project: on RX, changing pitch
 now just means re-tuning stage 2's existing mixing oscillator *and*
-re-calling `filter_tune()` with the new center — both cheap, both
+re-calling `rx_filter_retune()` with the new center — both cheap, both
 already-necessary operations, no separate offline `scipy.signal.ellip`
 step to keep in sync with the pitch value the way `narrow_filter_coeffs[]`
 required. Width becomes a second, independent live control the fixed
@@ -412,9 +440,11 @@ sourced from a host PC's digital-mode app instead of a human voice) and
 which sideband-zero branch applies - the same single mode check
 `tx_process()` already uses for these decisions. That dispatch has
 nothing to select between yet, since CW is still the only mode with any
-`i_sample` source wired in at all - it becomes real work at step 7, once
-SSB's mic-audio path exists as a second option to choose between; mode
-being real (step 3) was the precondition for that, not this work itself.
+`i_sample` source wired in at all - it becomes real work once SSB's
+mic-audio path exists as a second option to choose between (needed
+before step 8's on-air SSB test, though not itself a separately-numbered
+step in §10 yet); mode being real (step 3) was the precondition for
+that, not this work itself.
 
 **Open question, not yet answered by the existing hardware layer: what
 triggers PTT for voice?** `DIGITAL` doesn't add a new answer here —
@@ -539,7 +569,15 @@ for keying an external accessory's PTT, not this input line.)
   time-domain FIR wouldn't have added as much of. Fine for voice, but
   worth confirming against the real-time audio budget alongside §7's
   other "re-validate `PERIOD_FRAMES` once real per-block compute exists"
-  item, since this is exactly that kind of new per-block compute.
+  item, since this is exactly that kind of new per-block compute. Step
+  6's `rx_filter.c` gave this a real, measured number on the RX side
+  specifically (not just TX): **16.00ms** group delay (bench-measured
+  via an impulse response, not just the `(M-1)/2` formula), against the
+  elliptic IIR's ~2.6ms — a real ~6x latency cost for the local CW
+  monitor specifically, worth an actual on-air listening judgment (step
+  7) rather than assuming "fine for voice" also means "fine for a CW
+  operator's own sidetone-adjacent monitor," since nothing bench-only
+  can settle that.
 - **Actual achievable sideband rejection.** CW measured ~40dB against a
   filter-theoretic ~61dB, attributed to this specific board's filter
   unit and diode-mixer nonlinearity, not the architecture. SSB's
@@ -624,7 +662,7 @@ for keying an external accessory's PTT, not this input line.)
      instead of sbitx's `1/N` (one of the two FFT round-trips inside
      `window_filter()` was going uncompensated) — verified back to
      0.00dB. This port's filter is unity-gain by construction; any gain
-     constant added later (step 8) calibrates real analog/mixer gain,
+     constant added later (step 9) calibrates real analog/mixer gain,
      not partly undoing an unlabeled FFT-normalization artifact too.
    - **Sideband separation (the central decision, §4)**: two tones at
      ±1031.25Hz inside a shared ±3000Hz passband — without the explicit
@@ -789,14 +827,88 @@ for keying an external accessory's PTT, not this input line.)
    had (it jumped straight from "still bench-only" to RX/SSB work below
    without ever specifying a step that both wires CW in live *and*
    checks it on air).
-6. Migrate `rx_audio.c`'s stage 3 onto the same shared pipeline (§5),
-   with pitch/width as live parameters — bench-verified against
-   synthetic signals first (same `test_rx_audio.c`-style methodology),
-   then an on-air listening comparison against the existing elliptic
-   filter per §9's skirt-quality check, before removing
-   `narrow_filter_coeffs[]` for good.
-7. First on-air SSB TX test, CAT-triggered PTT, one band, conservative
+6. **Done, bench-only.** Wrote a new, parallel module (`src/rx_filter.c`/`.h`)
+   implementing §5's RX plan: the same `fft_filter.c` overlap-save engine
+   TX uses, with pitch and width as live `rx_filter_retune()` parameters
+   instead of a baked-in, offline-designed response. Bench-verified
+   against synthetic tones (`src/rx_filter_test.c`,
+   `make test-rx-filter && ./test-rx-filter`, same "not part of the
+   shipped binary" convention as steps 2/4's harnesses). **`rx_audio.c`
+   is completely untouched by this step** — same discipline step 4 used
+   for TX: this is a proven, parallel replacement, not a live one; the
+   real running binary still demodulates CW with `narrow_filter_coeffs[]`
+   exactly as before. Required one genuinely new shared primitive:
+   `fft_filter.c` gained `filter_tune_real()` alongside the existing
+   `filter_tune()` — a real, symmetric-around-0 bandpass (passes
+   `[low,high]` *and* its mirror `[-high,-low]`), needed because this
+   filter shapes an already-real signal (rx_audio.c stage 2's demodulated
+   audio), whose spectrum is inherently symmetric about 0Hz, unlike TX's
+   one-sided SSB/analytic-signal construction. `filter_tune()`'s own
+   behavior is unchanged (verified: `test-fft-filter`/`test-tx-pipeline`
+   re-run after the refactor, matching pre-refactor numbers to within
+   run-to-run `FFTW_MEASURE` plan-selection noise — confirmed by running
+   `test-fft-filter` three times back to back and seeing its own deep-
+   rejection number (Case C, "with bin-zero") swing between -155.86dB
+   and -164.44dB with **zero code changes between runs**, i.e. that
+   noise is inherent to `FFTW_MEASURE`'s algorithm-selection at the
+   single-precision floating-point floor, not something this refactor
+   introduced). Real numbers, at Fs=96000Hz:
+   - **Sizing**: unlike TX (`L=1024/M=1025/N=2048`), this filter keeps
+     `L=1024` (must match `sound.c`'s `PERIOD_FRAMES`) but uses a much
+     longer impulse response, `M=3073` (`N=4096`, chosen to land on a
+     power-of-two FFT size) — TX's `M=1025` gives a ~340Hz transition
+     (step 2's bench number), fine against a 2700Hz-wide 300-3000Hz
+     passband but far too wide relative to a ~300Hz-wide CW passband;
+     `M` was scaled up from a Harris-formula estimate targeting ~100Hz,
+     then bench-verified below rather than trusted from the formula
+     alone.
+   - **Passband/real-output check (Case A)**: the tuned pitch (700Hz,
+     default width 300Hz) measures **0.00dB** — and critically, the
+     pre-`crealf()` complex output's imaginary residual is negligible
+     (`imag/real` ratio **1.36e-07**), confirming this filter does *not*
+     need `tx_pipeline.c`'s `×2` amplitude-halving correction — expected,
+     since `filter_tune_real()`'s mirrored passband keeps both spectral
+     halves of a real signal intact, unlike TX's deliberate one-sided
+     sideband-zero construction, but checked directly here rather than
+     assumed.
+   - **Shape (Case B)**: measured **-3dB at ±133.7Hz** (267Hz total,
+     close to the ~300Hz design target), **-60dB at ±272.6Hz**, shape
+     factor **2.04:1** (-60dB width : -3dB width — not a perfectly
+     apples-to-apples comparison with the elliptic's own quoted
+     -60dB:-6dB ~1.9:1, but in the same range); rejection at
+     pitch+3000Hz (the elliptic's own bench comparison point) measures
+     **-86.78dB**.
+   - **Live retune (Case C)**: `rx_filter_retune()` from
+     (pitch=700, width=300) to (pitch=800, width=150) measurably moves
+     the passband at runtime — 700Hz drops from 0.00dB to **-9.05dB**,
+     800Hz goes from -0.67dB to **-0.26dB** — stronger verification than
+     `tx_pipeline_retune()` ever got (that one has still never been
+     called outside its own declaration, per step 4).
+   - **Group delay (Case D)**: measured empirically via an impulse-
+     response peak (not the `(M-1)/2` formula alone, though it matches
+     that prediction exactly) at **16.00ms** — a real, honestly-
+     quantified new cost versus the elliptic IIR it's replacing
+     (~2.6ms, `rx_audio.c`'s own header) — about 6x more local-monitor
+     delay. Likely inconsequential for ordinary CW copy (nothing in
+     `cw.c`'s own keying timing depends on this — it only affects the
+     receive audio a human ear listens to) but worth noting for anyone
+     doing tight QSK/full-breakin operating; not yet judged on air.
+   Not yet done: wiring this into `rx_audio.c` for a live cutover and an
+   on-air listening comparison against the existing elliptic filter
+   (step 7 below) — the explicit split step 4/5 already used for TX,
+   since "sounds at least as good on a real signal in real band
+   conditions" (§9's skirt-quality check) is a listening-quality
+   judgment only the user can make on his own hardware, not something
+   this bench harness can settle on synthetic tones alone.
+7. Wire `rx_filter.c` into `rx_audio.c`'s stage 3 for real, live CW RX,
+   keeping the existing elliptic filter selectable (not a hard cutover
+   like step 5's TX decision — §10 step 6's own build-order text always
+   planned for an on-air *comparison*, not an immediate replacement) so
+   the user can A/B the two on real signals in real band conditions
+   before `narrow_filter_coeffs[]` is ever removed for good, per §9's
+   skirt-quality open question.
+8. First on-air SSB TX test, CAT-triggered PTT, one band, conservative
    drive level — measure actual sideband rejection before touching
    power calibration at all.
-8. Power/ALC calibration for voice, per §9.
-9. Physical PTT input (if wanted) once CAT-only testing is done.
+9. Power/ALC calibration for voice, per §9.
+10. Physical PTT input (if wanted) once CAT-only testing is done.
