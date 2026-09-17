@@ -8,7 +8,7 @@ better," per the specific bugs already root-caused on sbitx/zbitx. The
 full rationale, the shared-FFT-pipeline design decision, and the build
 order are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-**Current state: build order steps 1-3 of `ARCHITECTURE.md`.**
+**Current state: build order steps 1-4 of `ARCHITECTURE.md`.**
 Everything below this point in this README, and the rest of `docs/`,
 still describes what the actual radio pipeline does *today* — which is
 exactly what minibitx does, unchanged (step 1). Step 2 added the shared
@@ -17,9 +17,17 @@ FFT overlap-save filter as a standalone, bench-verified primitive
 — proven against synthetic tones, not yet wired into the real audio
 path. Step 3 made mode a real, single-owner value (`radio_set_mode()`/
 `radio_get_mode()`) both control surfaces agree on — still doesn't
-select anything, since there's no pipeline wired up yet to select.
-`cw.c`/`rx_audio.c` are still untouched; see `ARCHITECTURE.md` §10 for
-the measured/verified detail on all three steps and what's next.
+select anything, since there's no pipeline wired up yet to select. Step
+4 added a new, parallel shared TX pipeline module
+(`src/tx_pipeline.c`/`.h`, `make test-tx-pipeline && ./test-tx-pipeline`)
+implementing CW's slice of the plan — passband filter, explicit
+sideband-zero, shared IF bin-rotate — bench-verified against a synthetic
+stand-in for `cw.c`'s sidetone. `cw.c`/`radio.c`/`sound.c` are still
+completely untouched by this: the real, running binary still transmits
+CW exactly as minibitx always did; step 4's module is proven on the
+bench only, not wired in live. See `ARCHITECTURE.md` §10 for the
+measured/verified detail on all four steps and what's next (the live CW
+cutover, step 5).
 
 ---
 
