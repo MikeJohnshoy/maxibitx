@@ -5,13 +5,41 @@
 // the shared pipeline needs that fft_filter.c doesn't already provide:
 // the explicit sideband-zero step and the shared IF bin-rotate.
 
+#include <stdio.h>
 #include <string.h>
 #include "tx_pipeline.h"
 
 struct tx_pipeline *tx_pipeline_new(void)
 {
 	struct tx_pipeline *p = malloc(sizeof(struct tx_pipeline));
-	p->filt = filter_new(TX_PIPELINE_BLOCK_LEN, TX_PIPELINE_IMPULSE_LEN);
+
+	// FFTW_ESTIMATE by default, not filter_new()'s FFTW_MEASURE - the
+	// same trade rx_filter_new() made (see its own comment in
+	// rx_filter.c) for the same reason, applied here after real-hardware
+	// evidence (docs/ARCHITECTURE.md §10 step 7's follow-up) that this
+	// specific FFTW_MEASURE search - which runs synchronously inside
+	// sound_thread_start(), AFTER pcm_playback is opened/primed but
+	// BEFORE the audio thread that's supposed to keep it fed is even
+	// created - was long enough to drain sound.c's newly-added playback
+	// pre-fill before the real per-block writes ever got a chance to
+	// start, producing a burst of startup xruns that priming alone
+	// couldn't fix (the buffer was primed, then sat idle draining for
+	// the whole length of this search). FFTW_ESTIMATE removes that gap
+	// instead of trying to out-buffer it. Overridable via
+	// MAXIBITX_TX_PIPELINE_FFTW_MEASURE (same diagnostic pattern as
+	// rx_filter.c's own env var) for re-testing whether this was really
+	// the cause, or reverting if FFTW_ESTIMATE's own per-block cost ever
+	// turns out not to fit TX_PIPELINE_N=2048's real-time budget on some
+	// board (checked, not assumed, for RX's own larger N=4096 - not yet
+	// separately re-checked here, though TX's N is smaller, so it should
+	// only be an easier case).
+	const char *force_measure = getenv("MAXIBITX_TX_PIPELINE_FFTW_MEASURE");
+	unsigned flags = (force_measure && *force_measure) ? FFTW_MEASURE : FFTW_ESTIMATE;
+	printf("tx_pipeline: using %s for its FFTW plan (TX_PIPELINE_N=%d)%s\n",
+	       flags == FFTW_MEASURE ? "FFTW_MEASURE" : "FFTW_ESTIMATE", TX_PIPELINE_N,
+	       flags == FFTW_MEASURE ? " - MAXIBITX_TX_PIPELINE_FFTW_MEASURE set, expect a slower startup" : "");
+
+	p->filt = filter_new_ex(TX_PIPELINE_BLOCK_LEN, TX_PIPELINE_IMPULSE_LEN, flags);
 	filter_tune(p->filt, 300.0f / TX_PIPELINE_FS_HZ, 3000.0f / TX_PIPELINE_FS_HZ,
 	            TX_PIPELINE_KAISER_BETA);
 	// Plain malloc, not fftwf_alloc_complex: this buffer is only ever a
