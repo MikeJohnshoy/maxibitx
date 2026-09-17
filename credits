@@ -1,0 +1,5 @@
+- Bootstrapped from MikeJohnshoy/minibitx - same control/hardware layer,
+  carried over as the step-1 skeleton (see docs/ARCHITECTURE.md)
+- Inspired by Ashhar Farhan's (VU2ESE) original sbitx code
+- Code was based on JJ's 64bit repository at https://github.com/drexjj/sbitx
+- hpsdrsim.c from the piHPSDR project for the HPSDR protocol 1

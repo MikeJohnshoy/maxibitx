@@ -1,0 +1,6 @@
+#!/bin/bash
+date
+cd $HOME/maxibitx
+git stash
+git pull
+echo "maxibitx files have been updated successfully."
