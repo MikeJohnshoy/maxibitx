@@ -8,11 +8,28 @@
 // out, nothing more.
 //
 // Table-driven Blackman-Harris attack/decay envelope: 480 samples (5ms
-// rise and fall time at 96kHz, similar to the implementation in sBitx's own 
+// rise and fall time at 96kHz, similar to the implementation in sBitx's own
 // CW keyer uses in modem_cw.c), rising from ~0 to 1.0. Table-driven so
 // a different keying shape later is a table swap, not a logic change.
 // The same table is used forward for attack (key down) and backward
 // for decay (key up), same trick sbitx's own keyer uses.
+//
+// docs/ARCHITECTURE.md build order step 5: this file used to also carry
+// a SECOND oscillator (`cw_tx_carrier`) at a fixed IF offset
+// (`TX_IF_OFFSET_HZ`, ~22.6kHz above CW_PITCH_HZ) purely so the actual
+// TX product would land inside the crystal filter's passband without a
+// phasing/Hilbert stage - see git history for that derivation, or
+// docs/ARCHITECTURE.md §4 for why it worked at all (a single real mixer
+// with the BFO deliberately off-center from the crystal filter). That
+// whole scheme - the second NCO here, and the matching
+// `- CW_PITCH_HZ` residual correction `radio_tx_apply()` (radio.c) used
+// to apply to clk2 to square up the dial frequency - is gone as of this
+// step: `cw_get_sample()`'s one real-valued tone now also feeds
+// tx_pipeline.c's shared FFT pipeline (sound.c) as its `i_sample`, which
+// does the IF placement (an explicit sideband-zero plus a bin-rotate,
+// bench-derived and verified in docs/ARCHITECTURE.md §10 step 4) in the
+// frequency domain instead. See radio_tx_apply()'s own comment (radio.c)
+// for the resulting, simpler clk2 formula.
 
 #include "cw.h"
 #include "radio.h"
@@ -22,63 +39,8 @@
 
 #define CW_ENVELOPE_LEN 480
 
-// CW_PITCH_HZ (the sidetone/keying pitch) now lives in cw.h - radio.c
-// needs it too, to correct clk2 during TX (see cw.h's comment on it and
-// radio_tx_apply() in radio.c).
-
-// Where the actual TX-modulating tone sits, relative to CW_PITCH_HZ.
-//
-// The crystal filter's passband is fixed by the crystals themselves and
-// doesn't move - measured (docs/dsp_design_notes/antialias_filter_design.md)
-// at ~40.0124 MHz center, ~35kHz wide, with a steep skirt above +17.4kHz
-// (down to -61dB by +28.5kHz). bfo_freq (radio.c, default 40035000) is
-// *not* that center - it's offset ~22.6kHz above it, on purpose: this is
-// the same "BFO at the filter's edge" placement real sbitx's own design
-// article describes (VU2ESE, "The sBitx", section "The local oscillator(s)":
-// clock 1 sits ~25kHz above the filter's passband center for exactly this
-// reason). The RX chain already relies on this same offset without saying
-// so explicitly - antialias_filter_design.md's own analysis assumes it.
-//
-// A single real mixer (this hardware has one, confirmed against the
-// schematic - no I/Q/quadrature stage) always produces both bfo_freq+f
-// and bfo_freq-f from an audio tone at f. With the BFO sitting at the
-// filter's edge instead of its center, only ONE of those two lands inside
-// the passband:
-//   - difference (bfo_freq - f): with f = TX_IF_OFFSET_HZ + CW_PITCH_HZ
-//     (~23.3 kHz), bfo_freq - f lands right at the filter's measured
-//     center - solidly in the passband.
-//   - sum (bfo_freq + f): lands ~28.5kHz above the passband's upper edge,
-//     right where the measured data shows -61dB of rejection.
-//
-// This is why the earlier attempt at "generate the tone 24kHz higher"
-// (see the old comment this replaced, and 03_tx_processing_pipeline.md's
-// "Known limitations") made things worse instead of better: it reused
-// RX_IF_FREQ_HZ (24000, a different constant - the RX-side second-IF
-// target used in radio_tune_to()'s clk2 formula) rather than this filter's
-// actual measured offset from bfo_freq, so it landed on the wrong side of
-// the skirt. 22600 comes from bfo_freq (40035000) minus
-// xtal_filter_center (radio.c, 40012400 - this radio's measured filter
-// center) - it's a starting point for a bench check, not a value
-// guaranteed correct on every board without verifying against that
-// board's own filter (the measured data behind 22600 came from a
-// different, "representative" unit, not this exact one). Note this
-// difference product actually lands CW_PITCH_HZ short of
-// xtal_filter_center, not exactly on it (40035000 - 23300 = 40011700,
-// vs xtal_filter_center's 40012400) - a small, real residual from how
-// this constant was derived, not an oversight; see radio_tx_apply()'s
-// clk2 comment (radio.c) for where that residual gets accounted for.
-//
-// TO RE-TUNE ON THE BENCH: this constant only affects TX - no RX
-// implications, unlike bfo_freq, so it's safe to sweep on its own. Try
-// steps of +-2000 to +-4000 Hz around 22600, rebuilding and keying down
-// at the same test frequency each time. Read the *image* suppression
-// off a connected SDR's spectrum/waterfall (compare dB levels between
-// the wanted peak and the residual second tone, same as before) and
-// bisect toward whichever direction deepens the null - no wattmeter
-// needed for this, just the spectrum display. Log trials here as you
-// go, e.g.:
-//   22600 -> ~40dB down (baseline)
-#define TX_IF_OFFSET_HZ 22600
+// CW_PITCH_HZ (the sidetone/keying pitch, and now the only frequency
+// this file ever generates) lives in cw.h - see its comment there.
 
 // How many cw_poll_key() calls (audio blocks) to hold TX after the key
 // goes up before actually releasing PTT/the relay - standard semi
@@ -142,8 +104,11 @@ static const double cw_envelope[CW_ENVELOPE_LEN] = {
     0.996989, 0.997511, 0.997984, 0.998406, 0.998780, 0.999103, 0.999377, 0.999601, 0.999776,
     0.999900, 0.999975, 1.000000,
 };
-static struct vfo cw_tone;        // CW_PITCH_HZ - local sidetone monitor only
-static struct vfo cw_tx_carrier;  // CW_PITCH_HZ + TX_IF_OFFSET_HZ - actual TX drive
+// CW_PITCH_HZ - the only tone this file generates now (see cw.h); feeds
+// both the local sidetone monitor and, via cw_get_sample(), sound.c's
+// tx_pipeline.c as its i_sample - step 5 removed the second,
+// IF-shifted cw_tx_carrier oscillator that used to live here.
+static struct vfo cw_tone;
 static int envelope_pos = 0;   // 0 = silent, CW_ENVELOPE_LEN-1 = full output
 static int key_down = 0;       // last polled key state
 static int tx_active = 0;      // PTT/relay currently asserted for a keying burst
@@ -151,7 +116,6 @@ static int hang_counter = 0;   // polls remaining before TX releases
 
 void cw_init(void) {
     vfo_start(&cw_tone, CW_PITCH_HZ, 0);
-    vfo_start(&cw_tx_carrier, CW_PITCH_HZ + TX_IF_OFFSET_HZ, 0);
     envelope_pos = 0;
     key_down = 0;
     tx_active = 0;
@@ -190,19 +154,6 @@ double cw_get_sample(void) {
     }
 
     int tone = vfo_read(&cw_tone);           // Q30 fixed-point sine (vfo.c)
-    double tone_f = (double)tone / 1073741824.0;
-    return tone_f * cw_envelope[envelope_pos];
-}
-
-// The actual TX-modulating waveform - same envelope as cw_get_sample()
-// (advanced there, once per sample; this reads the position, it doesn't
-// advance it again), but at the IF-shifted carrier frequency instead of
-// the bare sidetone pitch. See TX_IF_OFFSET_HZ above for why. Callers
-// must call cw_get_sample() once per sample first (it owns the envelope
-// advance) and this second, for the same sample, to get both the sidetone
-// and the TX drive in sync.
-double cw_get_tx_sample(void) {
-    int tone = vfo_read(&cw_tx_carrier);
     double tone_f = (double)tone / 1073741824.0;
     return tone_f * cw_envelope[envelope_pos];
 }
