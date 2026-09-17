@@ -550,6 +550,62 @@ static void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output
 }
 
 /* ------------------------------------------------------------------ */
+/*  Per-block compute timing                                          */
+/* ------------------------------------------------------------------ */
+//
+// Wraps sound_process() (mixing/antialias/decim/streaming/rx_audio.c's
+// stage 1-4, including both stage-3 filters - see rx_audio.c) with a
+// clock_gettime()-based stopwatch and prints a periodic avg/max summary
+// against the ~10.667ms real-time budget (96kHz/PERIOD_FRAMES) - added
+// after a real-hardware xrun-flood report (docs/ARCHITECTURE.md §10 step
+// 7's follow-up) to get an actual measured number from the board in
+// question instead of guessing from a different, faster dev machine.
+// Same "rate-limit the printf, don't spam" discipline as xrun_note()
+// above, on a longer (5s) window since this is a periodic status report,
+// not a per-occurrence warning.
+#define BLOCK_TIMING_WINDOW_NS 5000000000L /* 5 seconds */
+#define BLOCK_PERIOD_BUDGET_MS (1000.0 * PERIOD_FRAMES / SAMPLE_RATE) /* 10.667ms */
+
+struct block_timing_tracker {
+  long sum_ns;
+  long max_ns;
+  int count;
+  struct timespec window_start;
+  int started;
+};
+
+static void block_timing_note(struct block_timing_tracker *t, long elapsed_ns) {
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+
+  if (!t->started) {
+    t->window_start = now;
+    t->started = 1;
+  }
+
+  t->sum_ns += elapsed_ns;
+  if (elapsed_ns > t->max_ns)
+    t->max_ns = elapsed_ns;
+  t->count++;
+
+  long elapsed_window_ns = (now.tv_sec - t->window_start.tv_sec) * 1000000000L +
+                            (now.tv_nsec - t->window_start.tv_nsec);
+  if (elapsed_window_ns >= BLOCK_TIMING_WINDOW_NS && t->count > 0) {
+    double avg_ms = (t->sum_ns / (double)t->count) / 1e6;
+    double max_ms = t->max_ns / 1e6;
+    fprintf(stderr,
+            "sound: sound_process() timing over last %ds: avg=%.3fms max=%.3fms "
+            "(budget %.3fms/block, %d blocks)\n",
+            (int)(BLOCK_TIMING_WINDOW_NS / 1000000000L), avg_ms, max_ms,
+            BLOCK_PERIOD_BUDGET_MS, t->count);
+    t->sum_ns = 0;
+    t->max_ns = 0;
+    t->count = 0;
+    t->window_start = now;
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Audio thread - capture -> sound_process() -> playback             */
 /* ------------------------------------------------------------------ */
 static void *audio_loop(void *arg) {
@@ -564,6 +620,7 @@ static void *audio_loop(void *arg) {
 
   static struct xrun_tracker capture_xrun = {0};
   static struct xrun_tracker playback_xrun = {0};
+  static struct block_timing_tracker block_timing = {0};
 
   while (g_running) {
     snd_pcm_sframes_t frames = snd_pcm_readi(pcm_capture, cap_buf, PERIOD_FRAMES);
@@ -585,7 +642,12 @@ static void *audio_loop(void *arg) {
       mic_buf[i] = cap_buf[i * 2 + 1];
     }
 
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
     sound_process(rx_buf, mic_buf, spk_buf, tx_buf, n);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    block_timing_note(&block_timing, (t1.tv_sec - t0.tv_sec) * 1000000000L +
+                                          (t1.tv_nsec - t0.tv_nsec));
 
     // Once per audio block - checks the key, manages the CW keying
     // burst's hang timer, and asserts/releases PTT via radio_set_tx()
