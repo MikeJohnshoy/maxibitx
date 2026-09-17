@@ -45,22 +45,27 @@ be made on real hardware, not on a bench; `rx_audio.c`'s
 `narrow_filter_coeffs[]` stays in the tree until it is.
 
 **First real on-air test of step 7** found receive audio working and the
-elliptic filter still effective, plus two follow-ups (`ARCHITECTURE.md`
-§10 step 7's own entry has the full detail): startup was noticeably
-slower than minibitx's - root cause was `rx_filter.c`'s new, larger
-`FFTW_MEASURE` plan search compounding with `tx_pipeline.c`'s
-pre-existing one, both paid at every process start - fixed by a new
-`fft_filter.c` `filter_new_ex()` that lets `rx_filter.c` use
-`FFTW_ESTIMATE` instead (construction time dropped ~1200x in bench
-measurements, per-block cost unaffected and still under 0.2% of the
-real-time budget, though not yet re-confirmed on the user's own Pi Zero
-2W); and "Use FFT filter" not yet producing a clearly noticeable
-audible difference from the elliptic filter, which looks like a
-genuinely subtle DSP-shape similarity between the two filters rather
-than a wiring bug as far as this can be checked without hardware in
-hand, but isn't fully confirmed either way yet. See `ARCHITECTURE.md`
-§10 for the measured/verified detail on all seven steps, including this
-follow-up.
+elliptic filter still effective, plus follow-ups (`ARCHITECTURE.md` §10
+step 7's own entries have the full detail), now all resolved except one.
+Startup was noticeably slower than minibitx's - root cause was
+`rx_filter.c`'s new, larger `FFTW_MEASURE` plan search compounding with
+`tx_pipeline.c`'s pre-existing one, both paid at every process start -
+fixed by a new `fft_filter.c` `filter_new_ex()` that lets both use
+`FFTW_ESTIMATE` instead. A real xrun flood also showed up on playback -
+traced (via a temporary `sound.c` timing diagnostic, now opt-in via
+`MAXIBITX_LOOP_TIMING=1`) to `tx_pipeline_new()`'s `FFTW_MEASURE` search
+running long enough, synchronously, to drain the playback buffer before
+the audio thread that keeps it fed ever got to run - fixed by
+reordering `sound_thread_start()` so the buffer is primed right before
+that thread starts, not before an unrelated setup cost gets to run in
+between. Confirmed clean on the user's own hardware: no more xruns, loop
+timing rock-solid for the whole run. Still open: "Use FFT filter" not
+yet producing a clearly noticeable audible difference from the elliptic
+filter, which looks like a genuinely subtle DSP-shape similarity between
+the two filters rather than a wiring bug as far as this can be checked
+without hardware in hand, but isn't fully confirmed either way yet. See
+`ARCHITECTURE.md` §10 for the measured/verified detail on all seven
+steps, including these follow-ups.
 
 ---
 
