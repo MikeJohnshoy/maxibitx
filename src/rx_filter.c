@@ -14,7 +14,9 @@
 struct rx_filter *rx_filter_new(float pitch_hz, float width_hz)
 {
 	struct rx_filter *r = malloc(sizeof(struct rx_filter));
-	r->filt = filter_new(RX_FILTER_BLOCK_LEN, RX_FILTER_IMPULSE_LEN);
+	// FFTW_ESTIMATE, not filter_new()'s FFTW_MEASURE - see this
+	// function's header comment in rx_filter.h for why.
+	r->filt = filter_new_ex(RX_FILTER_BLOCK_LEN, RX_FILTER_IMPULSE_LEN, FFTW_ESTIMATE);
 	rx_filter_retune(r, pitch_hz, width_hz);
 	return r;
 }
