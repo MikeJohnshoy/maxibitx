@@ -1,6 +1,6 @@
 # maxibitx — architecture and design rationale
 
-Status: §10 steps 1-6 done. Step 1: this tree is minibitx's `src/`,
+Status: §10 steps 1-7 done. Step 1: this tree is minibitx's `src/`,
 `docs/`, `data/`, and `tools/` carried over unchanged (only
 `src/maxibitx.c`'s filename and the Makefile's output binary name
 changed), confirmed building and running on real hardware. Step 2: the
@@ -20,14 +20,20 @@ the same shared FFT engine, with pitch/width as live parameters instead
 of `rx_audio.c`'s baked-in elliptic design — bench-verified against
 synthetic tones (`src/rx_filter_test.c`); `fft_filter.c` gained
 `filter_tune_real()` for this (a real, symmetric bandpass, distinct from
-`filter_tune()`'s one-sided SSB-style interval). See §10 for the actual
-measured/verified detail on all six steps, and step 5's own entry for
-what still needs on-air re-verification before it's trusted the way the
-TX path it replaced was. `rx_audio.c` itself is still completely
-untouched — step 6 is bench-only, same discipline step 4 used for TX;
-wiring `rx_filter.c` in live for a real on-air comparison against the
-existing elliptic filter is step 7, the one piece of the original plan
-not yet even started. This document is both the
+`filter_tune()`'s one-sided SSB-style interval). **Step 7 wired it in
+live**: `rx_audio.c` now runs BOTH stage-3 implementations continuously
+and picks between them via a new selector
+(`rx_audio_set_narrow_filter_impl()`), elliptic still the default —
+reachable remotely via a new rigctld command (`u`/`U FFTFILT`) and a new
+checkbox in `tools/rigctl_panel.py`'s RX Filter panel, so the operator
+can A/B the two on real signals before `narrow_filter_coeffs[]` is ever
+removed for good. See §10 for the actual measured/verified detail on all
+seven steps, and step 5's own entry for what still needs on-air
+re-verification on the TX side. What's left for RX specifically: the
+on-air listening comparison itself (step 7's own entry) — the code is
+complete and integration-tested (`src/rx_audio_test.c`), but "sounds at
+least as good for real CW copy" is the operator's judgment call on real
+hardware, not something bench-verifiable. This document is both the
 design rationale that justified starting `maxibitx` as its own repo
 (not a minibitx branch, not an sbitx fork-in-place) and the plan for
 §10's remaining steps. Everything below is grounded in minibitx's
@@ -403,9 +409,18 @@ would discard that mirror half as if it were an unwanted image, the same
 mistake `tx_pipeline.c`'s sideband-zero step deliberately (and
 correctly) makes on purpose for SSB construction. Bench-verified against
 synthetic tones (`src/rx_filter_test.c`) — see §10 step 6 for the
-measured passband/shape/retune/latency numbers. `rx_audio.c` itself is
-untouched by this step; wiring `rx_filter.c` in for a live, on-air
-comparison against the existing elliptic filter is step 7.
+measured passband/shape/retune/latency numbers.
+
+**Step 7, done, code-complete:** `rx_filter.c` is wired into
+`rx_audio.c` for real — both stage-3 implementations now run
+continuously (see rx_audio.c's own comment for why), with
+`rx_audio_set_narrow_filter_impl()` picking which one's output reaches
+stage 4, elliptic still the default. Reachable remotely via rigctld's
+new `u`/`U FFTFILT` and `tools/rigctl_panel.py`'s new checkbox, for the
+same on-air A/B comparison this exists for. `src/rx_audio_test.c` is a
+new integration smoke test proving this wiring itself (not `rx_filter.c`'s
+DSP, already covered by step 6's own harness) - see §10 step 7 for the
+numbers and the one bug it caught in the test itself, not the code.
 
 This directly resolves the original "how do we handle `CW_PITCH_HZ`
 changing" question from earlier in this project: on RX, changing pitch
@@ -900,13 +915,73 @@ for keying an external accessory's PTT, not this input line.)
    conditions" (§9's skirt-quality check) is a listening-quality
    judgment only the user can make on his own hardware, not something
    this bench harness can settle on synthetic tones alone.
-7. Wire `rx_filter.c` into `rx_audio.c`'s stage 3 for real, live CW RX,
-   keeping the existing elliptic filter selectable (not a hard cutover
-   like step 5's TX decision — §10 step 6's own build-order text always
-   planned for an on-air *comparison*, not an immediate replacement) so
-   the user can A/B the two on real signals in real band conditions
-   before `narrow_filter_coeffs[]` is ever removed for good, per §9's
+7. **Done, code-complete — on-air listening comparison still outstanding.**
+   Wired `rx_filter.c` into `rx_audio.c`'s stage 3, keeping the existing
+   elliptic filter selectable (not a hard cutover like step 5's TX
+   decision — §10 step 6's own build-order text always planned for an
+   on-air *comparison*, not an immediate replacement), so the operator
+   can A/B the two on real signals in real band conditions before
+   `narrow_filter_coeffs[]` is ever removed for good, per §9's
    skirt-quality open question.
+   - `rx_audio.c` gained a second stage-3 implementation selector
+     (`rx_audio_set_narrow_filter_impl()`/`rx_audio_get_narrow_filter_impl()`,
+     `rx_audio.h`) — elliptic stays the default. `rx_audio_process()`
+     now buffers stage 2's output across the whole call and runs BOTH
+     implementations every time (the elliptic filter per-sample as
+     before, the FFT filter once per block via `rx_filter_process_block()`),
+     regardless of which one is currently selected — same "keep it warm
+     so switching doesn't thump" reasoning the enable/bypass toggle
+     already used for the elliptic filter alone, now covering a switch
+     *between* implementations too. A block whose size doesn't match
+     `RX_FILTER_BLOCK_LEN` (same "should only happen on a genuinely
+     abnormal read" reasoning as step 5's TX-side guard) falls back to
+     the elliptic output for that one block rather than corrupt the FFT
+     filter's overlap-save history — an RX audio dropout has no
+     compensating upside the way TX's silence did, so this falls back to
+     the *other* filter's output instead of silence.
+   - `src/rx_filter.c` moved from bench-only into the real build
+     (`Makefile`'s `SRC`/`OBJ`) — `rx_audio.c` now calls it directly, the
+     same "step 5"-equivalent moment `tx_pipeline.c`/`fft_filter.c` had.
+   - New rigctld command `u`/`U FFTFILT` (`hamlib.c`), alongside the
+     existing `u`/`U NARROW`, lets an operator flip the selector remotely
+     without a rebuild — wired into `tools/rigctl_panel.py`'s "RX Filter"
+     panel as a second checkbox, "Use FFT filter (experimental)",
+     unchecked (elliptic) by default, polled/synced the same way the
+     existing narrow-filter checkbox already is.
+   - New integration smoke test, `src/rx_audio_test.c`
+     (`make test-rx-audio && ./test-rx-audio`) — distinct from step 6's
+     `rx_filter_test.c` (which never calls `rx_audio.c` at all, and only
+     re-verifies `rx_filter.c`'s own DSP correctness): this one exercises
+     `rx_audio_process()`'s own new wiring directly (links `rx_audio.c`/
+     `vfo.c`/`fft_filter.c`/`rx_filter.c` standalone, no hardware deps -
+     same precedent as the other harnesses). Confirmed: a steady
+     on-dial-center tone produces comparable output loudness under the
+     elliptic filter, the FFT filter, and bypass (RMS ratio FFT:elliptic
+     1.05 — a real check, not just "didn't crash"; an order-of-magnitude
+     gap here would have meant the selector was reading the wrong buffer
+     or missing a scale factor), and the block-size-mismatch fallback
+     produces a comparably-loud, finite reading rather than silence or
+     garbage. One bug this caught in the test itself, not the code:  the
+     first version of this harness fed its synthetic tone directly at
+     `CW_PITCH_HZ`, forgetting that stage 2 *adds* `CW_PITCH_HZ` via
+     mixing (baseband → audible pitch) — landing the test tone at
+     1400Hz, well outside both filters' passbands, and making the two
+     implementations' rejection curves (not their passband gain) look
+     like a 12x RMS mismatch. Fixed by feeding the synthetic tone at
+     0Hz baseband (a station parked exactly on dial center) instead,
+     which is what actually produces a `CW_PITCH_HZ` audio tone at the
+     output — the same class of "test harness measured the wrong thing"
+     bug step 4's writeup already flagged for a different reason,
+     caught here by the same discipline of trusting the number over the
+     assumption.
+   **What's still open**: the on-air listening comparison itself (does
+   the FFT filter's ~267Hz -3dB width / 2.04:1 shape / 16ms group delay
+   actually sound at least as good for real CW copy as the elliptic's
+   ~300Hz / ~1.9:1 / ~2.6ms, per §9's skirt-quality question) is
+   fundamentally the operator's own judgment call on real hardware, not
+   something any bench harness can settle — `narrow_filter_coeffs[]`
+   stays in the tree, and elliptic stays the default, until that
+   judgment is made.
 8. First on-air SSB TX test, CAT-triggered PTT, one band, conservative
    drive level — measure actual sideband rejection before touching
    power calibration at all.
