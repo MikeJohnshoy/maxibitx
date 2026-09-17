@@ -42,9 +42,25 @@ wiring directly. What's still outstanding: the on-air listening
 comparison itself (does the FFT filter sound at least as good for real
 CW copy) - the code is complete and tested, but that judgment can only
 be made on real hardware, not on a bench; `rx_audio.c`'s
-`narrow_filter_coeffs[]` stays in the tree until it is. See
-`ARCHITECTURE.md` §10 for the measured/verified detail on all seven
-steps.
+`narrow_filter_coeffs[]` stays in the tree until it is.
+
+**First real on-air test of step 7** found receive audio working and the
+elliptic filter still effective, plus two follow-ups (`ARCHITECTURE.md`
+§10 step 7's own entry has the full detail): startup was noticeably
+slower than minibitx's - root cause was `rx_filter.c`'s new, larger
+`FFTW_MEASURE` plan search compounding with `tx_pipeline.c`'s
+pre-existing one, both paid at every process start - fixed by a new
+`fft_filter.c` `filter_new_ex()` that lets `rx_filter.c` use
+`FFTW_ESTIMATE` instead (construction time dropped ~1200x in bench
+measurements, per-block cost unaffected and still under 0.2% of the
+real-time budget, though not yet re-confirmed on the user's own Pi Zero
+2W); and "Use FFT filter" not yet producing a clearly noticeable
+audible difference from the elliptic filter, which looks like a
+genuinely subtle DSP-shape similarity between the two filters rather
+than a wiring bug as far as this can be checked without hardware in
+hand, but isn't fully confirmed either way yet. See `ARCHITECTURE.md`
+§10 for the measured/verified detail on all seven steps, including this
+follow-up.
 
 ---
 
