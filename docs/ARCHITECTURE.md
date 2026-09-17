@@ -1065,6 +1065,76 @@ for keying an external accessory's PTT, not this input line.)
      width, 1.05 RMS ratio, etc.) — `FFTW_ESTIMATE` changes which
      algorithm variant FFTW picks, not the frequency-domain design math,
      so no DSP behavior changed, only construction-time cost.
+
+     **Confirmed on real hardware**: the pause after "CW straight key
+     ready" is gone. **But a new symptom showed up that wasn't present
+     before**: a few seconds into a run, `sound.c`'s playback ALSA device
+     starts flooding `xrun, recovering` messages continuously — the
+     audio thread genuinely isn't keeping up with real time (not a
+     device or `SCHED_FIFO` problem — the startup log shows no "failed
+     to set audio thread to SCHED_FIFO" warning, so the thread IS
+     running at real-time priority; `xrun_note()`'s own flood message,
+     unchanged since before this project started, already says as much).
+     This risk was explicitly named as this fix's "one open item" above
+     (the sandbox-measured 0.016ms/block margin isn't a Pi Zero 2W
+     measurement) — it just wasn't expected to actually bite. Two
+     hypotheses, not yet distinguished:
+     (a) `FFTW_ESTIMATE`'s un-benchmarked algorithm choice happens to run
+     meaningfully slower per block than `FFTW_MEASURE`'s on this specific
+     ARM core — a real, known FFTW characteristic (ESTIMATE trades away
+     the benchmarking search, and how much speed that search would have
+     bought varies by machine, sometimes a lot on ARM specifically); or
+     (b) `rx_audio.c`'s step 7 design (both stage-3 filters, elliptic AND
+     FFT, run every single block regardless of which is selected — "keep
+     it warm so switching doesn't thump") was already right at this
+     board's real-time ceiling even under `FFTW_MEASURE`'s faster plan,
+     and simply hadn't been run long enough before now to notice (the
+     user's first report only said RX "sounds good", not that it had run
+     for an extended session). Two diagnostic additions, both cheap and
+     harmless if unused, to tell these apart on the user's own hardware
+     rather than guessing further from this sandbox:
+     - `rx_filter.c` now reads `MAXIBITX_RX_FILTER_FFTW_MEASURE` at
+       startup (any non-empty value forces `FFTW_MEASURE` back, printing
+       which one it picked either way) — if setting it makes the xrun
+       flood go away, that's (a), and the real permanent fix is a
+       wisdom-file cache (still not implemented — lets `FFTW_MEASURE`'s
+       faster per-block plan survive without paying its search cost on
+       every restart); if the flood persists even with it set, that's
+       (b), and the real fix belongs in `rx_audio.c`'s "always run both"
+       design instead, not here.
+     - `sound.c`'s audio thread now times `sound_process()` itself
+       (`clock_gettime()` around the call, no other overhead) and prints
+       an avg/max summary every 5 seconds against the 10.667ms/block
+       budget — real numbers from the board actually having the problem,
+       instead of this sandbox's own (evidently not representative)
+       ones.
+
+     **A third data point, from `top` on the running Pi**: CPU sits
+     near 100% (one core) for the first few seconds, then drops to a
+     sustained ~27% right around when audio becomes audible — and the
+     xrun flood still shows up sometime after that. This reframes both
+     hypotheses above: a genuinely *sustained* per-block overload
+     (either (a) or (b) as stated) should keep CPU pegged near 100% the
+     whole time, not settle down to a comfortable 27% before the xruns
+     start. The pattern looks more like a one-time startup transient
+     (cold FFTW codelets, cold caches, the Pi's `cpufreq` governor
+     ramping up from an idle clock speed to full speed under sustained
+     load — any of which would show as a real but temporary 100%-CPU
+     catch-up burst, not a permanent budget overrun) followed by a
+     *separate*, later, likely intermittent stall — something that
+     blocks or delays the real-time audio thread for a burst long
+     enough to blow through the 4-period (~42.7ms) playback buffer all
+     at once, which is exactly what a "flood" of many xruns in the same
+     instant looks like, and is fully consistent with a low *average*
+     CPU/block-time reading. This is exactly what the block-timing log
+     above is positioned to catch: a `max=` reading that spikes far past
+     the `avg=` in whichever 5-second window contains the flood would
+     confirm an intermittent stall rather than sustained overload, and
+     would point the investigation somewhere else entirely (another
+     thread's blocking I/O, a lock, a kernel/USB/thermal event) rather
+     than at `rx_filter.c`'s own per-block cost. Not yet resolved —
+     waiting on what the timing log and the `MAXIBITX_RX_FILTER_FFTW_
+     MEASURE` A/B report from the user's actual Pi.
    - **"Use FFT filter" produced no noticeable audible effect.** Not a
      code bug as far as this can be verified without the user's own
      console log: `rx_audio_test.c`'s Case B independently confirms the
@@ -1091,6 +1161,18 @@ for keying an external accessory's PTT, not this input line.)
      warning ever appears (it should not, in normal operation — the audio
      thread always calls in fixed `RX_FILTER_BLOCK_LEN`-sized blocks).
      Not yet confirmed either way.
+   - **RX dial accuracy, confirmed on air:** the user reports receiving
+     W1AW (ARRL HQ's own station, a well-known reference signal hams use
+     for exactly this kind of check) at 7.0475 MHz and finding it exactly
+     on frequency. That's a real confirmation that the RX chain's
+     frequency translation — `vfo.c`'s baseband math plus stage 2's
+     mixing to `CW_PITCH_HZ`, all upstream of both stage-3 filters this
+     step touched — hasn't introduced any offset error carrying over from
+     minibitx. Distinct from step 5's still-open TX-side dial-accuracy
+     item above (that one needs someone *else* to confirm where maxibitx
+     itself transmits, not what it receives), but a meaningful data point
+     in its own right, and good independent evidence that nothing in
+     steps 6/7's RX changes disturbed tuning.
 8. First on-air SSB TX test, CAT-triggered PTT, one band, conservative
    drive level — measure actual sideband rejection before touching
    power calibration at all.
