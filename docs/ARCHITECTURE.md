@@ -28,17 +28,22 @@ reachable remotely via a new rigctld command (`u`/`U FFTFILT`) and a new
 checkbox in `tools/rigctl_panel.py`'s RX Filter panel, so the operator
 can A/B the two on real signals before `narrow_filter_coeffs[]` is ever
 removed for good. **First on-air test of step 7 found real audio
-working**, plus two follow-ups: a startup-delay regression (RX's new,
-larger `FFTW_MEASURE` plan compounding with TX's pre-existing one —
-fixed by a new `filter_new_ex()` letting `rx_filter.c` use
-`FFTW_ESTIMATE` instead, construction time ~240ms→~0.2ms measured on
-this project's dev machine, per-block cost re-checked and still under
-0.2% of the real-time budget either way) and an open question (the FFT
-filter's audible effect versus the elliptic one being hard to notice —
-likely a genuinely subtle DSP-shape similarity rather than a bug, per
-§10 step 7's follow-up entry, but not yet confirmed either way). See §10
-for the actual measured/verified detail on all seven steps, and step 5's
-own entry for what still needs on-air re-verification on the TX side.
+working**, plus follow-ups, now all resolved except one: a startup-delay
+regression (RX's new, larger `FFTW_MEASURE` plan compounding with TX's
+pre-existing one — fixed via a new `filter_new_ex()` letting both
+`rx_filter.c` and `tx_pipeline.c` use `FFTW_ESTIMATE` instead); a real
+xrun flood on playback, traced (via a temporary, now opt-in
+`loop timing` diagnostic in `sound.c`) to a startup-sequencing race —
+`tx_pipeline_new()`'s `FFTW_MEASURE` search ran long enough, synchronously,
+to drain the playback buffer before the audio thread that refills it
+ever got to run — fixed by reordering `sound_thread_start()` and
+confirmed clean on the user's real hardware, no more xruns at all; and
+one still-open question (the FFT filter's audible effect versus the
+elliptic one being hard to notice — likely a genuinely subtle DSP-shape
+similarity rather than a bug, per §10 step 7's follow-up entries, but
+not yet confirmed either way). See §10 for the actual measured/verified
+detail on all seven steps, and step 5's own entry for what still needs
+on-air re-verification on the TX side.
 What's left for RX specifically: the on-air listening comparison itself
 (step 7's own entry) — the code is complete and integration-tested
 (`src/rx_audio_test.c`), but "sounds at least as good for real CW copy"
@@ -1270,9 +1275,25 @@ for keying an external accessory's PTT, not this input line.)
      All four bench harnesses re-run clean after both changes
      (`test-tx-pipeline`'s own numbers - 0.00dB passband, -70.05dB image
      rejection - unchanged, confirming `FFTW_ESTIMATE` didn't touch TX's
-     frequency-domain math any more than it touched RX's). Not yet
-     re-confirmed on the user's Pi that the flood is actually gone -
-     that's the real test this sandbox still can't run.
+     frequency-domain math any more than it touched RX's).
+
+     **Confirmed fixed on the user's real hardware.** No more xruns at
+     all - the `loop timing` report for the whole run holds steady at
+     read~7.56ms/process~3.08ms/write~0.017ms/period~10.663ms, every 5s
+     window, no anomalies anywhere. This closes out the entire xrun-flood
+     investigation: `rx_audio.c`/`rx_filter.c` were never the cause (both
+     A/B tests ruled that out cleanly); the real bug was a start-up
+     sequencing race in `sound.c`/`tx_pipeline.c` that step 7's RX work
+     just happened to be the first thing to run long enough, attentively
+     enough, to expose. With the flood gone, the periodic `loop timing`
+     printout was switched from always-on to opt-in
+     (`MAXIBITX_LOOP_TIMING=1`) - it did its diagnostic job, and a normal
+     run has no reason to print a status block every 5 seconds forever;
+     the underlying tracking (a few `clock_gettime()` calls per block)
+     stays unconditional and effectively free, so the knob is there again
+     if a future mystery needs it. The two `MAXIBITX_*_FFTW_MEASURE`
+     env-var overrides (`rx_filter.c`/`tx_pipeline.c`) stay as
+     permanent, harmless diagnostic knobs for the same reason.
    - **"Use FFT filter" produced no noticeable audible effect.** Not a
      code bug as far as this can be verified without the user's own
      console log: `rx_audio_test.c`'s Case B independently confirms the
