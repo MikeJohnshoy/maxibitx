@@ -1,6 +1,6 @@
 # maxibitx — architecture and design rationale
 
-Status: §10 steps 1-4 done. Step 1: this tree is minibitx's `src/`,
+Status: §10 steps 1-5 done. Step 1: this tree is minibitx's `src/`,
 `docs/`, `data/`, and `tools/` carried over unchanged (only
 `src/maxibitx.c`'s filename and the Makefile's output binary name
 changed), confirmed building and running on real hardware. Step 2: the
@@ -10,12 +10,15 @@ bench-verified against synthetic tones (`src/fft_filter_test.c`). Step
 `radio_get_mode()`, `radio.c`), agreed on by both control surfaces. Step
 4: a new, parallel shared TX pipeline module (`src/tx_pipeline.c`/`.h`)
 implements CW's slice of §5's plan and is bench-verified against a
-synthetic stand-in for `cw.c`'s sidetone (`src/tx_pipeline_test.c`) — see
-§10 for the actual measured/verified detail on all four. Nothing past
-that has started: `cw.c`'s own TX carrier and `rx_audio.c`'s fixed
-narrow filter are still exactly as minibitx shipped them and are what
-the real, running binary still transmits with — step 4's new module is
-bench-only, not wired into `sound.c`/`cw.c` yet (step 5 is next). This
+synthetic stand-in for `cw.c`'s sidetone (`src/tx_pipeline_test.c`). Step
+5: `tx_pipeline.c` is wired into `cw.c`/`sound.c` for real — CW TX now
+runs on the shared FFT pipeline live, not just on the bench;
+`cw_tx_carrier`/`TX_IF_OFFSET_HZ` and `radio_tx_apply()`'s
+`CW_PITCH_HZ` clk2 correction are gone — see §10 for the actual
+measured/verified detail on all five steps, and this step's own entry
+for what still needs on-air re-verification before it's trusted the way
+the path it replaced was. `rx_audio.c`'s fixed narrow filter is the one
+piece of the original plan untouched so far (step 6). This
 document is both the
 design rationale that justified starting `maxibitx` as its own repo
 (not a minibitx branch, not an sbitx fork-in-place) and the plan for
@@ -396,18 +399,22 @@ already established in minibitx, applied to mode instead of a tuning
 offset. See §10 step 3 for the translation-table details on each
 surface and the (harmless) default-mismatch bug this fixed.
 
-**Not done yet:** `radio_tx_apply()`/`sound.c`'s audio thread reading
-that real mode to decide which `i_sample` source feeds the shared TX
-pipeline this block (the keyer's envelope output for CW, mic audio for
-USB/LSB, and for `DIGITAL` the same mic/line-in audio as SSB, sourced
-from a host PC's digital-mode app instead of a human voice) and which
-sideband-zero branch applies — the same single mode check `tx_process()`
-already uses for these decisions. The pipeline module itself exists and
-is bench-proven for CW's slice as of step 4 (`src/tx_pipeline.c`/`.h`),
-but nothing reads `radio_get_mode()` yet to pick an `i_sample` source or
-a sideband at runtime — that's step 5 (CW's own live cutover) and, for
-the USB/LSB/DIGITAL branches, step 7; mode being real was the
-precondition for this, not this work itself.
+**Partly done as of step 5:** the shared TX pipeline is live for CW
+(`sound.c`'s audio thread now feeds `cw_get_sample()`'s output through
+`tx_pipeline_process_block()` every TX block, replacing `cw.c`'s old
+direct-to-DAC path) - but `sound.c` still only ever calls it with a
+hardcoded `TX_PIPELINE_KEEP_UPPER` sideband, gated purely on
+`cw_tx_active()`, not on `radio_get_mode()`. **Still not done:** actually
+reading that real mode value to choose which `i_sample` source feeds the
+pipeline (the keyer's envelope output for CW - already wired - vs. mic
+audio for USB/LSB, and for `DIGITAL` the same mic/line-in audio as SSB,
+sourced from a host PC's digital-mode app instead of a human voice) and
+which sideband-zero branch applies - the same single mode check
+`tx_process()` already uses for these decisions. That dispatch has
+nothing to select between yet, since CW is still the only mode with any
+`i_sample` source wired in at all - it becomes real work at step 7, once
+SSB's mic-audio path exists as a second option to choose between; mode
+being real (step 3) was the precondition for that, not this work itself.
 
 **Open question, not yet answered by the existing hardware layer: what
 triggers PTT for voice?** `DIGITAL` doesn't add a new answer here —
@@ -732,17 +739,56 @@ for keying an external accessory's PTT, not this input line.)
    CW cutover (step 5 below), or retuning/reusing this module for SSB's
    mic-audio `i_sample` source (`tx_pipeline_retune()` exists for LSB's
    mirrored passband but is untested — nothing has called it yet).
-5. Wire `tx_pipeline.c` into `cw.c`/`sound.c` for CW only — the actual
-   live cutover from `cw.c`'s direct-to-DAC path (`cw_tx_carrier`/
-   `TX_IF_OFFSET_HZ`) to step 4's now bench-proven module, dropping
-   `radio_tx_apply()`'s `CW_PITCH_HZ` residual correction on clk2 in the
-   same change (step 4's derivation makes it unnecessary). Needs its own
-   on-air re-verification against the same dial-accuracy and ~40dB
-   image-rejection numbers `docs/03_tx_processing_pipeline.md` already
-   recorded for the path being replaced — the explicit on-air CW
-   re-confirmation checkpoint the original version of this build order
-   didn't have (it went straight from "still bench-only" to RX/SSB work
-   below without ever specifying a live CW cutover step at all).
+5. **Done, code-complete — on-air re-verification still outstanding.**
+   Wired `tx_pipeline.c` into `cw.c`/`sound.c` for CW only: the actual
+   live cutover from `cw.c`'s direct-to-DAC path to step 4's
+   bench-proven module.
+   - `cw.c` lost `cw_tx_carrier`/`TX_IF_OFFSET_HZ` entirely -
+     `cw_get_sample()` is now the only tone this file generates, feeding
+     both the local sidetone monitor and (as `i_sample`)
+     `tx_pipeline.c`'s shared pipeline, matching real sbitx's own
+     `output_speaker[j] = i_sample * sidetone` pattern (§5).
+   - `radio_tx_apply()` (radio.c) lost its `- CW_PITCH_HZ` residual
+     correction on clk2 - TX now uses the exact same
+     `freq_hdr + xtal_filter_center` formula RX does, since
+     `tx_pipeline.c`'s bin-rotate already aims directly at
+     `xtal_filter_center` (step 4's derivation).
+   - `sound.c`'s audio thread: `cw_get_sample()` is still called exactly
+     once per sample (its envelope advance depends on that), but its
+     result is now collected into a `TX_PIPELINE_BLOCK_LEN`-sized buffer
+     and run through `tx_pipeline_process_block()` once per audio block
+     (`TX_PIPELINE_KEEP_UPPER`, matching CW's sideband) instead of
+     reading a second, IF-shifted sample directly. A block whose actual
+     size doesn't match `TX_PIPELINE_BLOCK_LEN` (should only happen on a
+     genuinely abnormal short/interrupted ALSA read, since
+     `PERIOD_FRAMES` is negotiated to match `TX_PIPELINE_BLOCK_LEN` by
+     design) skips the pipeline for that one block rather than risk
+     feeding it a misaligned overlap-save history - the exciter output
+     goes silent for that block only, sidetone unaffected, logged once.
+   - `fft_filter.c`/`tx_pipeline.c` moved from bench-only into the real
+     build (`Makefile`'s `SRC`/`OBJ`, `-lfftw3f` added to `LDFLAGS`) -
+     `libfftw3-dev`/`libfftw3f` is now a real runtime dependency of the
+     shipped `maxibitx` binary, not just this bench environment's.
+   **What's genuinely still open, not yet bench- or air-verified:**
+   whether the new path reproduces the *same transmitted power* as the
+   old one under a real keyed envelope, not just the same amplitude for
+   a steady bench tone (step 4's Case A measured 0.00dB for a *steady*
+   full-scale tone; an envelope's own spectral content should sit well
+   inside the 300-3000Hz passband and transfer the same way, but that's
+   an inference from the steady-tone data, not something separately
+   measured) - `TX_GAIN_CORRECTION` (0.045, `sound.c`) was bench-derived
+   against the old scheme's output and is carried over unchanged on that
+   basis; a wattmeter re-check at low drive is worth doing on first
+   power-up, same as this project's own precedent for any change that
+   could shift gain (step 2's writeup above), even though it isn't
+   treated as a hard blocker here. On-air re-verification against the
+   same dial-accuracy and ~40dB image-rejection numbers
+   `docs/03_tx_processing_pipeline.md` recorded for the path just
+   replaced is the other piece — the explicit live-CW re-confirmation
+   checkpoint the original version of this build order never actually
+   had (it jumped straight from "still bench-only" to RX/SSB work below
+   without ever specifying a step that both wires CW in live *and*
+   checks it on air).
 6. Migrate `rx_audio.c`'s stage 3 onto the same shared pipeline (§5),
    with pitch/width as live parameters — bench-verified against
    synthetic signals first (same `test_rx_audio.c`-style methodology),
