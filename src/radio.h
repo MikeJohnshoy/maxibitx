@@ -78,6 +78,52 @@ void radio_set_rit_enabled(int on);
 // reports, which stays the same whether enabled or not.
 int radio_rit_enabled(void);
 
+// The real, single-owner mode state - the same "one owner in radio.c,
+// every control surface calls into it instead of keeping its own copy"
+// pattern as RIT above, applied to mode instead of a tuning offset.
+// Before this existed, hamlib.c and usb_gadget.c each kept their own
+// independently-cosmetic "current mode" - nothing enforced they agreed
+// (hamlib.c defaulted to "USB", usb_gadget.c's Kenwood CAT surface
+// defaulted to CW), and neither one meant anything since nothing read
+// it. Now there's one real value both surfaces translate to/from their
+// own protocol's representation (see hamlib.c's mode_to_name()/
+// name_to_mode(), usb_gadget.c's mode_to_kenwood_digit()/
+// kenwood_digit_to_mode()).
+//
+// Still doesn't drive anything downstream as of this enum's
+// introduction - see docs/ARCHITECTURE.md's build order: this is step
+// 3 ("the state is finally real, and every control surface agrees on
+// it"), not steps 4/5 ("the state actually selects a TX i_sample
+// source and a sideband-zero branch"). RADIO_MODE_CW/_USB/_LSB are
+// minibitx's real future v1 modes; RADIO_MODE_DIGITAL is a placeholder
+// for externally-generated digital-mode audio (WSJT-X on a host PC)
+// riding the same path SSB will, per ARCHITECTURE.md §5's TX pipeline
+// section - not a mode anything can select meaningfully yet either,
+// just a real, storable value instead of an absent one.
+enum radio_mode {
+  RADIO_MODE_CW,
+  RADIO_MODE_USB,
+  RADIO_MODE_LSB,
+  RADIO_MODE_DIGITAL,
+};
+
+// Sets the current mode. No validity check here - same convention as
+// radio_tune_to()/radio_set_rit(): trusts its caller. That caller
+// (hamlib.c's M, usb_gadget.c's MD) is responsible for translating its
+// own protocol's mode representation into one of the four values above
+// and handling anything that doesn't map to one of them per its own
+// protocol's convention (hamlib.c's rigctld surface replies RPRT -1,
+// same as an out-of-range RIT value; usb_gadget.c's Kenwood CAT surface
+// silently ignores it, same as any other command it doesn't recognize
+// - see each file's own comment). Takes effect immediately - there is
+// nothing downstream to update yet (see this enum's comment above).
+void radio_set_mode(enum radio_mode m);
+
+// Returns the current mode (RADIO_MODE_CW, matching the one mode
+// minibitx can actually transmit today, until something calls
+// radio_set_mode()).
+enum radio_mode radio_get_mode(void);
+
 // Parses one command string from a control surface (currently just
 // * "freq NNN" from hpsdr_p1.c) and applies it.
 void remote_execute(char *command);
