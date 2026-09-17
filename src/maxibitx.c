@@ -1,4 +1,4 @@
-// minibitx.c
+// maxibitx.c
 //
 // A small application that initializes the sbitx radio hardware, and allows 
 // remote SDR applications to control its operation over network or USB 
@@ -46,7 +46,7 @@ int main(int argc, char **argv) {
   (void)argc;
   (void)argv;
  
-  printf("Starting miniBitx IQ Streamer and control interface...\n");
+  printf("Starting maxiBitx IQ Streamer and control interface...\n");
  
   // Installed first, before anything below can fail/return early - every
   // _stop() function called from the shutdown sequence already guards on
@@ -152,7 +152,7 @@ int main(int argc, char **argv) {
 
   // Bring up the USB Audio Class (UAC2) IQ gadget, if the hardware/kernel
   // support it (needs a USB device-mode controller and libcomposite). Not a
-  // hard failure if it's unavailable - minibitx keeps running over
+  // hard failure if it's unavailable - maxiBitx keeps running over
   // HPSDR/UDP either way. uac_init() reports its own success ("init: USB
   // IQ gadget bound to UDC...").
   if (uac_init() < 0) {
@@ -180,9 +180,9 @@ int main(int argc, char **argv) {
   }
   printf("init: audio capture running (hw:0,0 @ 96000 Hz)\n");
  
-  printf("minibitx: radio hardware initialization complete, ready to serve!\n");
+  printf("maxiBitx: radio hardware initialization complete, ready to serve!\n");
  
-  // minibitx idle loop: keep the program alive until asked to shut down.
+  // maxiBitx idle loop: keep the program alive until asked to shut down.
   // Operational state changes (tuning, PTT) are reported as they're
   // processed by hamlib.c/hpsdr_p1.c, not polled here. sleep(1) returns
   // early the moment SIGINT/SIGTERM arrives, so shutdown starts
@@ -194,7 +194,7 @@ int main(int argc, char **argv) {
   // Graceful shutdown - roughly the reverse of bring-up, so each step
   // tears down into a quiescent system rather than racing something
   // still running above it.
-  printf("\nminibitx: shutting down...\n");
+  printf("\nmaxiBitx: shutting down...\n");
  
   // Park PTT/the T/R relay low in case the key happened to be down at
   // the moment of the signal. radio_set_tx() only hands the change to
@@ -215,6 +215,6 @@ int main(int argc, char **argv) {
   iq_stream_stop();
   hamlib_stop();
  
-  printf("minibitx: shutdown complete.\n");
+  printf("maxiBitx: shutdown complete.\n");
   return 0;
 }
