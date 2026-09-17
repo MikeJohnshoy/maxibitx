@@ -53,12 +53,35 @@ struct filter {
 // `impulse_len`-long impulse response (impulse_len - 1 must not exceed
 // block_len for the FFT-size math below to make sense the way sbitx's
 // own 1024/1025 choice does - see filter_tune()'s header for why 1025,
-// not 1024 or 1026). Builds both FFTW plans up front (FFTW_MEASURE:
+// not 1024 or 1026). Builds both FFTW plans up front with FFTW_MEASURE:
 // spends real time up front finding the fastest algorithm for this
 // machine, paid once at startup, not per block - see filter_tune()'s
-// comment on wisdom-file caching, not yet done here). Coefficients are
+// comment on wisdom-file caching, not yet done here. Coefficients are
 // all-zero (full stop) until filter_tune() is called at least once.
+//
+// A thin wrapper over filter_new_ex() below, fixed at FFTW_MEASURE -
+// every caller that existed before filter_new_ex() (tx_pipeline.c, both
+// bench harnesses) keeps this exact behavior, unchanged.
 struct filter *filter_new(int block_len, int impulse_len);
+
+// Same as filter_new(), but with the FFTW plan-creation flags
+// (FFTW_MEASURE, FFTW_ESTIMATE, ...) exposed as a parameter instead of
+// hard-coded. Added at docs/ARCHITECTURE.md step 7's real-hardware
+// follow-up: rx_filter.c's RX_FILTER_N=4096 is bigger than
+// tx_pipeline.c's TX_PIPELINE_N=2048, and rx_audio_init() now pays that
+// FFTW_MEASURE search *in addition to* tx_pipeline.c's own (both run
+// during maxibitx's own startup sequence - see maxibitx.c), which is
+// what actually produced the user-visible extra startup delay reported
+// after wiring rx_filter.c in live. FFTW_ESTIMATE trades that one-time
+// search away for a good-enough (not necessarily fastest) plan chosen
+// immediately, the same trade window_filter() below already makes for
+// its own throwaway per-retune plans - the difference here is this
+// plan is the one reused every live audio block, so the per-block cost
+// of ESTIMATE (not just its startup savings) has to actually be
+// measured, not assumed, before relying on it for anything time-
+// critical. rx_filter.c is the first caller; filter_new() above stays
+// on FFTW_MEASURE for everyone else.
+struct filter *filter_new_ex(int block_len, int impulse_len, unsigned fftw_flags);
 
 // (Re)designs the passband: everything in the normalized range
 // [low, high) (each a fraction of the sample rate, e.g. -0.5..0.5, same
