@@ -1,16 +1,18 @@
 # maxibitx — architecture and design rationale
 
-Status: §10 steps 1-2 done. Step 1: this tree is minibitx's `src/`,
+Status: §10 steps 1-3 done. Step 1: this tree is minibitx's `src/`,
 `docs/`, `data/`, and `tools/` carried over unchanged (only
 `src/maxibitx.c`'s filename and the Makefile's output binary name
 changed), confirmed building and running on real hardware. Step 2: the
 shared FFT overlap-save filter (`src/fft_filter.c`/`.h`) is ported and
-bench-verified against synthetic tones (`src/fft_filter_test.c`) — see
-§10 for the actual measured numbers. Nothing past that has started:
-`cw.c`'s separate TX carrier, `rx_audio.c`'s fixed narrow filter, and
-the cosmetic-only `m`/`M`/`MD` mode handling are all still exactly as
-minibitx shipped them, and the filter isn't wired into any of them yet
-(steps 3-5). This document is both the
+bench-verified against synthetic tones (`src/fft_filter_test.c`). Step
+3: mode is a real, single-owner value now (`radio_set_mode()`/
+`radio_get_mode()`, `radio.c`), agreed on by both control surfaces — see
+§10 for the actual measured/verified detail on both. Nothing past that
+has started: `cw.c`'s separate TX carrier and `rx_audio.c`'s fixed
+narrow filter are still exactly as minibitx shipped them, and neither
+the shared filter nor the real mode state is wired into an actual audio
+decision yet (steps 4-5). This document is both the
 design rationale that justified starting `maxibitx` as its own repo
 (not a minibitx branch, not an sbitx fork-in-place) and the plan for
 §10's remaining steps. Everything below is grounded in minibitx's
@@ -381,20 +383,24 @@ IIR never offered at all.
 
 ## 6. Mode selection becomes real
 
-Today, `m`/`M` (rigctld) and `MD` (Kenwood CAT) are cosmetic-only —
-stored, never acted on, "since minibitx has no onboard demod." maxibitx
-needs a real mode state, following the exact pattern RIT already
-established in minibitx: a single owner in `radio.c`
+**Step 3, done:** `m`/`M` (rigctld) and `MD` (Kenwood CAT) used to be
+cosmetic-only — stored, never acted on, "since minibitx has no onboard
+demod." Both now agree on one real, single owner in `radio.c`
 (`radio_set_mode()`/`radio_get_mode()`, `CW`/`USB`/`LSB`/`DIGITAL` for
-v1 — `DIGITAL` a placeholder value only, see §5), with
-both control surfaces calling into it instead of a local stub variable,
-and `radio_tx_apply()`/`sound.c`'s audio thread reading it to decide
-which `i_sample` source feeds the shared TX pipeline this block (the
-keyer's envelope output for CW, mic audio for USB/LSB, and for `DIGITAL`
-the same mic/line-in audio as SSB, sourced from a host PC's digital-mode
-app instead of a human voice) and which sideband-zero branch applies —
-the same single mode check `tx_process()` already uses for these
-decisions.
+v1 — `DIGITAL` a placeholder value only, see §5) — the exact pattern RIT
+already established in minibitx, applied to mode instead of a tuning
+offset. See §10 step 3 for the translation-table details on each
+surface and the (harmless) default-mismatch bug this fixed.
+
+**Not done yet:** `radio_tx_apply()`/`sound.c`'s audio thread reading
+that real mode to decide which `i_sample` source feeds the shared TX
+pipeline this block (the keyer's envelope output for CW, mic audio for
+USB/LSB, and for `DIGITAL` the same mic/line-in audio as SSB, sourced
+from a host PC's digital-mode app instead of a human voice) and which
+sideband-zero branch applies — the same single mode check `tx_process()`
+already uses for these decisions. That's steps 4/5, once the shared
+pipeline itself is wired into `cw.c`/`rx_audio.c`; mode being real is
+the precondition for that, not that work itself.
 
 **Open question, not yet answered by the existing hardware layer: what
 triggers PTT for voice?** `DIGITAL` doesn't add a new answer here —
@@ -624,9 +630,26 @@ for keying an external accessory's PTT, not this input line.)
    Not yet done: wiring this into the real pipeline (steps 3-5 below),
    or a wisdom-file cache for `filter_new()`'s `FFTW_MEASURE` plans
    (see `fft_filter.c`'s comment on why that's deferred, not skipped).
-3. `radio_set_mode()`/`radio_get_mode()` in `radio.c`, wired into both
-   control surfaces, gating which `i_sample` source feeds the shared
-   pipeline and which sideband-zero branch applies.
+3. **Done, state only.** `radio_set_mode()`/`radio_get_mode()` added to
+   `radio.c` (`enum radio_mode`: `CW`/`USB`/`LSB`/`DIGITAL`) and wired
+   into both control surfaces — `hamlib.c`'s `m`/`M` (translated to/from
+   Hamlib mode names, an unrecognized name now rejected with `RPRT -1`)
+   and `usb_gadget.c`'s `MD` (translated to/from single-digit Kenwood
+   codes, an unrecognized digit silently ignored — that surface's own
+   convention). Fixes a real, if harmless, pre-existing bug this
+   surfaced: the two control surfaces' old independently-cosmetic mode
+   variables defaulted to different values (`hamlib.c`: `USB`;
+   `usb_gadget.c`'s CAT surface: `CW`) that could never have agreed with
+   each other even by coincidence, since nothing tied them together.
+   Now there's one real value both agree on, defaulting to `CW` — the
+   one mode minibitx can actually transmit. Still doesn't gate anything
+   downstream — no `i_sample` source or sideband-zero branch exists to
+   gate until step 4 wires the shared pipeline into `sound.c`/`cw.c`.
+   `PKTUSB`/Kenwood digit `9` for `RADIO_MODE_DIGITAL` are both
+   best-effort guesses (see `hamlib.c`/`usb_gadget.c`'s own comments),
+   not confirmed against a real WSJT-X rigctld session or a QMX packet
+   capture — low-stakes for now since nothing reads `RADIO_MODE_DIGITAL`
+   yet either.
 4. Migrate CW TX onto the shared pipeline (still bench-only), re-verifying
    dial accuracy and image rejection against the same on-air numbers
    `docs/03_tx_processing_pipeline.md` already recorded for the old
