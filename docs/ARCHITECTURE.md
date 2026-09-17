@@ -28,20 +28,23 @@ reachable remotely via a new rigctld command (`u`/`U FFTFILT`) and a new
 checkbox in `tools/rigctl_panel.py`'s RX Filter panel, so the operator
 can A/B the two on real signals before `narrow_filter_coeffs[]` is ever
 removed for good. **First on-air test of step 7 found real audio
-working**, plus follow-ups, now all resolved except one: a startup-delay
-regression (RX's new, larger `FFTW_MEASURE` plan compounding with TX's
-pre-existing one — fixed via a new `filter_new_ex()` letting both
-`rx_filter.c` and `tx_pipeline.c` use `FFTW_ESTIMATE` instead); a real
-xrun flood on playback, traced (via a temporary, now opt-in
-`loop timing` diagnostic in `sound.c`) to a startup-sequencing race —
-`tx_pipeline_new()`'s `FFTW_MEASURE` search ran long enough, synchronously,
-to drain the playback buffer before the audio thread that refills it
-ever got to run — fixed by reordering `sound_thread_start()` and
-confirmed clean on the user's real hardware, no more xruns at all; and
-one still-open question (the FFT filter's audible effect versus the
-elliptic one being hard to notice — likely a genuinely subtle DSP-shape
-similarity rather than a bug, per §10 step 7's follow-up entries, but
-not yet confirmed either way). See §10 for the actual measured/verified
+working**, plus follow-ups, all now resolved: a startup-delay regression
+(RX's new, larger `FFTW_MEASURE` plan compounding with TX's pre-existing
+one — fixed via a new `filter_new_ex()` letting both `rx_filter.c` and
+`tx_pipeline.c` use `FFTW_ESTIMATE` instead); a real xrun flood on
+playback, traced (via a temporary, now opt-in `loop timing` diagnostic
+in `sound.c`) to a startup-sequencing race — `tx_pipeline_new()`'s
+`FFTW_MEASURE` search ran long enough, synchronously, to drain the
+playback buffer before the audio thread that refills it ever got to run
+— fixed by reordering `sound_thread_start()` and confirmed clean on the
+user's real hardware, no more xruns at all; and the FFT filter's audible
+effect question, now answered by the user's own console log: the
+`STRENGTH` S-meter (fed by the same signal that drives the speaker)
+shows the FFT filter genuinely rejecting a comparable amount of total
+noise energy to the elliptic filter — not a bug — but the elliptic
+filter's own resonant ripple makes that rejection *sound* far more
+dramatic to this operator's ear, so elliptic stays the sensible default
+per §10 step 7's follow-up entry. See §10 for the actual measured/verified
 detail on all seven steps, and step 5's own entry for what still needs
 on-air re-verification on the TX side.
 What's left for RX specifically: the on-air listening comparison itself
@@ -1319,7 +1322,63 @@ for keying an external accessory's PTT, not this input line.)
      `"rx_audio: block size ... falling back to the elliptic filter"`
      warning ever appears (it should not, in normal operation — the audio
      thread always calls in fixed `RX_FILTER_BLOCK_LEN`-sized blocks).
-     Not yet confirmed either way.
+
+     **Confirmed from the user's real console log, both toggling
+     correctly.** Every FFTFILT toggle shows both `hamlib.c`'s
+     `"rigctl: U FFTFILT %d -> stage-3 implementation %s"` confirmation
+     and the follow-up `"u FFTFILT -> fft"`/`"-> elliptic"` readback -
+     the selector reaches `rx_audio.c` every time. The block-size-
+     mismatch warning never appears once in the whole log - rules that
+     hypothesis out too. So this is not a wiring bug.
+
+     **A second, independent measurement in the same log settles the
+     "is it doing anything at all" question**: rigctld's `l STRENGTH`
+     (the S-meter reading) is driven by `rx_audio.c`'s `meter_env`, which
+     is fed by `fabs(narrowed)` - the *exact same* `narrowed` value that
+     `sample = narrowed * gain * rx_volume` also uses for the actual
+     audio output (`rx_audio.c`'s own comment on "two envelopes, two
+     jobs" - the meter's only job is to observe what's already reaching
+     the speaker, nothing more). With `NARROW` on, `STRENGTH` reads
+     -45 to -48dB regardless of which stage-3 implementation is
+     selected - both far below the ~-24 to -28dB the same log shows with
+     `NARROW` off. That means the FFT filter genuinely IS reducing total
+     signal+noise energy by an amount statistically indistinguishable
+     from the elliptic filter's - not a gain bug, not "doing nothing":
+     the very code path that also drives the speaker confirms real,
+     comparable attenuation either way.
+
+     So the real question becomes why comparable *measured* attenuation
+     produces such different *perceived* results - "very apparent" for
+     elliptic, "difficult to hear, if anything" for FFT. The most likely
+     explanation, grounded in what's already measured rather than a new
+     guess: the elliptic filter is a resonant 8-pole IIR with a real
+     0.5dB in-band ripple (its own design point, `rx_audio.c`'s header),
+     while the FFT filter is deliberately flat and ripple-free by
+     construction (bench-confirmed exactly 0.00dB passband, no ripple,
+     step 6). A resonant ripple/peak sitting right at the CW pitch can
+     make the wanted tone perceptually "pop" out against the reduced
+     noise floor - a real psychoacoustic emphasis effect - independent
+     of how much total noise energy is actually removed. `meter_env`'s
+     slow envelope follower (the same attack/release time constants as
+     the AGC's own, tuned for CW keying, not for capturing fine spectral
+     texture) also can't distinguish "smoothly reduced hiss" from "hiss
+     with a similar average level but different in-band brightness" -
+     human hearing is far more sensitive to that kind of texture than an
+     RMS-style meter is. Both filters narrowing similarly *in total
+     energy* is fully consistent with them sounding very differently
+     "narrow" to a human ear. This is a genuine, on-air listening
+     finding - not a bug to fix - and it directly answers this build
+     order step's original open question (§10 step 6/7: "does the FFT
+     filter sound at least as good for real CW copy"): on this operator's
+     ear, on this band, elliptic's resonant character reads as more
+     effective even though the FFT filter is doing comparable
+     quantitative work, so elliptic staying the default is the right
+     call unless/until that changes. `narrow_filter_coeffs[]` and the
+     `RX_NARROW_FILTER_FFT` selector both stay in the tree either way -
+     the FFT path remains available (and is verified genuinely
+     effective) for anyone who prefers its flatter, ripple-free
+     character, or for a future step that might narrow its width further
+     to make the effect more assertive.
    - **RX dial accuracy, confirmed on air:** the user reports receiving
      W1AW (ARRL HQ's own station, a well-known reference signal hams use
      for exactly this kind of check) at 7.0475 MHz and finding it exactly
