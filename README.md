@@ -8,15 +8,18 @@ better," per the specific bugs already root-caused on sbitx/zbitx. The
 full rationale, the shared-FFT-pipeline design decision, and the build
 order are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-**Current state: build order steps 1-2 of `ARCHITECTURE.md`.**
+**Current state: build order steps 1-3 of `ARCHITECTURE.md`.**
 Everything below this point in this README, and the rest of `docs/`,
 still describes what the actual radio pipeline does *today* — which is
 exactly what minibitx does, unchanged (step 1). Step 2 added the shared
 FFT overlap-save filter as a standalone, bench-verified primitive
 (`src/fft_filter.c`/`.h`, `make test-fft-filter && ./test-fft-filter`)
 — proven against synthetic tones, not yet wired into the real audio
-path. `cw.c`/`rx_audio.c`/mode handling are all still untouched; see
-`ARCHITECTURE.md` §10 for the measured bench numbers and what's next.
+path. Step 3 made mode a real, single-owner value (`radio_set_mode()`/
+`radio_get_mode()`) both control surfaces agree on — still doesn't
+select anything, since there's no pipeline wired up yet to select.
+`cw.c`/`rx_audio.c` are still untouched; see `ARCHITECTURE.md` §10 for
+the measured/verified detail on all three steps and what's next.
 
 ---
 
