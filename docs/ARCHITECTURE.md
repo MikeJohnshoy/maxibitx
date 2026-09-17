@@ -1,12 +1,16 @@
 # maxibitx — architecture and design rationale
 
-Status: repo bootstrapped (§10 step 1 done) — this tree is minibitx's
-`src/`, `docs/`, `data/`, and `tools/` carried over unchanged (only
+Status: §10 steps 1-2 done. Step 1: this tree is minibitx's `src/`,
+`docs/`, `data/`, and `tools/` carried over unchanged (only
 `src/maxibitx.c`'s filename and the Makefile's output binary name
-changed) as the starting point agreed on below. None of §5's pipeline
-work has started yet: `cw.c`'s separate TX carrier, `rx_audio.c`'s fixed
-narrow filter, and the cosmetic-only `m`/`M`/`MD` mode handling are all
-still exactly as minibitx shipped them. This document is both the
+changed), confirmed building and running on real hardware. Step 2: the
+shared FFT overlap-save filter (`src/fft_filter.c`/`.h`) is ported and
+bench-verified against synthetic tones (`src/fft_filter_test.c`) — see
+§10 for the actual measured numbers. Nothing past that has started:
+`cw.c`'s separate TX carrier, `rx_audio.c`'s fixed narrow filter, and
+the cosmetic-only `m`/`M`/`MD` mode handling are all still exactly as
+minibitx shipped them, and the filter isn't wired into any of them yet
+(steps 3-5). This document is both the
 design rationale that justified starting `maxibitx` as its own repo
 (not a minibitx branch, not an sbitx fork-in-place) and the plan for
 §10's remaining steps. Everything below is grounded in minibitx's
@@ -579,12 +583,47 @@ for keying an external accessory's PTT, not this input line.)
    break anything before any new code exists. Not yet verified by an
    actual build/bring-up on real hardware — do that before starting
    step 2.
-2. Port `fft_filter.c`'s overlap-save filter and build the shared
-   pipeline (§5), bench-verified against synthetic audio (a standalone
-   test harness feeding known tones/speech samples through it and
-   checking the output spectrum), the same methodology `test_rx_audio.c`
-   used before ever touching real hardware — never wire straight to the
-   DAC first.
+2. **Done, bench-only.** Ported `fft_filter.c`'s design math
+   (`make_kaiser`/`window_filter`/`filter_tune`) and wrote a
+   self-contained `struct filter` (`src/fft_filter.c`/`.h`) that owns
+   its own overlap-save state and FFTW plans per instance, instead of
+   sbitx's shared global buffers — see the file headers for why. Bench-
+   verified against synthetic complex tones before ever touching real
+   hardware, the same methodology `test_rx_audio.c` uses
+   (`src/fft_filter_test.c`, `make test-fft-filter && ./test-fft-filter`,
+   itself not part of the shipped binary — same convention). Real
+   numbers, at minibitx's actual Fs=96000/L=1024/M=1025:
+   - **Passband**: 0.00dB (a tone at 1500Hz in a 300–3000Hz band).
+   - **Stopband**: real sbitx's own `filter_tune()` leaves every
+     filter's passband gain at an uncorrected +20·log10(N) (+66dB at
+     this N) that its `rx_linear()`/`tx_process()` never visibly
+     compensates for — presumably absorbed, unremarked, into whatever
+     other empirically-bench-tuned gain constant happens to follow it.
+     Caught here by literally measuring +66.23dB where 0dB was
+     expected; fixed by using `1/N²` in `filter_tune()`'s initial gain
+     instead of sbitx's `1/N` (one of the two FFT round-trips inside
+     `window_filter()` was going uncompensated) — verified back to
+     0.00dB. This port's filter is unity-gain by construction; any gain
+     constant added later (step 7) calibrates real analog/mixer gain,
+     not partly undoing an unlabeled FFT-normalization artifact too.
+   - **Sideband separation (the central decision, §4)**: two tones at
+     ±1031.25Hz inside a shared ±3000Hz passband — without the explicit
+     bin-zero step, both measure ~0dB (the filter alone genuinely can't
+     tell them apart, confirming it's the zero doing the work, not the
+     filter's own rolloff); with it, the wanted tone stays at 0dB and
+     the unwanted one drops to **-164dB** — real numbers behind the
+     "explicit zero gives near-perfect rejection, not just a filter's
+     finite asymptotic rolloff" reasoning in §4.
+   - **Transition width**: crosses -54dB roughly 340Hz past a 3000Hz
+     edge (interpolated between measured points) — close to §4's
+     ~300Hz/side Kaiser-formula estimate, confirming that math held up
+     against the real ported implementation, not just on paper.
+   - New dependency confirmed at build time, not just anticipated:
+     `libfftw3-dev`, linked via `-lfftw3f` (single precision) — not yet
+     installed/tested on an actual Pi, only in this bench environment.
+   Not yet done: wiring this into the real pipeline (steps 3-5 below),
+   or a wisdom-file cache for `filter_new()`'s `FFTW_MEASURE` plans
+   (see `fft_filter.c`'s comment on why that's deferred, not skipped).
 3. `radio_set_mode()`/`radio_get_mode()` in `radio.c`, wired into both
    control surfaces, gating which `i_sample` source feeds the shared
    pipeline and which sideband-zero branch applies.
