@@ -884,6 +884,36 @@ int sound_thread_start(const char *device_name) {
   pcm_playback = open_pcm(dev, SND_PCM_STREAM_PLAYBACK);
   if (!pcm_playback) {
     printf("sound: playback unavailable, CW sidetone output disabled\n");
+  } else {
+    // Prime the playback ring buffer with a full buffer's worth of
+    // silence before the real-time audio thread ever writes real data -
+    // added after a real-hardware xrun-flood report (docs/ARCHITECTURE.md
+    // §10 step 7's follow-up) whose loop_timing_note() read/process/
+    // write/period breakdown traced it to a short burst of underruns in
+    // only the first few periods after this device opens, never
+    // recurring once steady state was reached (read/process/write/period
+    // all measured comfortably under budget throughout, both with
+    // FFTW_MEASURE and FFTW_ESTIMATE - ruling out a compute-cost cause).
+    // That pattern matches a well-known ALSA full-duplex cold-start race:
+    // hw_params() leaves a playback device PREPARED, and depending on the
+    // driver's start threshold, its hardware clock can begin consuming
+    // from the ring buffer before software has had a chance to keep it
+    // filled - especially here, where real writes only begin once the
+    // audio thread is created and has run its first capture-read/process
+    // cycle, and tx_pipeline_new() below (its own FFTW_MEASURE search,
+    // not yet switched to FFTW_ESTIMATE - see rx_filter_new()'s own
+    // comment on that trade) adds further delay before that first write
+    // can happen. Explicitly filling the buffer with silence up front
+    // removes that race regardless of how much time elapses before the
+    // first real write - snd_pcm_writei() on a freshly-prepared device
+    // queues frames without starting playback until its start threshold
+    // is reached, so this is the same "make sure the buffer is never
+    // found empty" fix as pre-buffering in any other double-buffered
+    // audio pipeline, not a maxibitx-specific hack.
+    int32_t silence[PERIOD_FRAMES * CHANNELS] = {0};
+    for (int i = 0; i < 4; i++) // 4 periods == open_pcm()'s own negotiated buffer size
+      snd_pcm_writei(pcm_playback, silence, PERIOD_FRAMES);
+    printf("sound: primed playback with %d frames of silence\n", 4 * PERIOD_FRAMES);
   }
 
   // The shared TX pipeline (tx_pipeline.c) - one persistent instance for
