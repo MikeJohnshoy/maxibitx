@@ -1164,8 +1164,54 @@ for keying an external accessory's PTT, not this input line.)
      opened as two independent capture/playback handles, never
      `snd_pcm_link()`-ed) that simply hadn't been run long enough,
      attentively enough, to notice before this session — not a
-     regression from the RX filter work at all. Not yet confirmed;
-     waiting on the four-part timing log from the user's Pi.
+     regression from the RX filter work at all.
+
+     **The four-part log came back, and it explains the whole thing —
+     the flood is a one-time startup transient, not a chronic
+     overload.** Only the very first 5-second window (the one starting
+     right at "sound: running") shows anything unusual: `write`
+     max=20.693ms and `period` max=31.238ms - one single outlier
+     iteration. Every window after that, `read` avg~7.9ms/`process`
+     avg~2.7ms/`write` avg~0.02ms/`period` avg~10.664ms, rock solid,
+     matching the 10.667ms budget almost exactly, with no further
+     spikes and no further "xrun, recovering" lines at all for the rest
+     of the run. That 20.693ms write figure is itself a clue, not a
+     mystery: `usleep(20000)` is exactly `xrun_note()`'s own deliberate
+     "flood detected, back off" breather (`sound.c`'s xrun-flood-tracking
+     section, unchanged since before this project started) - so that one
+     sample IS the code's own backoff firing once, not an unexplained
+     stall. The real question was
+     always what caused the initial burst of ~10 back-to-back
+     underruns that crossed the flood threshold in the first place, and
+     the steady, clean timing on every side of it (before any drift
+     could accumulate, after settling instantly and staying settled)
+     points at a classic ALSA full-duplex cold-start race: `open_pcm()`
+     leaves a device PREPARED but not yet RUNNING, and depending on the
+     driver's start threshold, playback's hardware clock can begin
+     consuming from the ring buffer before software has had a chance to
+     keep it filled - especially here, where the very first real
+     `snd_pcm_writei()` call only happens after the audio thread is
+     created and has already run a full capture-read/process cycle, and
+     `tx_pipeline_new()` (its own `FFTW_MEASURE` search, not yet
+     switched to `FFTW_ESTIMATE` - see `rx_filter_new()`'s own comment
+     on that trade) adds further delay before that first write can
+     happen at all. **Fix**: `sound_thread_start()` now primes
+     `pcm_playback`'s ring buffer with a full buffer's worth (4 periods)
+     of silence via `snd_pcm_writei()` immediately after opening it,
+     before the audio thread (or `tx_pipeline_new()`) ever runs - the
+     standard "never let a double-buffered consumer find its buffer
+     empty" fix, independent of exactly how much startup delay happens
+     before the first real write. This is a genuinely different fix
+     from anything in steps 6/7's own code (`rx_filter.c`/`rx_audio.c`
+     are untouched here) - it happens to have been *found* by this RX
+     work only because step 7 was the first time anyone ran maxibitx's
+     RX audio path attentively enough, for long enough, to notice a
+     transient that (per the timing log) has nothing to do with RX
+     filtering at all. Rebuilt and regression-tested clean (all four
+     bench harnesses, zero warnings); not yet re-confirmed on the user's
+     Pi that the flood is actually gone, since this sandbox can't
+     reproduce ALSA hardware timing at all - that's the one remaining
+     open item.
    - **"Use FFT filter" produced no noticeable audible effect.** Not a
      code bug as far as this can be verified without the user's own
      console log: `rx_audio_test.c`'s Case B independently confirms the
