@@ -29,8 +29,12 @@ was copied by a remote receiver exactly on frequency, and a real
 wattmeter check across all nine bands confirmed transmitted power too -
 same `scale`/`TX_GAIN_CORRECTION` values as the old scheme throughout,
 no re-tuning needed, ~5-6W band to band and comfortably inside this
-board's 20+W PA rating. Still outstanding: image rejection, not yet
-separately checked on real hardware. Step 6 added the RX-side
+board's 20+W PA rating. Image rejection is confirmed on air too - a
+remote receiver tuned to where this pipeline's mixer chain actually
+predicts a leaked image lands (1400Hz from the carrier, not the naive
+±700Hz guess - `ARCHITECTURE.md` §10 step 5 has the derivation) heard
+and saw nothing, matching the bench-measured ~-70dB suppression. Step 5
+has no remaining open items. Step 6 added the RX-side
 counterpart, bench-only: a new `src/rx_filter.c`/`.h` module
 (`make test-rx-filter && ./test-rx-filter`) implementing the same shared
 FFT engine for `rx_audio.c`'s stage 3, pitch/width now live parameters
