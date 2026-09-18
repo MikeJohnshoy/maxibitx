@@ -1738,4 +1738,32 @@ for keying an external accessory's PTT, not this input line.)
      step 8 being done, both are just further calibration precision, the
      same category as the still-open ALC/power-calibration item (§9)
      below.
+   - **Sideband sense (not just power) confirmed correct on air, closing
+     out the one remaining doubt about the LSB fix above.** Every check
+     so far (Case D's bench numbers, the on-air power match) confirmed
+     LSB and USB are self-consistent with each other - correctly
+     mirrored, not colliding - but none of them independently proved
+     which physical sideband either one actually lands on once the
+     signal passes through `bfo_freq`/`xtal_filter_center`'s real mixer
+     chain, since `radio.c` has no mode-dependent branching in that
+     chain at all (identical `clk1`/`clk2` formulas regardless of mode)
+     and `maxibitx`'s own RX path doesn't yet discriminate sidebands
+     either - there was no built-in ground truth to check against, only
+     inference from step 5's CW/USB image-rejection test (which used the
+     same `TX_PIPELINE_KEEP_UPPER` convention USB shares, and confirmed
+     *that* construction lands above the dial, not inverted). Resolved
+     with a receiver-label-independent test: a steady whistled tone,
+     watched on a remote receiver's waterfall rather than listened to
+     through its own mode demodulator, so the result depends only on
+     which side of the dial frequency the energy actually falls on.
+     Result: LSB's tone appeared *below* the dial frequency, exactly the
+     true-lower-sideband behavior `TX_IF_SHIFT_BINS_LSB`'s derivation
+     predicted, pairing with USB's already-established above-dial
+     placement. Both sidebands are now independently on-air confirmed
+     landing on their correct physical side of the dial - not just
+     correct relative to each other, which is the distinction this check
+     specifically existed to rule out. No code change needed; this was a
+     real, live risk (double-conversion superhet designs are a classic
+     place for exactly this kind of inversion to hide) that turned out
+     not to be a bug.
 9. Power/ALC calibration for voice, per §9.
