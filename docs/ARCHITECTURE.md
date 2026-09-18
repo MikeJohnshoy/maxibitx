@@ -1563,4 +1563,53 @@ for keying an external accessory's PTT, not this input line.)
    `MIC_CAPTURE_GAIN_PERCENT`'s ALSA control even behaves as a
    graduated gain. A first on-air SSB test is what would answer all of
    these — nothing here should be assumed correct until one happens.
+   - **First on-air SSB test: no measurable power out, real bug found
+     and fixed.** Keying the mic in USB produced no wattmeter reading
+     and nothing on a remote receiver - a real, complete TX failure, not
+     a level/calibration shortfall. (What DID appear - a voice-shaped
+     trace on `tools/rigctl_panel.py`'s spectrum display while talking -
+     turned out to be a red herring, not evidence anything downstream of
+     the mic was working: that display is fed by `iq_stream.c`'s RX I/Q
+     path, `rx_buf`/L, not `mic_buf`/R or anything from `tx_pipeline.c`
+     - a completely separate signal, already flagged as not a valid
+     pre-PA tap when this was first looked at as a TX-monitoring tool
+     - see this same section's step-5-era TX-spectrum-tool discussion.)
+     Root cause: `sound_set_rx_capture()` (`sound.c`), called by
+     `radio_tx_apply()` at the very start of every TX burst to protect
+     the RX chain from relay/PA-harmonic bleed
+     (`rx_gain_and_level_calibration.md` §8), zeroed the WM8731's whole
+     `'Capture'` ALSA element via `sound_mixer()`'s `*_all()` call -
+     which sets BOTH stereo channels identically. That was harmless
+     right up until this step, when `'Capture'` stopped being an
+     RX-only control: `'Input Mux'` is bench-confirmed locked to
+     `'Line'` (not `'Mic'`), which strongly suggests this board's real
+     microphone is wired onto the codec's Line-In-RIGHT pin rather than
+     through the codec's own separate internal mic preamp/mux path -
+     meaning `mic_buf`/R rides the exact same `'Capture'` gain stage as
+     `rx_buf`/L, not the separate `'Mic'` element `MIC_CAPTURE_GAIN_
+     PERCENT` was added to control (step 8's earlier writeup above
+     already flagged `'Mic'` as possibly inert for exactly this reason -
+     this on-air result is consistent with that). So every TX burst was
+     zeroing the mic's real analog level the instant it started, before
+     `tx_pipeline_process_block()` ever saw anything but near-silence -
+     a complete, silent kill of the entire USB/LSB signal chain,
+     regardless of `MIC_TX_INPUT_SCALE`/`MIC_CAPTURE_GAIN_PERCENT`.
+     Fixed with a new per-channel capture-volume helper
+     (`sound_mixer_capture_channel()`, mirroring the existing
+     per-channel `sound_mixer_channel()` pattern "Master" already needed
+     for the same L-vs-R-serve-different-purposes reason) -
+     `sound_set_rx_capture()` now touches only the LEFT (RX) channel of
+     `'Capture'`, leaving RIGHT (mic) alone through every TX/RX
+     transition in every mode. Depends on this ALSA element actually
+     supporting independent per-channel capture volume rather than a
+     single shared/ganged register underneath the stereo abstraction -
+     unconfirmed until tested; `sound_mixer_capture_channel()` logs a
+     clear warning if a per-channel write is ever rejected, which would
+     mean a different fix (e.g. skipping the mute entirely in USB/LSB
+     rather than trying to split it by channel) is needed instead. Also
+     added a Mode selector to `tools/rigctl_panel.py` (CW/USB/LSB/
+     DIGITAL radio buttons, reading/writing rigctld's `m`/`M`) - direct
+     motivation was exactly this test: with no in-panel way to see or
+     change mode, a mode/PTT-line mismatch was one more silent failure
+     mode indistinguishable from this real bug until ruled out by hand.
 9. Power/ALC calibration for voice, per §9.
