@@ -1612,4 +1612,37 @@ for keying an external accessory's PTT, not this input line.)
      motivation was exactly this test: with no in-panel way to see or
      change mode, a mode/PTT-line mismatch was one more silent failure
      mode indistinguishable from this real bug until ruled out by hand.
+   - **Re-test after that fix: mic audio now audible on the local
+     monitor speaker, but still no measurable power out.** A genuinely
+     different symptom from before - this confirms the capture-mute fix
+     above worked (`mic_buf` is carrying real signal again, and
+     `sound.c`'s mode branching is correctly routing it to the local
+     monitor channel), and narrows the remaining gap to somewhere
+     between real mic level and what actually reaches the exciter.
+     `MIC_TX_INPUT_SCALE` (`sound.c`) was always flagged as a guess
+     ("maps full-scale straight to 1.0... NOT yet checked against real
+     speech") - a real mic, even at `RX_CAPTURE_GAIN_PERCENT`'s existing
+     70% analog gain, plausibly peaks at a small fraction of int32
+     full-scale for ordinary speaking volume, well below `cw_get_sample()`'s
+     near-unity CW tone - easily a >10x amplitude gap, i.e. >100x in
+     power, which a modest wattmeter could plausibly read as "nothing"
+     while a local speaker amplifier makes the exact same signal
+     perfectly audible (an amplifier and a wattmeter have very different
+     sensitivity floors). Rather than re-guess a single compile-time
+     constant and require an edit/rebuild/restart per trial, split
+     `MIC_TX_INPUT_SCALE` (a fixed, purely mechanical int32->float unit
+     conversion) from a new `mic_tx_gain` (`sound.c`/`sound.h`) - a live,
+     runtime-adjustable multiplier on top of it, starting at 1.0, the
+     same "separate the unit conversion from the operator-adjustable
+     gain" split `rx_audio.c`'s `rx_volume`/AGC already use. Reachable
+     remotely via a new rigctld extension, `l`/`L MICGAIN` (`hamlib.c`,
+     raw multiplier value, not a 0.0-1.0 percent like `AF` - there's no
+     natural ceiling here the way there is for volume) and a new "Mic
+     Gain (TX, USB/LSB)" slider in `tools/rigctl_panel.py`, right under
+     Volume - so the next several bisection trials against a real
+     wattmeter reading can happen live, mid-session, the way `AF`
+     volume already can, rather than needing `MIC_TX_INPUT_SCALE`
+     re-guessed and the whole binary rebuilt/restarted each time. Not
+     yet re-tested on air - the next step is simply keying up in
+     USB/LSB and raising this slider while watching the wattmeter.
 9. Power/ALC calibration for voice, per §9.
