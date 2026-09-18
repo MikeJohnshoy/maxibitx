@@ -1,10 +1,10 @@
 # maxibitx — an all-mode TX/RX pipeline, built on minibitx
 
-maxibitx is a fresh, separate project (not a fork or branch) started
-from [minibitx](https://github.com/MikeJohnshoy/minibitx)'s control and
-hardware layer, adding a real all-mode (SSB + CW, v1) TX processing
-pipeline in the style of sbitx's own FFT-based approach — "only
-better," per the specific bugs already root-caused on sbitx/zbitx. The
+maxibitx is a fresh, separate project (not a fork or branch) built on
+[minibitx](https://github.com/MikeJohnshoy/minibitx)'s control and
+hardware layer, adding an all-mode (SSB/CW/DIGITAL) TX processing
+pipeline in the style of sbitx's own FFT-based approach "only
+better". The
 full rationale, the shared-FFT-pipeline design decision, and the build
 order are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
