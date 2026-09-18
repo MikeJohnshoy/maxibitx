@@ -25,9 +25,11 @@ the "Transmit" line below) describes the *old*, now-replaced scheme;
 see that doc's own updated intro and `ARCHITECTURE.md` §10 step 5 for
 what actually runs today and its bench provenance. **Dial accuracy is
 now confirmed on air**: the first real CW transmission on this pipeline
-was copied by a remote receiver exactly on frequency. Still outstanding:
-image rejection and transmitted power against a wattmeter, not yet
-separately checked on real hardware. Step 6 added the RX-side
+was copied by a remote receiver exactly on frequency, and a real
+wattmeter check at 7.030MHz confirmed transmitted power too (4.9W
+± 0.2W, matching the old scheme's calibrated 40m target - the new
+pipeline needed no gain re-tuning). Still outstanding: image rejection,
+not yet separately checked on real hardware. Step 6 added the RX-side
 counterpart, bench-only: a new `src/rx_filter.c`/`.h` module
 (`make test-rx-filter && ./test-rx-filter`) implementing the same shared
 FFT engine for `rx_audio.c`'s stage 3, pitch/width now live parameters
