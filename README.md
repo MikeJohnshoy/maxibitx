@@ -145,6 +145,33 @@ happen live while transmitting, the same way `AF` volume already
 works. Not yet re-tested - next step is keying up and raising that
 slider while watching the wattmeter.
 
+**Third data point ruled out gain staging: LSB measured a hard 0W while
+USB (identical settings) put out full power.** A level problem would
+hit both sidebands equally, so this pointed at something
+sideband-specific in `tx_pipeline.c` instead - and turned up two real
+bugs in the LSB (`TX_PIPELINE_KEEP_LOWER`) path specifically, which no
+bench test had ever actually run before this. First: `tx_pipeline.c`'s
+shared filter was tuned with plain `filter_tune()`, whose passband is
+deliberately one-sided (positive frequencies only) - fine for USB/CW,
+but it meant LSB's needed negative-frequency content was already zeroed
+by the filter itself before the explicit sideband-select step ever ran,
+leaving nothing to keep at all (measured directly: 0.707 RMS output for
+USB's path vs. 0.0000024 for LSB's, same input tone - not mis-placed,
+completely absent). Fixed by switching to `filter_tune_real()` (the
+same symmetric/mirrored entry point `rx_filter.c` already relies on for
+its own real-signal reason), so both sidebands' content survives the
+filter and the explicit sideband-zero step is what actually separates
+them, as originally designed. Second, smaller bug: the shared IF
+bin-rotate (`TX_IF_SHIFT_BINS`) was derived only for USB/CW's kept-upper
+case and reused unmirrored for LSB, which lands LSB's content off the
+crystal filter's center - fixed with a mirrored `TX_IF_SHIFT_BINS_LSB`,
+now selected per-block based on which sideband is active. Both fixes
+were required together; verified with a new `tx_pipeline_test.c` Case D
+that exercises `TX_PIPELINE_KEEP_LOWER` for the first time, now reading
+0dB at LSB's predicted placement and deeply negative at the frequency
+the old bug would have produced. Bench-proven only - not yet re-tested
+on air; next step is re-trying LSB to confirm it now matches USB.
+
 See `ARCHITECTURE.md` §10 for the measured/verified detail on all eight
 steps, including these follow-ups.
 
