@@ -1491,8 +1491,76 @@ for keying an external accessory's PTT, not this input line.)
      itself transmits, not what it receives), but a meaningful data point
      in its own right, and good independent evidence that nothing in
      steps 6/7's RX changes disturbed tuning.
-8. First on-air SSB TX test, CAT-triggered PTT, one band, conservative
-   drive level — measure actual sideband rejection before touching
-   power calibration at all.
+8. **Done, code-complete — on-air test still outstanding.** Wired real
+   mic-audio TX for USB/LSB into `cw.c`/`sound.c`, reusing the exact
+   same shared `tx_pipeline.c` instance CW already uses (step 5) rather
+   than a second one — `tx_pipeline_process_block()`'s `sideband`
+   argument only affects the bin-zero step, and `filter_tune()`'s
+   300-3000Hz passband has no sideband-dependent term, so CW/USB/LSB
+   genuinely share one instance, exactly as step 4's writeup anticipated
+   (`tx_pipeline_retune()` still goes unused — LSB doesn't need a
+   mirrored passband after all, since the filter runs on real baseband
+   audio *before* the bin-zero step, not on an already-shifted signal).
+   - This also folds in what used to be a separate, later step
+     ("physical PTT input, once CAT-only testing is done") much
+     earlier than originally sequenced here — and for a different
+     reason than planned: it turns out no new GPIO is needed at all.
+     Cross-checking real sbitx's own `sbitx_gtk.c` (`afarhan/sbitx`,
+     fetched directly to verify hardware wiring the operator asked
+     about, rather than trusting an initial, garbled recollection of
+     pin numbers that didn't survive a self-consistency check) found
+     `PTT` defined as wiringPi pin 7 — which, translated through the
+     same wiringPi→BCM table `docs/01_hardware_init_and_control.md`'s
+     own migration table already uses, is BCM4/physical pin 7: the
+     exact same electrical line as maxibitx's existing `CW_KEY`. Real
+     sbitx reads this identical line as a straight key in CW mode and
+     as a mic PTT switch in voice modes (`sbitx_gtk.c`'s own
+     `key_poll()`/main-loop `tx_on(TX_PTT)`/`tx_off()` split) —
+     confirming the operator's mic PTT switch and CW straight key
+     genuinely share one physical contact on this hardware, not two
+     separate ones ("Farhan sometimes demonstrates operating CW with
+     his thumb on the mic PTT switch"). So sensing mic PTT needed no
+     new hardware pin, just `cw.c`'s `cw_poll_key()` interpreting the
+     same closure differently depending on `radio_get_mode()`
+     (radio.h) — see that function's own comment for this cross-check.
+   - `cw_poll_key()` (`cw.c`): in `RADIO_MODE_CW`, unchanged (hang-timer
+     semi break-in, as always). In `RADIO_MODE_USB`/`RADIO_MODE_LSB`,
+     the same key line is read as an immediate PTT switch instead —
+     `radio_set_tx()` asserted the instant it closes, released the
+     instant it opens, no hang timer (a voice transmission has no
+     inter-element gap to bridge the way CW's dits/dahs do).
+     `RADIO_MODE_DIGITAL` still ignores this line entirely — no TX
+     source is wired to it in that mode (externally-generated
+     digital-mode audio remains unbuilt future work, §5/§8).
+   - `sound.c`'s TX audio-generation block now branches on
+     `radio_get_mode()`: CW keeps pulling `cw_get_sample()`'s tone and
+     `TX_PIPELINE_KEEP_UPPER`, unchanged; USB/LSB instead pull real mic
+     audio (`mic_buf` — already captured every block since minibitx,
+     but previously discarded, `(void)input_mic;`) scaled by a new
+     `MIC_TX_INPUT_SCALE` constant, and select
+     `TX_PIPELINE_KEEP_UPPER`/`TX_PIPELINE_KEEP_LOWER` by mode. The
+     local monitor channel (L, never reaches the PA) now carries
+     whichever signal is actually driving TX that block — the CW
+     sidetone pitch, or a monitor copy of the operator's own mic audio
+     — instead of always being the CW tone.
+   - The WM8731's 'Mic' capture gain (`setup_audio_codec()`),
+     previously left at 0 (muted) since nothing consumed it, is now set
+     to a new `MIC_CAPTURE_GAIN_PERCENT` (50) — a plain starting guess,
+     not bench-confirmed, the same way `RX_CAPTURE_GAIN_PERCENT`
+     started before real listening refined it. Unlike
+     `RX_CAPTURE_GAIN_PERCENT`, 'Mic' hasn't even been bench-confirmed
+     yet to be a real graduated gain control rather than a switch — the
+     same gotcha `RX_LINE_INPUT_ON`'s comment already documents for a
+     different control on this same codec — worth an
+     `amixer -c 0 sget 'Mic'` check before trusting this number.
+   **What's genuinely still open, not yet bench- or air-verified:**
+   `MIC_TX_INPUT_SCALE`'s and `MIC_CAPTURE_GAIN_PERCENT`'s real-world
+   levels (speech has a very different amplitude/clipping story than a
+   steady CW tone or envelope — no wattmeter check has been done
+   against a real keyed voice envelope, unlike CW's own step 5/§8
+   re-check); actual on-air sideband rejection for a real voice signal
+   (step 4/5's -70dB number is a CW-tone measurement only); and whether
+   `MIC_CAPTURE_GAIN_PERCENT`'s ALSA control even behaves as a
+   graduated gain. A first on-air SSB test is what would answer all of
+   these — nothing here should be assumed correct until one happens.
 9. Power/ALC calibration for voice, per §9.
-10. Physical PTT input (if wanted) once CAT-only testing is done.
