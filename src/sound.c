@@ -47,6 +47,18 @@
 // some future signal ever proves it too hot.
 #define RX_CAPTURE_GAIN_PERCENT 70
 
+// WM8731 'Mic' - the capture gain ahead of the R channel's mic input
+// (mic_buf, audio_loop() below), needed now that USB/LSB TX actually
+// reads it (see the cw_tx_active() branch below and MIC_TX_INPUT_SCALE
+// above) - previously left at 0 (muted) since nothing consumed it.
+// Picked as a plain starting midpoint, the same way RX_CAPTURE_GAIN_PERCENT
+// started at a bench guess before real-hardware listening refined it;
+// unlike "Line" above, 'Mic' hasn't been bench-confirmed yet to even be
+// a real gain control rather than a switch (see RX_LINE_INPUT_ON's
+// comment for that exact gotcha on a different control) - worth an
+// `amixer -c 0 sget 'Mic'` check before trusting this number.
+#define MIC_CAPTURE_GAIN_PERCENT 50
+
 // WM8731 'Master' is a stereo control with independent L/R volume
 // registers (confirmed both from the sbitx hardware docs and from
 // sound_mixer_dump()'s readback) - and L/R genuinely go to two different
@@ -95,6 +107,21 @@
 // docs/03_tx_processing_pipeline.md for why that coupling used to bite.
 #define SIDETONE_PEAK_AMPLITUDE 10000000.0
 
+// Converts a raw S32_LE mic capture sample (mic_buf[i], full int32
+// range) into tx_pipeline.c's expected roughly-[-1,1] input range, for
+// USB/LSB TX (see the cw_tx_active() branch below) - the mic-audio
+// counterpart to cw.c's cw_get_sample(), which is already exactly
+// [-1,1] by construction since it's a synthetic tone. Unlike that
+// tone, real mic level depends on the physical mic, the "Mic" capture
+// gain below, and how hard the operator talks - this maps full-scale
+// straight to 1.0 as the simplest possible starting point, same
+// "first cut, flag it, calibrate for real once the hardware exists"
+// discipline docs/dsp_design_notes/tx_power_calibration.md's
+// TX_GAIN_CORRECTION and rx_gain_and_level_calibration.md's
+// RX_CAPTURE_GAIN_PERCENT both started from - NOT yet checked against
+// real speech on a wattmeter or a scope.
+#define MIC_TX_INPUT_SCALE (1.0 / 2147483648.0)
+
 /* ------------------------------------------------------------------ */
 /*  Module state                                                      */
 /* ------------------------------------------------------------------ */
@@ -108,9 +135,13 @@ static volatile int g_running = 0;
 // same lifetime pattern as pcm_capture/pcm_playback above. Owns real
 // FFTW plans (FFTW_MEASURE - a real one-time setup cost, see
 // tx_pipeline.c/fft_filter.c's own comments on why), so it must not be
-// created/destroyed per TX burst. CW is the only mode wired up to it so
-// far (docs/ARCHITECTURE.md build order step 5) - USB/LSB/DIGITAL's mic
-// audio is future work (step 7), sharing this same instance.
+// created/destroyed per TX burst. CW and USB/LSB now share this one
+// instance (docs/ARCHITECTURE.md build order step 8) - same passband
+// filter either way (tx_pipeline.c's filter_tune() call has no
+// sideband-dependent term), only the `i_sample` source (cw.c's tone vs
+// real mic audio) and the sideband-zero direction passed to
+// tx_pipeline_process_block() differ per audio_loop()'s TX branch
+// below. DIGITAL's externally-generated audio is still future work.
 static struct tx_pipeline *cw_tx_pipeline = NULL;
 
 /* ------------------------------------------------------------------ */
@@ -277,7 +308,7 @@ void setup_audio_codec(void) {
               0); // 'Line In' (bench-confirmed - see RX_CAPTURE_GAIN_PERCENT's comment above)
   sound_mixer("hw:0", "Line", RX_LINE_INPUT_ON); // just un-mutes the line path - see comment above
   sound_mixer("hw:0", "Capture", RX_CAPTURE_GAIN_PERCENT); // the real analog gain stage
-  sound_mixer("hw:0", "Mic", 0);
+  sound_mixer("hw:0", "Mic", MIC_CAPTURE_GAIN_PERCENT); // mic input gain - see its comment above
 
   // "Master" L/R are independent - see LOCAL_SPEAKER_GAIN_PERCENT's
   // comment above. L (local speaker/headphone) is set once, here, for
@@ -761,33 +792,53 @@ static void *audio_loop(void *arg) {
         double band_scale = hw_settings_tx_scale(freq_hdr);
         double amp = TX_SAMPLE_HEADROOM * TX_DRIVE * band_scale * TX_GAIN_CORRECTION;
 
-        // cw_get_sample() owns the envelope advance for this sample -
-        // must be called exactly once per real audio sample (its
-        // envelope timing depends on elapsed samples, not on how the
-        // pipeline below batches them), and its result now does two
-        // jobs (real sbitx's own "one signal, two uses" pattern - see
-        // cw.h): the local sidetone monitor directly (unchanged), and
-        // tx_pipeline.c's shared FFT pipeline's `i_sample` input, one
-        // full TX_PIPELINE_BLOCK_LEN-sample block at a time (that
-        // pipeline owns persistent overlap-save history across calls,
-        // so it needs exactly this many new samples every call - see
-        // docs/ARCHITECTURE.md §10 step 4). sidetone_buf is sized
-        // MAX_FRAMES, matching every other per-block buffer in this
-        // function (mic_buf/rx_buf/etc. above) - n is bounded by
+        // tx_audio_buf is this block's i_sample source for
+        // tx_pipeline.c, one full TX_PIPELINE_BLOCK_LEN-sample block at
+        // a time (that pipeline owns persistent overlap-save history
+        // across calls, so it needs exactly this many new samples every
+        // call - see docs/ARCHITECTURE.md §10 step 4); it also drives
+        // the local sidetone/monitor channel directly below, same
+        // "one signal, two uses" pattern real sbitx's own
+        // `output_speaker[j] = i_sample * sidetone` uses (see cw.h).
+        // Sized MAX_FRAMES, matching every other per-block buffer in
+        // this function (mic_buf/rx_buf/etc. above) - n is bounded by
         // MAX_FRAMES already (see the clamp right after snd_pcm_readi()
         // above), so this can never overrun regardless of what n turns
         // out to be.
-        static double sidetone_buf[MAX_FRAMES];
-        static float cw_in[TX_PIPELINE_BLOCK_LEN];
-        static float cw_out[TX_PIPELINE_BLOCK_LEN];
+        static double tx_audio_buf[MAX_FRAMES];
+        static float tx_pipe_in[TX_PIPELINE_BLOCK_LEN];
+        static float tx_pipe_out[TX_PIPELINE_BLOCK_LEN];
 
-        for (int i = 0; i < n; i++)
-          sidetone_buf[i] = cw_get_sample();
+        enum radio_mode tx_mode = radio_get_mode();
+        enum tx_pipeline_sideband sideband = TX_PIPELINE_KEEP_UPPER;
+
+        if (tx_mode == RADIO_MODE_CW) {
+          // cw_get_sample() owns the envelope advance for this sample -
+          // must be called exactly once per real audio sample (its
+          // envelope timing depends on elapsed samples, not on how the
+          // pipeline below batches them).
+          for (int i = 0; i < n; i++)
+            tx_audio_buf[i] = cw_get_sample();
+          sideband = TX_PIPELINE_KEEP_UPPER; // CW groups with USB - see
+                                              // tx_pipeline.h's enum comment
+        } else {
+          // USB/LSB (docs/ARCHITECTURE.md build order step 8): real mic
+          // audio (mic_buf, captured above) is the i_sample source
+          // instead of cw.c's tone - see MIC_TX_INPUT_SCALE's comment
+          // for the [-1,1]-ish conversion, still bench-unconfirmed.
+          // cw_poll_key() (cw.c) only ever asserts TX for this mode pair
+          // (plus CW) today, so this else covers exactly USB/LSB in
+          // practice.
+          for (int i = 0; i < n; i++)
+            tx_audio_buf[i] = mic_buf[i] * MIC_TX_INPUT_SCALE;
+          sideband = (tx_mode == RADIO_MODE_LSB) ? TX_PIPELINE_KEEP_LOWER
+                                                  : TX_PIPELINE_KEEP_UPPER;
+        }
 
         if (n == TX_PIPELINE_BLOCK_LEN) {
           for (int i = 0; i < TX_PIPELINE_BLOCK_LEN; i++)
-            cw_in[i] = (float)sidetone_buf[i];
-          tx_pipeline_process_block(cw_tx_pipeline, TX_PIPELINE_KEEP_UPPER, cw_in, cw_out);
+            tx_pipe_in[i] = (float)tx_audio_buf[i];
+          tx_pipeline_process_block(cw_tx_pipeline, sideband, tx_pipe_in, tx_pipe_out);
         } else {
           // n is negotiated once at snd_pcm_hw_params_set_period_size_
           // near() and PERIOD_FRAMES==TX_PIPELINE_BLOCK_LEN by design
@@ -802,9 +853,10 @@ static void *audio_loop(void *arg) {
           // corrupt its overlap-save history's alignment for every
           // block after this one - far worse than one silent block -
           // so this skips the pipeline entirely and outputs silence on
-          // the exciter channel this block (the sidetone above is
-          // unaffected either way, since it doesn't share that state).
-          memset(cw_out, 0, sizeof(cw_out));
+          // the exciter channel this block (the local monitor channel
+          // below is unaffected either way, since it doesn't share that
+          // state).
+          memset(tx_pipe_out, 0, sizeof(tx_pipe_out));
           // Logged once, not every occurrence: if this ever fires from
           // a genuinely mismatched negotiated period (rather than a
           // rare one-off short read), it would otherwise repeat on
@@ -814,8 +866,8 @@ static void *audio_loop(void *arg) {
             fprintf(stderr,
                     "sound: TX block size %d != %d (tx_pipeline's fixed "
                     "block length) - skipping tx_pipeline until this "
-                    "resolves, sidetone unaffected (further occurrences "
-                    "not logged)\n",
+                    "resolves, local monitor unaffected (further "
+                    "occurrences not logged)\n",
                     n, TX_PIPELINE_BLOCK_LEN);
             warned = 1;
           }
@@ -828,20 +880,26 @@ static void *audio_loop(void *arg) {
           // a steady full-scale tone (bench-verified,
           // docs/ARCHITECTURE.md §10 step 4) - TX_GAIN_CORRECTION
           // below is carried over unchanged from the old direct-NCO
-          // scheme on that basis, not yet independently re-checked
-          // with a wattmeter against a real keyed envelope through
-          // this new path; worth confirming on first power-up.
-          double raw_tx = (i < TX_PIPELINE_BLOCK_LEN ? cw_out[i] : 0.0f) * amp;
+          // scheme on that basis, confirmed on a wattmeter for CW
+          // (tx_power_calibration.md §8); USB/LSB's real mic-driven
+          // envelope is a different amplitude statistics story
+          // (speech isn't a steady tone) and has NOT been checked on a
+          // wattmeter yet - worth doing before relying on this for a
+          // real SSB transmission.
+          double raw_tx = (i < TX_PIPELINE_BLOCK_LEN ? tx_pipe_out[i] : 0.0f) * amp;
           if (raw_tx > TX_SAMPLE_CLAMP)
             raw_tx = TX_SAMPLE_CLAMP;
           if (raw_tx < -TX_SAMPLE_CLAMP)
             raw_tx = -TX_SAMPLE_CLAMP;
 
-          // L = local sidetone monitor only (on-board speaker),
-          // at the sidetone pitch, at a fixed comfort level - see
-          // SIDETONE_PEAK_AMPLITUDE above. Never reaches the PA,
-          // and no longer moves when TX_GAIN_CORRECTION does.
-          double raw_side = sidetone_buf[i] * SIDETONE_PEAK_AMPLITUDE;
+          // L = local monitor only (on-board speaker) - the CW sidetone
+          // pitch in CW mode, or a monitor copy of the operator's own
+          // mic audio in USB/LSB (tx_audio_buf holds whichever one this
+          // block is using - see the tx_mode branch above), at a fixed
+          // comfort level - see SIDETONE_PEAK_AMPLITUDE above. Never
+          // reaches the PA, and no longer moves when TX_GAIN_CORRECTION
+          // does.
+          double raw_side = tx_audio_buf[i] * SIDETONE_PEAK_AMPLITUDE;
           if (raw_side > TX_SAMPLE_CLAMP)
             raw_side = TX_SAMPLE_CLAMP;
           if (raw_side < -TX_SAMPLE_CLAMP)
