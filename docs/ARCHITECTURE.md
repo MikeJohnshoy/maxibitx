@@ -1645,4 +1645,79 @@ for keying an external accessory's PTT, not this input line.)
      re-guessed and the whole binary rebuilt/restarted each time. Not
      yet re-tested on air - the next step is simply keying up in
      USB/LSB and raising this slider while watching the wattmeter.
+   - **Third on-air data point: LSB measured a hard 0W while USB (same
+     mic, same slider settings) put out full rated power.** This ruled
+     out the gain-staging hypothesis above as the cause - a level
+     problem would affect both sidebands the same way, not one of them
+     completely - and pointed instead at something sideband-specific in
+     `tx_pipeline.c`'s FFT construction. Investigating found not one but
+     two real, previously-latent bugs, both specific to
+     `TX_PIPELINE_KEEP_LOWER` (LSB), which no existing bench test had
+     ever actually exercised - `tx_pipeline_test.c`'s Cases A-C only
+     ever ran `TX_PIPELINE_KEEP_UPPER`; Case B's own symmetric test
+     filter (a bespoke `filter_tune(f, -3000, 3000, ...)`, not
+     `tx_pipeline_new()`'s real passband) happened to sidestep the first
+     bug entirely, so LSB's code path had shipped from step 4 onward
+     numerically unverified.
+     1. **The filter itself was silently discarding everything LSB
+        needed, before `zero_sideband()` ever ran.** `tx_pipeline_new()`
+        tuned its shared filter with plain `filter_tune()` - and
+        `fft_filter.h`'s own header comment on that function is explicit
+        that its passband is one-sided: "the *other* half of the
+        spectrum is deliberately unwanted image content." That's exactly
+        right for a caller that only ever wants
+        `TX_PIPELINE_KEEP_UPPER`, but this pipeline is shared - a real,
+        symmetric input tone has energy at both +700Hz and -700Hz, and
+        `zero_sideband(TX_PIPELINE_KEEP_LOWER)` is supposed to keep the
+        -700Hz half and let the explicit rotate place it. With plain
+        `filter_tune()`'s one-sided +300..+3000Hz-only passband, the
+        -300..-3000Hz content LSB needs was already zero by the time
+        `filter_forward()` finished - `zero_sideband()` had nothing left
+        to keep. Measured directly (a throwaway RMS check comparing
+        `TX_PIPELINE_KEEP_UPPER`'s and `TX_PIPELINE_KEEP_LOWER`'s raw
+        output energy for the identical input tone): 0.707 RMS for
+        upper, 0.0000024 RMS for lower - not a mis-placed signal, no
+        signal at all, which matches "hard 0W" far better than any
+        gain-staging shortfall could. Fixed by switching
+        `tx_pipeline_new()`/`tx_pipeline_retune()` to
+        `filter_tune_real()` - the same symmetric, mirrored-passband
+        entry point `rx_filter.c` already uses for its own "genuinely
+        real signal" reason (`fft_filter.h`'s own comment on the two
+        functions) - so the filter now preserves *both* sidebands'
+        content and leaves the actual sideband selection entirely to
+        the explicit `zero_sideband()` step, the way
+        `docs/ARCHITECTURE.md` §5's original design always intended.
+     2. **The shared IF bin-rotate (`TX_IF_SHIFT_BINS`) was derived only
+        for the kept-upper case, then reused unmirrored for LSB.**
+        `TX_IF_SHIFT_HZ`'s derivation (`tx_pipeline.h`) rotates the kept
+        POSITIVE-frequency half up onto `xtal_filter_center`;
+        `TX_PIPELINE_KEEP_LOWER` keeps the NEGATIVE-frequency half
+        instead, and applying that same rotation to it lands the result
+        at a different, uncentered frequency - not necessarily hard
+        0W by itself (more likely a de-tuned, attenuated signal off the
+        crystal filter's passband center), but wrong regardless. Fixed
+        with a mirrored `TX_IF_SHIFT_HZ_LSB`/`TX_IF_SHIFT_BINS_LSB`
+        (`bfo_freq - xtal_filter_center + CW_PITCH_HZ` - the sign on
+        `CW_PITCH_HZ` flips relative to the upper-case formula, giving
+        23300Hz -> 497 bins), and `tx_pipeline_process_block()` now
+        selects between `TX_IF_SHIFT_BINS`/`_LSB` (and the matching
+        phase-continuity `flip` parity, which depends on which shift
+        was actually applied) based on the block's own `sideband`
+        argument instead of hardcoding the upper-case constant
+        everywhere.
+     Both fixes were needed together - fixing only the rotate constant
+     without also fixing the filter's passband still measured -146dB
+     (i.e. still nothing, since `zero_sideband()` had nothing to
+     rotate); fixing only the filter without the mirrored rotate would
+     have produced a real but off-center, de-tuned signal instead.
+     Verified with a new `tx_pipeline_test.c` Case D, added specifically
+     because Cases A-C never touched `TX_PIPELINE_KEEP_LOWER`: with both
+     fixes in place it reads 0.00dB at LSB's own predicted placement
+     (22596.875Hz) and -78.22dB measured at the frequency the old,
+     unmirrored-shift bug would have actually produced (21190.625Hz,
+     `target_image` from Case B's own math) - confirming this isn't just
+     *a* signal somewhere, but the right one, and specifically not the
+     old wrong one. Not yet re-tested on air - this is a bench-only
+     proof; the next step is re-trying LSB on 40m against the wattmeter
+     to confirm it now matches USB's already-working power output.
 9. Power/ALC calibration for voice, per §9.
