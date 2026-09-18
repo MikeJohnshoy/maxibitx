@@ -59,8 +59,12 @@ step 7; TX via this remote copy, step 5). A real wattmeter check across
 all nine bands then confirmed transmitted power too, same `scale`/
 `TX_GAIN_CORRECTION` values throughout, no changes needed — a
 conservative ~5-6W band to band, well inside this board's 20+W PA
-rating. Image rejection on air is the one piece of step 5 still open
-(step 5's own entry has the detail). See §10 for the actual
+rating. A remote receiver tuned exactly to where this pipeline's own
+mixer math predicts a leaked image would land (1400Hz from the wanted
+carrier, not the ±700Hz a naive guess suggests — step 5's own entry has
+the derivation) heard and saw nothing, confirming the bench-measured
+~-70dB image suppression on air too. Step 5 has no remaining open
+items. See §10 for the actual
 measured/verified detail on all seven steps.
 What's left for RX specifically: the on-air listening comparison itself
 (step 7's own entry) — the code is complete and integration-tested
@@ -910,11 +914,30 @@ for keying an external accessory's PTT, not this input line.)
    residual) land the transmitted signal where the dial says, with a real
    receiver on the other end rather than a bench measurement. Pairs with
    step 7's RX-side W1AW confirmation — both directions of this rebuild
-   are now dial-accurate on real hardware. Still open from this step:
-   image rejection hasn't been separately measured on air yet — a clean,
-   on-frequency copy is strong evidence the fundamental is landing
-   correctly, but says nothing about how well the unwanted sideband is
-   suppressed.
+   are now dial-accurate on real hardware.
+
+   **Image rejection confirmed on air.** A first attempt tuned a remote
+   receiver to dial ∓700Hz (7,019,300 / 7,020,700Hz while transmitting on
+   7,020,000) and heard/saw only the wanted signal — but working through
+   this pipeline's actual mixer chain shows that's the wrong offset to
+   test: the real/-70Hz sidetone splits into a +700Hz and a −700Hz
+   spectral component before `zero_sideband()` runs, both of which ride
+   the *same* bin-rotate through both real analog mixers, so a leaked
+   image (if `zero_sideband()`'s bench-measured ~-70dB suppression isn't
+   perfect) stays a fixed 1400Hz from the wanted carrier throughout — not
+   the ±700Hz a naive "mirror the CW pitch" guess would predict. Using
+   this session's actual `bfo_freq`/`xtal_filter_center`
+   (40,035,000/40,012,400Hz, confirmed in `data/hw_settings.ini`), that
+   places the image at dial **minus** 1400Hz, ≈7,018,600Hz for this test
+   — not symmetric around dial at all, and on the opposite side from
+   both of the first attempt's guesses. Retuned there: **nothing audible
+   or visible**, exactly the expected result at −70dB below a 5W note
+   (roughly ten million times weaker in power) — well below what any
+   ordinary receiver would pull out of the band noise, even one tuned
+   right to the correct spot. This is a real, targeted on-air
+   confirmation of the bench-measured image rejection, not just an
+   absence-of-evidence result from testing the wrong frequency the first
+   time. Step 5 has no remaining open on-air items.
 
    **Transmitted power confirmed on a real wattmeter, all nine bands.**
    Key-down at 7.030MHz (40m, `TX_DRIVE`=50, `scale`=0.00112,
@@ -931,8 +954,7 @@ for keying an external accessory's PTT, not this input line.)
    original 4.7-5.5W bench target but all comfortably inside this
    board's 20+W PA safety rating — accepted as-is, a deliberately
    conservative level for ongoing development rather than something
-   needing a fresh bisection. Only image rejection remains unverified on
-   air for this step.
+   needing a fresh bisection.
 6. **Done, bench-only.** Wrote a new, parallel module (`src/rx_filter.c`/`.h`)
    implementing §5's RX plan: the same `fft_filter.c` overlap-save engine
    TX uses, with pitch and width as live `rx_filter_retune()` parameters
