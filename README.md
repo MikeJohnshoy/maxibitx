@@ -3,10 +3,9 @@
 maxiBitx is a follow-on project to
 [miniBitx](https://github.com/MikeJohnshoy/minibitx)'s control and
 hardware layer, adding an all-mode (SSB/CW/DIGITAL) TX processing
-pipeline in the style of sbitx's own FFT-based approach - "only
-better". miniBitx was the first attempt to build a clean SDR platform
-the harder I looked the more I kept coming back to Farhan's choices 
-in sbitx. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for more
+pipeline in the style of sbitx's own FFT-based approach. 
+miniBitx was a first attempt to build a clean SDR platform to build on.
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for more
 of how we got here.
 
 **Current state: build order steps 1-7 of `ARCHITECTURE.md`.**
