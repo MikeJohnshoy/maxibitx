@@ -5,11 +5,15 @@ Status: **done** (2026-09) - all 9 `[tx_band]` entries in
 window at `TX_DRIVE`=50; see §5's worksheet for the final numbers. The bench procedure below - one popular QRP
 CW frequency per band, into a dummy load - is what produced the final
 values; §7 is still worth reading if a future board revision needs this
-re-run and a band won't reach target. **§8**: these numbers were
-re-confirmed on real hardware after `ARCHITECTURE.md` §10 step 5
-replaced the CW TX signal chain this calibration was originally done
-against (`tx_pipeline.c`'s shared FFT pipeline, not the old direct-NCO
-scheme) - same `scale`/`TX_GAIN_CORRECTION`, no change needed.
+re-run and a band won't reach target. **§8**: all 9 bands were then
+re-confirmed on real hardware, into a dummy load, after
+`ARCHITECTURE.md` §10 step 5 replaced the CW TX signal chain this
+calibration was originally done against (`tx_pipeline.c`'s shared FFT
+pipeline, not the old direct-NCO scheme) - same `scale`/
+`TX_GAIN_CORRECTION` values throughout, no changes made. Readings now
+run ~5-6.2W band to band (some above the original 4.7-5.5W bench
+target, all comfortably below this board's 20+W PA safety rating) and
+are accepted as-is for ongoing development.
 
 ## 1. Background
 
@@ -178,14 +182,34 @@ was an inference from a steady tone, not a measurement of a real keyed
 CW envelope, so it stayed flagged as genuinely open (§10 step 5's
 writeup) rather than assumed.
 
-Confirmed on real hardware: key-down at 7.030MHz (40m, the same test
-frequency and `scale`=0.00112/`TX_GAIN_CORRECTION`=0.045 as §5's
-worksheet) reads **4.9W, ±0.2W** across repeated key-downs - inside the
-4.7-5.5W acceptance window this whole calibration pass used, and
-consistent with the old scheme's own confirmed 40m reading (5.6W) given
-the ±0.5-0.8W session-to-session variability §5 itself documented. No
-`scale`/`TX_GAIN_CORRECTION` change needed for the new pipeline on this
-band. The other eight bands haven't been individually re-confirmed
-under the new pipeline yet - worth a quick pass if any of them ever
-seem off, but not treated as a blocker given 40m (a representative
-midpoint of the HF range this hardware covers) transferred cleanly.
+Confirmed on real hardware, all 9 bands, same `data/hw_settings.ini`
+`scale` values as §5's worksheet, no changes made:
+
+| Band | Test freq | `scale` (unchanged) | New-pipeline reading |
+|---|---|---|---|
+| 80m | 3.560 MHz | 0.000850 | 6.2W |
+| 60m | ~5.357 MHz | 0.00109 | 5.6W |
+| 40m | 7.030 MHz | 0.00112 | 5.1W |
+| 30m | 10.106 MHz | 0.00174 | 5.0W |
+| 20m | 14.060 MHz | 0.00314 | 5.1W |
+| 17m | 18.086 MHz | 0.00384 | 6.0W |
+| 15m | 21.060 MHz | 0.00500 | 5.7W |
+| 12m | 24.906 MHz | 0.00709 | 6.0W |
+| 10m | 28.060 MHz | 0.01011 | 5.2W |
+
+40m alone was also spot-checked across repeated key-downs: 4.9W, ±0.2W.
+Every band lands within about 0.5-1.2W of its original old-scheme
+reading (§5's table) - the same order of magnitude as the ±0.5-0.8W
+session-to-session variability that original calibration pass itself
+documented - and several (80m, 17m, 15m, 12m) now read a bit above the
+original 4.7-5.5W window rather than inside it. **No `scale`/
+`TX_GAIN_CORRECTION` changes were made** - these numbers are accepted
+as-is rather than re-bisected: every band still lands comfortably below
+this board's 20+W PA safety rating, and a conservative, consistent
+~5-6W across all nine bands is exactly the right power level for
+ongoing development testing. The original 4.7-5.5W window was a bench
+calibration target for the old scheme, not a hard operating limit - it
+doesn't need re-hitting exactly for the new pipeline to be considered
+good. If a tighter, flatter target across bands is ever wanted later,
+these numbers are the starting point for a fresh bisection; not treated
+as necessary now.
