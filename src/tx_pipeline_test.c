@@ -320,5 +320,53 @@ int main(void)
 		tx_pipeline_free(p);
 	}
 
+	// --- Case D: LSB's own mirrored IF placement (docs/ARCHITECTURE.md
+	// build order step 8's on-air bug: LSB measured 0W, reusing USB's
+	// TX_IF_SHIFT_BINS unmirrored - see TX_IF_SHIFT_BINS_LSB's comment,
+	// tx_pipeline.h) - same measurement this harness already trusts for
+	// Case A, just aimed at TX_PIPELINE_KEEP_LOWER's own target instead
+	// of assuming the fix is correct.
+	{
+		float shift_actual_hz_lsb = TX_IF_SHIFT_BINS_LSB * TX_PIPELINE_BIN_HZ;
+		double target_wanted_lsb = shift_actual_hz_lsb - CW_PITCH_HZ;
+		float residual_hz_lsb = TX_IF_SHIFT_HZ_LSB - shift_actual_hz_lsb;
+
+		printf("\nD. LSB's own IF shift: ideal %.3f Hz -> %d bins -> actual %.3f Hz, residual %.3f Hz\n",
+		       TX_IF_SHIFT_HZ_LSB, TX_IF_SHIFT_BINS_LSB, shift_actual_hz_lsb, residual_hz_lsb);
+		printf("   (compare Case A's own target %.3f Hz - both sidebands' single-tone anchor\n",
+		       target_wanted);
+		printf("   should land within a bin or two of the same spot, extending in opposite\n");
+		printf("   directions for a real audio passband)\n");
+
+		struct tx_pipeline *p = tx_pipeline_new();
+		double m_lsb = measure_tone(p, TX_PIPELINE_KEEP_LOWER, target_wanted_lsb, 8, 8);
+		printf("   Wanted tone at %.3f Hz (LSB, predicted placement): %.2f dB (want ~0 dB)\n",
+		       target_wanted_lsb, to_db(m_lsb, 1.0));
+		// The regression this second measurement actually checks: NOT
+		// "does LSB collide with USB's own target_wanted" (target_wanted
+		// and target_wanted_lsb are only ~6Hz apart by design - both
+		// sidebands' single-tone anchors are SUPPOSED to sit within a bin
+		// or two of the same spot, per TX_IF_SHIFT_BINS_LSB's comment,
+		// tx_pipeline.h - so a short coherent measurement can't and
+		// shouldn't cleanly separate them; the real, physically-meaningful
+		// separation is between each sideband's whole 300-3000Hz audio
+		// passband, not this single low-pitch tone sitting right at the
+		// shared boundary between them).
+		//
+		// target_image (Case B, above) is the frequency the OLD bug would
+		// have actually put this same -CW_PITCH_HZ content at: reusing
+		// TX_IF_SHIFT_BINS (USB's shift, 467 bins) instead of
+		// TX_IF_SHIFT_BINS_LSB (497) on the same kept bin lands it at
+		// shift_actual_hz - CW_PITCH_HZ = target_image, ~1400Hz away from
+		// target_wanted_lsb - easily resolved by this measurement window,
+		// unlike target_wanted. Reading deeply negative there confirms
+		// this fix actually moved the output, not just that *a* signal
+		// exists somewhere.
+		double m_old_bug_location = measure_tone(p, TX_PIPELINE_KEEP_LOWER, target_image, 8, 8);
+		printf("   Same LSB signal measured at the pre-fix (unmirrored-shift) location %.3f Hz instead: %.2f dB (want: very negative)\n",
+		       target_image, to_db(m_old_bug_location, 1.0));
+		tx_pipeline_free(p);
+	}
+
 	return 0;
 }
