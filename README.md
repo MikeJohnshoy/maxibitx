@@ -103,6 +103,48 @@ this is genuinely untested until a first real SSB transmission happens.
 See `ARCHITECTURE.md` §10 step 8 for the full detail, including the
 sbitx source cross-check that resolved the PTT-wiring question.
 
+**First on-air SSB test found a real bug: no power out at all.** Keying
+the mic in USB produced nothing on a wattmeter or a remote receiver.
+Root cause: `sound_set_rx_capture()` - called at the start of every TX
+burst to protect the RX chain from relay/PA-harmonic bleed - was
+zeroing the WM8731's whole `'Capture'` gain element, both stereo
+channels at once. That was fine while `'Capture'` only fed the RX path,
+but this board's mic almost certainly rides that same element's RIGHT
+channel (`'Input Mux'` is locked to `'Line'`, not `'Mic'`, so the mic
+likely never touches the codec's own separate internal mic preamp at
+all) - so every TX burst was silently zeroing the mic's real level the
+instant it started, regardless of any gain constant downstream. Fixed
+with a new per-channel capture-volume helper, the same pattern
+`sound_set_tx_drive()`/`sound_set_local_monitor()` already used for
+"Master" - `sound_set_rx_capture()` now touches only the LEFT (RX)
+channel, leaving the mic's RIGHT channel alone through every TX/RX
+transition. Also added a Mode selector (CW/USB/LSB/DIGITAL) to
+`tools/rigctl_panel.py`, since testing this surfaced a real gap: no way
+to see or change mode from the panel made a mode/PTT mismatch one more
+silent failure indistinguishable from this bug until ruled out by hand.
+See `ARCHITECTURE.md` §10 step 8 for the full writeup, including what
+would mean this fix needs a different approach (a console warning to
+watch for) if this specific ALSA control turns out not to support
+independent per-channel capture after all.
+
+**Re-test: mic audio now audible on the local monitor, still no
+measurable power out.** A different, narrower symptom than before - it
+confirms the capture-mute fix worked (real mic signal is reaching
+`sound.c` again), and points at plain gain-staging rather than a
+wiring/muting bug this time: `MIC_TX_INPUT_SCALE` was always a flagged
+guess, and a real mic likely peaks far below `cw_get_sample()`'s
+near-unity CW tone for ordinary speaking volume - easily enough of a
+gap that a wattmeter reads nothing while a speaker amplifier makes the
+same signal perfectly audible. Rather than re-guess a compile-time
+constant (another edit/rebuild/restart cycle), added a live,
+runtime-adjustable `mic_tx_gain` multiplier on top of the fixed unit
+conversion - reachable via a new rigctld extension (`l`/`L MICGAIN`)
+and a new "Mic Gain (TX, USB/LSB)" slider in `tools/rigctl_panel.py`,
+so the next several bisection trials against a real wattmeter can
+happen live while transmitting, the same way `AF` volume already
+works. Not yet re-tested - next step is keying up and raising that
+slider while watching the wattmeter.
+
 See `ARCHITECTURE.md` §10 for the measured/verified detail on all eight
 steps, including these follow-ups.
 
