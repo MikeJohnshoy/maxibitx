@@ -55,10 +55,12 @@ now on firmer footing. **Step 5's TX side has its own on-air
 confirmation now too**: the first real CW transmission on the new live
 `tx_pipeline.c` path was copied by a remote receiver exactly on
 frequency — dial accuracy confirmed in both directions (RX via W1AW,
-step 7; TX via this remote copy, step 5). Image rejection and
-transmitted power on air are still open (step 5's own entry has the
-detail). See §10 for the actual measured/verified detail on all seven
-steps.
+step 7; TX via this remote copy, step 5). A real wattmeter check at
+7.030MHz then confirmed transmitted power too: 4.9W ± 0.2W, matching
+the old scheme's own calibrated 40m target — `TX_GAIN_CORRECTION`
+carries over to the new pipeline unchanged. Image rejection on air is
+the one piece of step 5 still open (step 5's own entry has the detail).
+See §10 for the actual measured/verified detail on all seven steps.
 What's left for RX specifically: the on-air listening comparison itself
 (step 7's own entry) — the code is complete and integration-tested
 (`src/rx_audio_test.c`), but "sounds at least as good for real CW copy"
@@ -908,12 +910,25 @@ for keying an external accessory's PTT, not this input line.)
    receiver on the other end rather than a bench measurement. Pairs with
    step 7's RX-side W1AW confirmation — both directions of this rebuild
    are now dial-accurate on real hardware. Still open from this step:
-   image rejection and transmitted power (the wattmeter re-check above)
-   haven't been separately measured on air yet — a clean, on-frequency
-   copy is strong evidence the fundamental is landing correctly, but says
-   nothing about how well the unwanted sideband is suppressed or whether
-   `TX_GAIN_CORRECTION` still gives the same output power the old scheme
-   did.
+   image rejection hasn't been separately measured on air yet — a clean,
+   on-frequency copy is strong evidence the fundamental is landing
+   correctly, but says nothing about how well the unwanted sideband is
+   suppressed.
+
+   **Transmitted power confirmed on a real wattmeter.** Key-down at
+   7.030MHz (40m, `TX_DRIVE`=50, `scale`=0.00112, `TX_GAIN_CORRECTION`
+   =0.045 — the same values `tx_power_calibration.md` calibrated for the
+   old direct-NCO scheme) reads 4.9W into the wattmeter, ±0.2W across
+   repeated key-downs — squarely inside the original 4.7-5.5W acceptance
+   window that whole calibration pass used, and close to that old
+   scheme's own confirmed 40m reading (5.6W) given the ±0.5-0.8W
+   session-to-session variability that calibration bench session itself
+   documented. This directly answers the "genuinely still open" question
+   above: `tx_pipeline.c`'s real, keyed CW envelope carries the same
+   transmitted power through the new pipeline as the old scheme did, not
+   just the same amplitude for a steady bench tone — `TX_GAIN_CORRECTION`
+   needs no adjustment for the new path. Only image rejection remains
+   unverified on air for this step.
 6. **Done, bench-only.** Wrote a new, parallel module (`src/rx_filter.c`/`.h`)
    implementing §5's RX plan: the same `fft_filter.c` overlap-save engine
    TX uses, with pitch and width as live `rx_filter_retune()` parameters
