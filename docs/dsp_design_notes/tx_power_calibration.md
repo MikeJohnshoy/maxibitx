@@ -5,7 +5,11 @@ Status: **done** (2026-09) - all 9 `[tx_band]` entries in
 window at `TX_DRIVE`=50; see §5's worksheet for the final numbers. The bench procedure below - one popular QRP
 CW frequency per band, into a dummy load - is what produced the final
 values; §7 is still worth reading if a future board revision needs this
-re-run and a band won't reach target.
+re-run and a band won't reach target. **§8**: these numbers were
+re-confirmed on real hardware after `ARCHITECTURE.md` §10 step 5
+replaced the CW TX signal chain this calibration was originally done
+against (`tx_pipeline.c`'s shared FFT pipeline, not the old direct-NCO
+scheme) - same `scale`/`TX_GAIN_CORRECTION`, no change needed.
 
 ## 1. Background
 
@@ -161,3 +165,27 @@ Whatever the outcome, keep the measured-vs-target gap documented here
 rather than silently accepted - a future board revision or PA change is
 the kind of thing that would make it worth re-running this procedure
 from scratch.
+
+## 8. Re-check after the step 5 pipeline swap
+
+`ARCHITECTURE.md` §10 step 5 replaced `cw.c`'s old direct-to-DAC CW
+scheme with `tx_pipeline.c`'s shared FFT pipeline (§1/§2 above describe
+what this calibration was originally done against - the old scheme).
+`tx_pipeline.c` is unity-gain by construction for a steady bench tone
+(step 4's Case A, `ARCHITECTURE.md` §10), so the working assumption was
+that `scale`/`TX_GAIN_CORRECTION` would carry over unchanged - but that
+was an inference from a steady tone, not a measurement of a real keyed
+CW envelope, so it stayed flagged as genuinely open (§10 step 5's
+writeup) rather than assumed.
+
+Confirmed on real hardware: key-down at 7.030MHz (40m, the same test
+frequency and `scale`=0.00112/`TX_GAIN_CORRECTION`=0.045 as §5's
+worksheet) reads **4.9W, ±0.2W** across repeated key-downs - inside the
+4.7-5.5W acceptance window this whole calibration pass used, and
+consistent with the old scheme's own confirmed 40m reading (5.6W) given
+the ±0.5-0.8W session-to-session variability §5 itself documented. No
+`scale`/`TX_GAIN_CORRECTION` change needed for the new pipeline on this
+band. The other eight bands haven't been individually re-confirmed
+under the new pipeline yet - worth a quick pass if any of them ever
+seem off, but not treated as a blocker given 40m (a representative
+midpoint of the HF range this hardware covers) transferred cleanly.
