@@ -1,16 +1,15 @@
-# maxiBitx — an all-mode TX/RX pipeline, built on miniBitx
+# maxibitx — an all-mode TX/RX pipeline, built on minibitx
 
-maxiBitx is a follow-on project to
-[miniBitx](https://github.com/MikeJohnshoy/minibitx)'s control and
-hardware layer, adding an all-mode (SSB/CW/DIGITAL) TX processing
-pipeline in the style of sbitx's own FFT-based approach. 
-miniBitx was a first attempt to assemble the fundamental sbitx
-radio support functions into a clean SDR platform to build on.
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for more
-of how we got here.
+maxibitx is a fresh, separate project (not a fork or branch) started
+from [minibitx](https://github.com/MikeJohnshoy/minibitx)'s control and
+hardware layer, adding a real all-mode (SSB + CW, v1) TX processing
+pipeline in the style of sbitx's own FFT-based approach — "only
+better," per the specific bugs already root-caused on sbitx/zbitx. The
+full rationale, the shared-FFT-pipeline design decision, and the build
+order are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 **Current state: build order steps 1-7 of `ARCHITECTURE.md`.**
-Step 1 carried miniBitx over unchanged. Step 2 added the shared FFT
+Step 1 carried minibitx over unchanged. Step 2 added the shared FFT
 overlap-save filter as a standalone, bench-verified primitive
 (`src/fft_filter.c`/`.h`, `make test-fft-filter && ./test-fft-filter`).
 Step 3 made mode a real, single-owner value (`radio_set_mode()`/
@@ -24,10 +23,11 @@ clk2 correction are gone - CW TX now runs on the shared FFT pipeline for
 real, not just on the bench. `docs/03_tx_processing_pipeline.md` (and
 the "Transmit" line below) describes the *old*, now-replaced scheme;
 see that doc's own updated intro and `ARCHITECTURE.md` §10 step 5 for
-what actually runs today, its bench provenance, and what's still
-outstanding (on-air re-verification of dial accuracy, image rejection,
-and transmitted power against a wattmeter - not yet done on real
-hardware, only bench-proven so far). Step 6 added the RX-side
+what actually runs today and its bench provenance. **Dial accuracy is
+now confirmed on air**: the first real CW transmission on this pipeline
+was copied by a remote receiver exactly on frequency. Still outstanding:
+image rejection and transmitted power against a wattmeter, not yet
+separately checked on real hardware. Step 6 added the RX-side
 counterpart, bench-only: a new `src/rx_filter.c`/`.h` module
 (`make test-rx-filter && ./test-rx-filter`) implementing the same shared
 FFT engine for `rx_audio.c`'s stage 3, pitch/width now live parameters
@@ -48,7 +48,7 @@ be made on real hardware, not on a bench; `rx_audio.c`'s
 **First real on-air test of step 7** found receive audio working and the
 elliptic filter still effective, plus follow-ups (`ARCHITECTURE.md` §10
 step 7's own entries have the full detail), all now resolved. Startup
-was noticeably slower than miniBitx's - root cause was `rx_filter.c`'s
+was noticeably slower than minibitx's - root cause was `rx_filter.c`'s
 new, larger `FFTW_MEASURE` plan search compounding with
 `tx_pipeline.c`'s pre-existing one, both paid at every process start -
 fixed by a new `fft_filter.c` `filter_new_ex()` that lets both use
@@ -81,14 +81,14 @@ measured/verified detail on all seven steps, including these follow-ups.
 
 ---
 
-miniBitx was a project to experiment with software from the sbitx codebase. 
-The 'mini' in miniBitx means we're assembling the minimal set of code necessary to configure and operate the sbitx hardware with the best performance possible.
-Code for each required function has been pulled from the sbitx baseline, refined and added to miniBitx.
-miniBitx can now be compiled and run on the Rpi-4 in the sbitx to demonstrate and test performance.
-Mature, highly developed external Software Defined Radio (SDR) applications are being used with miniBitx to find the upper limit of the sbitx processing chain.
+minibitx is a project to experiment with software from the sbitx codebase. 
+The 'mini' in minibitx means we're assembling the minimal set of code necessary to configure and operate the sbitx hardware with the best performance possible.
+Code for each required function has been pulled from the sbitx baseline, refined and added to minibitx.
+minibitx can now be compiled and run on the Rpi-4 in the sbitx to demonstrate and test performance.
+Mature, highly developed external Software Defined Radio (SDR) applications are being used with minibitx to find the upper limit of the sbitx processing chain.
 Lessons learned in this project can be folded back into sbitx or used in other projects.
 
-The miniBitx receive processing pipeline is largely dictated by the sbitx hardware.
+The minibitx receive processing pipeline is largely dictated by the sbitx hardware.
 Some significant changes in the digital signal processing software design are being experimented with.
 
 ```
@@ -134,9 +134,9 @@ Some significant changes in the digital signal processing software design are be
 ```
 A transmit processing pipeline also exists (just imagine the reverse of the process above), currently for CW transmission only.
 
-A secondary miniBitx objective was to replace code dependent on deprecated libraries, so wiringPi has been replaced with libgpio.  The 'bit banging' code used for i2c bus was replaced with i2c support built into the kernel.  
+A secondary minibitx objective is to replace code dependent on deprecated libraries, so wiringPi has been replaced with libgpio.  The 'bit banging' code used for i2c bus was replaced with i2c support built into the kernel.  
 
-miniBitx is quite small - much of the code is in the interface software that passes data through various protocols (hpsdr protocol 1, USB audio and control gadget, and UDP interface) to external SDR applications.
+minibitx is quite small - much of the code is in the interface software that passes data through various protocols (hpsdr protocol 1, USB audio and control gadget, and UDP interface) to external SDR applications.
 
 Changes: 
 - bit-banging code replaced with kernel functions
@@ -181,7 +181,7 @@ architecture and roadmap:
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | **maxibitx's own design rationale and build order** — why this is a fresh repo, the shared FFT TX/RX pipeline decision, what's still open |
 | [`docs/01_hardware_init_and_control.md`](docs/01_hardware_init_and_control.md) | GPIO, si5351/I2C, WM8731 codec bring-up |
 | [`docs/02_rx_processing_pipeline.md`](docs/02_rx_processing_pipeline.md) | Antenna to baseband I/Q, stage by stage |
-| [`docs/03_tx_processing_pipeline.md`](docs/03_tx_processing_pipeline.md) | What TX support exists today (still miniBitx's) and what's planned (`ARCHITECTURE.md`) |
+| [`docs/03_tx_processing_pipeline.md`](docs/03_tx_processing_pipeline.md) | What TX support exists today (still minibitx's) and what's planned (`ARCHITECTURE.md`) |
 | [`docs/04_remote_control_and_iq_output.md`](docs/04_remote_control_and_iq_output.md) | rigctld, HPSDR control/IQ, USB Audio Class output |
 | [`docs/05_process_and_threading_model.md`](docs/05_process_and_threading_model.md) | Startup sequence and thread structure |
 | [`docs/dsp_design_notes/`](docs/dsp_design_notes/) | DSP work (e.g. the anti-alias FIR) and other design docs |
