@@ -459,11 +459,11 @@ static struct vfo bfo;                 // CW_PITCH_HZ mixing oscillator
 // 0.0-1.0 - see rx_audio_set_volume(). Startup default only (any CAT/USB
 // `AG` client or tools/rigctl_panel.py's own slider can still set this to
 // whatever it wants at runtime) - was 0.5 (50%), which real-hardware
-// listening found uncomfortably loud on this radio; 0.03 (3%) is where
+// listening found uncomfortably loud on this radio; 0.10 (10%) is where
 // the operator actually runs it for comfortable copy, so that's now
 // where a fresh process starts instead of requiring a manual turn-down
 // every time.
-static double rx_volume = 0.03;
+static double rx_volume = 0.10;
 
 // 1 (default) = stage 3 shapes the output, matching every design note
 // above; 0 = stage 3 is bypassed (audio from stage 2 reaches the AGC
