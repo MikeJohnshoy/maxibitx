@@ -300,6 +300,60 @@ static void sound_mixer_channel(char *card_name, char *element,
   snd_mixer_close(handle);
 }
 
+// Same per-channel idea as sound_mixer_channel() above, but for a
+// CAPTURE volume - needed now that "Capture" feeds two genuinely
+// different destinations depending on channel (rx_buf/L vs mic_buf/R -
+// see sound_set_rx_capture()'s comment below), the exact same reason
+// "Master" needed a playback-side per-channel split already. Logs (and
+// otherwise no-ops) if this element rejects an asymmetric per-channel
+// write - e.g. a single shared/ganged capture register that ALSA
+// exposes as stereo but doesn't actually let differ per channel - since
+// that would silently defeat the whole point of calling this instead of
+// sound_mixer()'s plain *_all() version.
+static void sound_mixer_capture_channel(char *card_name, char *element,
+                                          snd_mixer_selem_channel_id_t channel,
+                                          int percent) {
+  long min, max;
+  snd_mixer_t *handle;
+  snd_mixer_selem_id_t *sid;
+
+  snd_mixer_open(&handle, 0);
+  snd_mixer_attach(handle, card_name);
+  snd_mixer_selem_register(handle, NULL, NULL);
+  snd_mixer_load(handle);
+
+  snd_mixer_selem_id_alloca(&sid);
+  snd_mixer_selem_id_set_index(sid, 0);
+  snd_mixer_selem_id_set_name(sid, element);
+  snd_mixer_elem_t *elem = snd_mixer_find_selem(handle, sid);
+
+  if (!elem) {
+    fprintf(stderr, "sound_mixer_capture_channel: '%s' not found on %s\n", element, card_name);
+    snd_mixer_close(handle);
+    return;
+  }
+
+  if (snd_mixer_selem_has_capture_volume(elem)) {
+    snd_mixer_selem_get_capture_volume_range(elem, &min, &max);
+    int err = snd_mixer_selem_set_capture_volume(elem, channel, percent * max / 100);
+    if (err < 0) {
+      fprintf(stderr,
+              "sound_mixer_capture_channel: '%s' on %s rejected a per-channel "
+              "capture write (%s) - this control may be a single shared/ganged "
+              "register rather than independent L/R; check `amixer -c 0 sget "
+              "'%s'` before trusting per-channel capture behavior here\n",
+              element, card_name, snd_strerror(err), element);
+    }
+  } else {
+    fprintf(stderr,
+            "sound_mixer_capture_channel: '%s' on %s has no capture volume - "
+            "per-channel level not applied\n",
+            element, card_name);
+  }
+
+  snd_mixer_close(handle);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Codec hardware setup - barebones WM8731 init                      */
 /* ------------------------------------------------------------------ */
@@ -307,8 +361,22 @@ void setup_audio_codec(void) {
   sound_mixer("hw:0", "Input Mux",
               0); // 'Line In' (bench-confirmed - see RX_CAPTURE_GAIN_PERCENT's comment above)
   sound_mixer("hw:0", "Line", RX_LINE_INPUT_ON); // just un-mutes the line path - see comment above
-  sound_mixer("hw:0", "Capture", RX_CAPTURE_GAIN_PERCENT); // the real analog gain stage
-  sound_mixer("hw:0", "Mic", MIC_CAPTURE_GAIN_PERCENT); // mic input gain - see its comment above
+  sound_mixer("hw:0", "Capture", RX_CAPTURE_GAIN_PERCENT); // both channels' starting gain - see
+                                                            // sound_set_rx_capture()'s comment for
+                                                            // why only L gets touched from here on
+  sound_mixer("hw:0", "Mic", MIC_CAPTURE_GAIN_PERCENT); // mic input gain - see its comment above.
+                                                         // Genuinely unconfirmed whether this does
+                                                         // anything real on this board at all -
+                                                         // 'Input Mux' is locked to 'Line' (above),
+                                                         // and if that means the codec's OWN internal
+                                                         // mic preamp/mux path is never connected to
+                                                         // the ADC in the first place (common for a
+                                                         // single-mux codec input stage), this
+                                                         // control could be entirely inert - see
+                                                         // sound_set_rx_capture()'s comment for why
+                                                         // 'Capture' (not 'Mic') looks like the more
+                                                         // likely real point of control for mic level
+                                                         // on this specific board.
 
   // "Master" L/R are independent - see LOCAL_SPEAKER_GAIN_PERCENT's
   // comment above. L (local speaker/headphone) is set once, here, for
@@ -330,8 +398,34 @@ void setup_audio_codec(void) {
 // docs/dsp_design_notes/rx_gain_and_level_calibration.md §8 for why
 // (protects the ADC from whatever bleeds into RX during TX) and the
 // exact ordering this depends on.
+//
+// LEFT (RX/Line-in) channel only, as of docs/ARCHITECTURE.md build
+// order step 8's first real SSB test - deliberately NOT the whole
+// element any more. Before this, this function called plain
+// sound_mixer("hw:0", "Capture", ...), which uses *_all() and writes
+// the identical value to BOTH channels - harmless while "Capture" only
+// ever fed rx_buf/L, but step 8 made mic_buf/R a second, genuine
+// consumer of this exact same ALSA element (the board almost certainly
+// routes the physical microphone onto the codec's Line-In-RIGHT pin
+// rather than through the codec's own separate internal mic preamp -
+// 'Input Mux' being bench-confirmed locked to 'Line', not 'Mic', is
+// what points at this - see setup_audio_codec()'s 'Mic' comment).
+// Left unfixed, every single TX burst zeroed mic_buf's real analog
+// level the instant it started (radio_tx_apply() calls this before
+// PTT/the relay/either clock), silently defeating the entire USB/LSB
+// mic path no matter what MIC_TX_INPUT_SCALE or MIC_CAPTURE_GAIN_PERCENT
+// were set to - a real, first-on-air-test bug (ARCHITECTURE.md §10 step
+// 8's on-air follow-up), not a hypothetical. RIGHT (mic) is now left
+// alone through every TX/RX transition, in every mode - harmless for CW
+// (which never reads mic_buf), and exactly what USB/LSB need. Depends on
+// this ALSA element actually supporting independent per-channel capture
+// volume rather than a single shared/ganged register -
+// sound_mixer_capture_channel() logs a warning if a per-channel write is
+// rejected, which would mean this needs a different fix (e.g. skipping
+// the mute entirely in USB/LSB) instead.
 void sound_set_rx_capture(int enable) {
-  sound_mixer("hw:0", "Capture", enable ? RX_CAPTURE_GAIN_PERCENT : 0);
+  sound_mixer_capture_channel("hw:0", "Capture", SND_MIXER_SCHN_FRONT_LEFT,
+                               enable ? RX_CAPTURE_GAIN_PERCENT : 0);
 }
 
 // Sets "Master"'s LEFT channel only - the local speaker/headphone output
