@@ -8,7 +8,7 @@ better," per the specific bugs already root-caused on sbitx/zbitx. The
 full rationale, the shared-FFT-pipeline design decision, and the build
 order are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-**Current state: build order steps 1-7 of `ARCHITECTURE.md`.**
+**Current state: build order steps 1-8 of `ARCHITECTURE.md`.**
 Step 1 carried minibitx over unchanged. Step 2 added the shared FFT
 overlap-save filter as a standalone, bench-verified primitive
 (`src/fft_filter.c`/`.h`, `make test-fft-filter && ./test-fft-filter`).
@@ -83,8 +83,28 @@ filter turned out to be the narrower, deeper filter of the two by every
 measure (tighter -3dB width, a stopband floor 20-30dB below the
 elliptic's own ripple-limited one), so it isn't quietly under-filtering;
 the resonance-vs-flat-response explanation holds up. Elliptic stays the
-default on that basis. See `ARCHITECTURE.md` §10 for the
-measured/verified detail on all seven steps, including these follow-ups.
+default on that basis.
+
+**Step 8 wires up SSB PTT/mic audio, code-complete, on-air unverified.**
+`cw.c`'s key-polling function (still the one physical GPIO line,
+`CW_KEY`) now reads that line differently depending on the current mode:
+a straight key with semi break-in in CW (unchanged), or an immediate mic
+PTT switch in USB/LSB - real sbitx's own `sbitx_gtk.c` source confirms
+this is genuinely the same physical contact on the hardware ("Farhan
+sometimes demonstrates operating CW with his thumb on the mic PTT
+switch"), so no new GPIO was needed. `sound.c` now branches its TX audio
+generation on mode too: CW keeps feeding `cw.c`'s tone through the
+shared `tx_pipeline.c` instance as before; USB/LSB instead feed real mic
+audio through that same instance, selecting upper/lower sideband to
+match. The WM8731's 'Mic' capture gain, previously muted, is un-muted to
+a first-guess level. None of the new mic-audio gain staging has been
+bench- or air-checked yet - unlike CW's own wattmeter-confirmed levels,
+this is genuinely untested until a first real SSB transmission happens.
+See `ARCHITECTURE.md` §10 step 8 for the full detail, including the
+sbitx source cross-check that resolved the PTT-wiring question.
+
+See `ARCHITECTURE.md` §10 for the measured/verified detail on all eight
+steps, including these follow-ups.
 
 ---
 
