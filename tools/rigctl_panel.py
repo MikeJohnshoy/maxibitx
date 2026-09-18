@@ -358,6 +358,8 @@ class Panel(tk.Tk):
         self._syncing_narrow = False
         # Same guard, same reasoning, for the FFT-filter selector below.
         self._syncing_fftfilt = False
+        # Same guard, same reasoning, for the mode selector below.
+        self._syncing_mode = False
 
         cfg = load_config()
 
@@ -398,6 +400,28 @@ class Panel(tk.Tk):
             ttk.Button(steps, text=label, width=5,
                        command=lambda d=delta: self.on_step_clicked(d)).pack(side="left", padx=2)
 
+        # --- mode ---
+        # rigctld's m/M (radio.c's radio_get_mode()/radio_set_mode(),
+        # docs/ARCHITECTURE.md build order step 3/8) - the same real,
+        # single-owner mode value both this panel and the Kenwood CAT
+        # surface (usb_gadget.c) now agree on. Matters a lot more than it
+        # used to as of step 8: CW/USB/LSB now genuinely select a
+        # different TX audio source and sideband in sound.c/cw.c (see
+        # ARCHITECTURE.md §10 step 8), not just a cosmetic label - keying
+        # the PTT/key line in the wrong mode is a real, easy way to key
+        # TX with no audible result (e.g. still in CW while trying to
+        # talk), which is exactly the kind of mixup this control exists
+        # to make obvious and quick to fix. DIGITAL is included for
+        # completeness (a real, settable value on the wire) even though
+        # nothing generates TX audio for it yet - see radio.h's enum
+        # comment.
+        mode = ttk.LabelFrame(self, text="Mode", padding=8)
+        mode.grid(row=2, column=0, sticky="ew", padx=8, pady=4)
+        self.mode_var = tk.StringVar(value="CW")
+        for i, name in enumerate(("CW", "USB", "LSB", "DIGITAL")):
+            ttk.Radiobutton(mode, text=name, value=name, variable=self.mode_var,
+                             command=self.on_mode_changed).grid(row=0, column=i, padx=(0 if i == 0 else 10, 0))
+
         # --- RIT ---
         # rigctld's j/J (radio.c's radio_set_rit()/radio_get_rit()) - a
         # receive-only offset, see this file's module docstring. Unlike
@@ -406,7 +430,7 @@ class Panel(tk.Tk):
         # real Hamlib rigs use - so Clear is just "J 0" spelled out as
         # its own button for a one-click reset mid-QSO.
         rit = ttk.LabelFrame(self, text="RIT - receive only (Hz)", padding=8)
-        rit.grid(row=2, column=0, sticky="ew", padx=8, pady=4)
+        rit.grid(row=3, column=0, sticky="ew", padx=8, pady=4)
         self.rit_display_var = tk.StringVar(value="—")
         ttk.Label(rit, textvariable=self.rit_display_var, font=("monospace", 16)).grid(
             row=0, column=0, columnspan=6, pady=(0, 6))
@@ -428,7 +452,7 @@ class Panel(tk.Tk):
 
         # --- volume ---
         vol = ttk.LabelFrame(self, text="Volume", padding=8)
-        vol.grid(row=3, column=0, sticky="ew", padx=8, pady=(4, 8))
+        vol.grid(row=4, column=0, sticky="ew", padx=8, pady=(4, 8))
         self.vol_var = tk.IntVar(value=50)
         self.vol_scale = ttk.Scale(vol, from_=0, to=100, orient="horizontal",
                                     variable=self.vol_var, length=280,
@@ -447,7 +471,7 @@ class Panel(tk.Tk):
         # u/U NARROW (this server's own extension, not a real Hamlib
         # function - see hamlib.c's u/U comment).
         nf = ttk.LabelFrame(self, text="RX Filter", padding=8)
-        nf.grid(row=4, column=0, sticky="ew", padx=8, pady=(0, 8))
+        nf.grid(row=5, column=0, sticky="ew", padx=8, pady=(0, 8))
         self.narrow_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(nf, text="Narrow CW filter (~300Hz)", variable=self.narrow_var,
                          command=self.on_narrow_toggled).grid(row=0, column=0, sticky="w")
@@ -468,7 +492,7 @@ class Panel(tk.Tk):
         # drive a network write, just a bar + label kept current by
         # refresh_once()'s poll, same as the frequency readout above.
         sm = ttk.LabelFrame(self, text="Signal Strength (uncalibrated)", padding=8)
-        sm.grid(row=5, column=0, sticky="ew", padx=8, pady=(0, 8))
+        sm.grid(row=6, column=0, sticky="ew", padx=8, pady=(0, 8))
         self.smeter_canvas_w = 380
         self.smeter_canvas_h = 40
         self.smeter_canvas = tk.Canvas(sm, width=self.smeter_canvas_w,
@@ -482,7 +506,7 @@ class Panel(tk.Tk):
 
         # --- spectrum ---
         spec = ttk.LabelFrame(self, text="Spectrum (±15kHz around dial)", padding=8)
-        spec.grid(row=6, column=0, sticky="ew", padx=8, pady=(0, 8))
+        spec.grid(row=7, column=0, sticky="ew", padx=8, pady=(0, 8))
         self.spectrum_canvas_w = 560
         self.spectrum_canvas_h = 180
         self.spectrum_canvas = tk.Canvas(spec, width=self.spectrum_canvas_w,
@@ -576,16 +600,19 @@ class Panel(tk.Tk):
         freq_reply = self.client.query("f")
         rit_reply = self.client.query("j")
         vol_reply = self.client.query("l AF")
+        mode_reply = self.client.query("m")
         narrow_reply = self.client.query("u NARROW")
         fftfilt_reply = self.client.query("u FFTFILT")
         strength_reply = self.client.query("l STRENGTH")
         if freq_reply is None or rit_reply is None or vol_reply is None \
-                or narrow_reply is None or fftfilt_reply is None or strength_reply is None:
+                or mode_reply is None or narrow_reply is None or fftfilt_reply is None \
+                or strength_reply is None:
             self.after(0, self.disconnect)
             return
         self.after(0, lambda: self.apply_freq(freq_reply))
         self.after(0, lambda: self.apply_rit(rit_reply))
         self.after(0, lambda: self.apply_volume(vol_reply))
+        self.after(0, lambda: self.apply_mode(mode_reply))
         self.after(0, lambda: self.apply_narrow(narrow_reply))
         self.after(0, lambda: self.apply_fftfilt(fftfilt_reply))
         self.after(0, lambda: self.apply_strength(strength_reply))
@@ -668,6 +695,27 @@ class Panel(tk.Tk):
         if db is not None:
             x = x_of(db)
             canvas.create_line(x, 4, x, h - 4, fill="#fff", width=2)
+
+    def apply_mode(self, reply):
+        # hamlib.c's "m" replies with TWO lines - mode name, then a
+        # cosmetic passband number (see its own comment) - both written
+        # in one send_line() call server-side, so RigctlClient.query()'s
+        # generic "read until the buffer ends in a newline" loop almost
+        # always gets both in one recv() and returns them joined by an
+        # internal "\n" (e.g. "CW\n2400"). Only the first line matters
+        # here. (In the unlikely event the two lines arrive in separate
+        # TCP segments, query() would return just the first line early -
+        # still fine for this parse, though the leftover second line
+        # would then desync the NEXT command's reply; every command this
+        # panel sends is short enough, on a local/LAN connection, that
+        # this hasn't been observed in practice - flagged rather than
+        # silently assumed away.)
+        name = reply.split("\n")[0].strip()
+        if name not in ("CW", "USB", "LSB", "DIGITAL"):
+            return
+        self._syncing_mode = True
+        self.mode_var.set(name)
+        self._syncing_mode = False
 
     def apply_narrow(self, reply):
         try:
@@ -755,6 +803,15 @@ class Panel(tk.Tk):
         pct = int(round(self.vol_var.get()))
         val = pct / 100.0
         threading.Thread(target=lambda: self.client.query(f"L AF {val:.3f}"), daemon=True).start()
+
+    def on_mode_changed(self):
+        if self._syncing_mode:
+            return  # apply_mode() is syncing from a poll reply, not an operator click
+        if not self.client.connected():
+            return
+        name = self.mode_var.get()
+        threading.Thread(target=lambda: self.client.query(f"M {name} 2400"),
+                          daemon=True).start()
 
     def on_narrow_toggled(self):
         if self._syncing_narrow:
