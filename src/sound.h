@@ -48,4 +48,23 @@ void sound_set_local_monitor(int percent);
    leaves the LEFT channel (sound_set_local_monitor(), above) untouched. */
 void sound_set_tx_drive(int percent);
 
+/* Live multiplier on top of MIC_TX_INPUT_SCALE's fixed int32->float
+   conversion (sound.c's cw_tx_active() branch) - USB/LSB's actual TX
+   audio gain, separate from that fixed unit conversion the same way
+   rx_audio.c's rx_volume is separate from its AGC. Unlike TX_DRIVE (a
+   compile-time constant, no live control - docs/dsp_design_notes/
+   tx_power_calibration.md §6), this is deliberately runtime-adjustable
+   from first principles: mic level varies with the physical mic/preamp/
+   how hard the operator talks, in a way a single build-time guess can't
+   usefully anticipate (docs/ARCHITECTURE.md §10 step 8's on-air
+   follow-up - "hear my voice, no measurable power" - is exactly this
+   still being uncalibrated), and bisecting it against a real wattmeter
+   reading needs many quick trials, not an edit/rebuild/restart cycle
+   per trial. Starts at 1.0 (no extra gain beyond MIC_TX_INPUT_SCALE's
+   raw conversion) - reachable remotely via rigctld's l/L MICGAIN (this
+   server's own extension, see hamlib.c) and tools/rigctl_panel.py's Mic
+   Gain slider. Clamped to [0, SOUND_MIC_TX_GAIN_MAX] - see sound.c. */
+void sound_set_mic_tx_gain(double gain);
+double sound_get_mic_tx_gain(void);
+
 #endif /* SOUND_H */
