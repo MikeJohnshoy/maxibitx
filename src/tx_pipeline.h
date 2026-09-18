@@ -92,6 +92,36 @@
 // larger fixed 700Hz residual (CW_PITCH_HZ itself) there too.
 #define TX_IF_SHIFT_BINS ((int)(TX_IF_SHIFT_HZ / TX_PIPELINE_BIN_HZ + 0.5f))
 
+// TX_IF_SHIFT_HZ/_BINS above only works for TX_PIPELINE_KEEP_UPPER
+// (CW/USB/DIGITAL): it was derived to take the KEPT, POSITIVE-frequency
+// half's content (a real tone's spectrum always has energy at both +f
+// and -f - zero_sideband() keeps one, discards the other) and rotate it
+// up onto TX_PIPELINE_BENCH_XTAL_CENTER_HZ. TX_PIPELINE_KEEP_LOWER
+// (LSB) keeps the OTHER half instead - NEGATIVE-frequency content - so
+// applying the SAME rotation to it lands the result at a completely
+// different, uncentered frequency (docs/ARCHITECTURE.md build order
+// step 8's on-air follow-up: LSB measured a hard 0W while USB, the only
+// thing sideband-different, put out full rated power - this constant
+// being reused unmirrored for both is exactly why: LSB's product was
+// landing far enough off TX_PIPELINE_BENCH_XTAL_CENTER_HZ to fall on
+// the crystal filter's stopband skirt instead of its passband).
+//
+// The fix is the mirror-image derivation: for a real tone at
+// -CW_PITCH_HZ (the kept half when the tone itself is +CW_PITCH_HZ) to
+// land back on that same TX_PIPELINE_BENCH_XTAL_CENTER_HZ target,
+//   shift_hz_lsb = bfo_freq - xtal_filter_center + CW_PITCH_HZ
+//                = 22600 + 700 = 23300 Hz
+// (the sign on CW_PITCH_HZ flips relative to TX_IF_SHIFT_HZ above -
+// everything else is identical). This also has the property that
+// matters for a real (not single-tone) audio passband: USB's whole
+// 300-3000Hz band and LSB's mirrored -300..-3000Hz band both end up
+// straddling the same ~22600Hz IF anchor point, extending in opposite
+// directions from it - USB upward, LSB downward - which is exactly
+// what real USB vs. LSB are supposed to do relative to a shared carrier
+// placement, not two unrelated numbers.
+#define TX_IF_SHIFT_HZ_LSB ((float)(TX_PIPELINE_BENCH_BFO_FREQ_HZ - TX_PIPELINE_BENCH_XTAL_CENTER_HZ + CW_PITCH_HZ))
+#define TX_IF_SHIFT_BINS_LSB ((int)(TX_IF_SHIFT_HZ_LSB / TX_PIPELINE_BIN_HZ + 0.5f))
+
 // Which half of the spectrum survives the explicit sideband-zero step -
 // see fft_filter.h's filter_forward() comment on why this is the
 // caller's job, not the filter's. Matches real sbitx's MODE_LSB/MODE_CWR
