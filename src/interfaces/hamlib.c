@@ -22,6 +22,7 @@
                        // constant here would risk it drifting out of
                        // sync with radio.h's real one.
 #include "rx_audio.h"
+#include "sound.h"    // sound_set_mic_tx_gain()/sound_get_mic_tx_gain() - l/L MICGAIN below
 
 static int listen_fd = -1;
 static volatile int running = 0;
@@ -258,6 +259,21 @@ static int handle_line(int fd, char *line)
             snprintf(buf, sizeof(buf), "%d\n", db);
             send_line(fd, buf);
             printf("rigctl: l STRENGTH -> %d (dB relative to S9)\n", db);
+        } else if (strcmp(level_name, "MICGAIN") == 0) {
+            // This server's own extension (not a real Hamlib RIG_LEVEL,
+            // unlike AF/STRENGTH above) - the raw sound.c mic_tx_gain
+            // multiplier itself, not a 0.0-1.0 normalized value like AF,
+            // since unlike volume there's no natural "100%" ceiling for
+            // this one (see sound_set_mic_tx_gain()'s comment, sound.h,
+            // for why it's a live control at all). Same "extend the
+            // protocol with a plain string name, comment why it's not
+            // standard" precedent u/U NARROW/FFTFILT already set - just
+            // living under l/L instead of u/U since this is a continuous
+            // value, not an on/off func.
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%.6f\n", sound_get_mic_tx_gain());
+            send_line(fd, buf);
+            printf("rigctl: l MICGAIN -> %.6f\n", sound_get_mic_tx_gain());
         } else {
             send_rprt(fd, -1);
             printf("rigctl: l %s -> unsupported level\n", level_name);
@@ -279,6 +295,11 @@ static int handle_line(int fd, char *line)
             rx_audio_set_volume(percent);
             send_rprt(fd, 0);
             printf("rigctl: L AF %.6f -> volume %d%%\n", val, percent);
+        } else if (sscanf(cmd + 1, "%31s %lf", level_name, &val) == 2 &&
+                   strcmp(level_name, "MICGAIN") == 0) {
+            sound_set_mic_tx_gain(val);  // clamps to [0, SOUND_MIC_TX_GAIN_MAX] itself
+            send_rprt(fd, 0);
+            printf("rigctl: L MICGAIN %.6f -> mic_tx_gain %.6f\n", val, sound_get_mic_tx_gain());
         } else {
             send_rprt(fd, -1);
             printf("rigctl: L %s -> unsupported level or bad args\n", cmd + 1);
