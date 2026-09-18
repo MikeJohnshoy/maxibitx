@@ -40,8 +40,15 @@ struct tx_pipeline *tx_pipeline_new(void)
 	       flags == FFTW_MEASURE ? " - MAXIBITX_TX_PIPELINE_FFTW_MEASURE set, expect a slower startup" : "");
 
 	p->filt = filter_new_ex(TX_PIPELINE_BLOCK_LEN, TX_PIPELINE_IMPULSE_LEN, flags);
-	filter_tune(p->filt, 300.0f / TX_PIPELINE_FS_HZ, 3000.0f / TX_PIPELINE_FS_HZ,
-	            TX_PIPELINE_KAISER_BETA);
+	// filter_tune_real(), not plain filter_tune() - see tx_pipeline_retune()'s
+	// comment for why this one bit is the real fix behind
+	// TX_IF_SHIFT_BINS_LSB (tx_pipeline.h): zero_sideband()/rotate_bins()
+	// below can only select and place whichever sideband's content the
+	// filter itself actually let through, and a real, on-air LSB test
+	// (docs/ARCHITECTURE.md build order step 8) found there was none to
+	// select - a hard 0W, not just a mis-tuned one.
+	filter_tune_real(p->filt, 300.0f / TX_PIPELINE_FS_HZ, 3000.0f / TX_PIPELINE_FS_HZ,
+	                  TX_PIPELINE_KAISER_BETA);
 	// Plain malloc, not fftwf_alloc_complex: this buffer is only ever a
 	// memcpy scratch for rotate_bins() below, never handed to FFTW
 	// itself, so it doesn't need FFTW's alignment guarantee.
@@ -52,7 +59,31 @@ struct tx_pipeline *tx_pipeline_new(void)
 
 int tx_pipeline_retune(struct tx_pipeline *p, float low_hz, float high_hz, float fs_hz)
 {
-	return filter_tune(p->filt, low_hz / fs_hz, high_hz / fs_hz, TX_PIPELINE_KAISER_BETA);
+	// filter_tune_real(), not plain filter_tune() - a genuine bug this
+	// session's real on-air LSB test (docs/ARCHITECTURE.md build order
+	// step 8) found the hard way: plain filter_tune()'s passband is
+	// deliberately ONE-SIDED (fft_filter.h's own header comment on it -
+	// "the *other* half of the spectrum is deliberately unwanted image
+	// content"), which is only true for a caller that only ever wants
+	// TX_PIPELINE_KEEP_UPPER. tx_pipeline_process_block()'s
+	// zero_sideband() step exists specifically so ONE shared filter can
+	// serve both TX_PIPELINE_KEEP_UPPER and TX_PIPELINE_KEEP_LOWER
+	// callers, selecting whichever half it wants per-block - but that
+	// only works if the filter itself preserves BOTH halves
+	// (filter_tune_real()'s mirrored [-high,-low] passband) for
+	// zero_sideband() to choose from. With plain filter_tune(), the
+	// filter had already thrown away every LSB caller's -300..-3000Hz
+	// content before zero_sideband(TX_PIPELINE_KEEP_LOWER) ever got a
+	// chance to keep it - not a mis-placed IF, literally nothing there
+	// to place. TX_IF_SHIFT_BINS_LSB (tx_pipeline.h) is a necessary
+	// second fix (the correctly-preserved content still needs its own,
+	// mirrored bin-rotate to land on xtal_filter_center), but this one -
+	// giving LSB something to rotate in the first place - is the fix
+	// that actually explains the measured "hard 0W, not just low power"
+	// symptom. Verified by tx_pipeline_test.c's Case D, which was
+	// reading -146dB (i.e. nothing, not a rounding error) before this
+	// change and ~0dB after it.
+	return filter_tune_real(p->filt, low_hz / fs_hz, high_hz / fs_hz, TX_PIPELINE_KAISER_BETA);
 }
 
 // Explicit sideband zero - see fft_filter.h's filter_forward() comment
@@ -109,9 +140,16 @@ void tx_pipeline_process_block(struct tx_pipeline *p, enum tx_pipeline_sideband 
 	for (int i = 0; i < TX_PIPELINE_BLOCK_LEN; i++)
 		in_c[i] = in[i];
 
+	// Which rotation lands the kept half back on
+	// TX_PIPELINE_BENCH_XTAL_CENTER_HZ depends on which half
+	// zero_sideband() just kept - see TX_IF_SHIFT_BINS_LSB's comment
+	// (tx_pipeline.h) for the on-air bug this fixes (LSB reusing
+	// KEEP_UPPER's rotation measured a hard 0W).
+	int shift_bins = (sideband == TX_PIPELINE_KEEP_LOWER) ? TX_IF_SHIFT_BINS_LSB : TX_IF_SHIFT_BINS;
+
 	filter_forward(f, in_c);
 	zero_sideband(f->freq, f->N, sideband);
-	rotate_bins(f->freq, f->N, TX_IF_SHIFT_BINS, p->rotate_scratch);
+	rotate_bins(f->freq, f->N, shift_bins, p->rotate_scratch);
 	filter_inverse(f, out_c);
 
 	// --- Per-block phase-continuity correction -----------------------
@@ -157,7 +195,15 @@ void tx_pipeline_process_block(struct tx_pipeline *p, enum tx_pipeline_sideband 
 	// applying and the general e^(j*2*pi*k*b*L/N) correction (a real
 	// phase, not just a sign) would need implementing instead.
 	long b = p->block_count++;
-	int flip = (TX_IF_SHIFT_BINS % 2 != 0) && (b % 2 != 0);
+	// Uses shift_bins (this call's actual rotation, TX_IF_SHIFT_BINS or
+	// _LSB above) rather than hardcoding TX_IF_SHIFT_BINS - the odd/even
+	// parity that decides whether this correction ever fires depends on
+	// which one was actually applied. Both happen to be odd (467 and
+	// 497), so this fix doesn't change CW/USB's own already-verified
+	// numbers - it only makes the correction correct for the new LSB
+	// rotation too, which the CW-derived hardcoded version never
+	// accounted for.
+	int flip = (shift_bins % 2 != 0) && (b % 2 != 0);
 
 	// The bin-zero+rotate above turned f->freq into a frequency-shifted
 	// analytic (one-sided-spectrum) signal - taking the real part here
