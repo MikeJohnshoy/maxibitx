@@ -464,6 +464,31 @@ class Panel(tk.Tk):
         self.vol_label = ttk.Label(vol, text="50%", width=5)
         self.vol_label.grid(row=0, column=1)
 
+        # --- mic gain (TX) ---
+        # rigctld's l/L MICGAIN (sound.c's mic_tx_gain, this server's own
+        # extension - see hamlib.c's l/L comment) - live gain on real mic
+        # audio feeding USB/LSB TX (docs/ARCHITECTURE.md §10 step 8), NOT
+        # a 0-100% volume like the RX slider above: there's no natural
+        # ceiling for "how much extra gain the mic needs," so this is a
+        # raw multiplier, 1.0 = no extra gain beyond the fixed unit
+        # conversion. Exists specifically for bisecting against a real
+        # wattmeter reading while transmitting, without a rebuild/restart
+        # between trials - the first on-air SSB test found real audio
+        # reaching the local monitor speaker but no measurable power out,
+        # consistent with this needing to go up from its 1.0 default.
+        mg = ttk.LabelFrame(self, text="Mic Gain (TX, USB/LSB)", padding=8)
+        mg.grid(row=5, column=0, sticky="ew", padx=8, pady=(0, 8))
+        self.micgain_var = tk.DoubleVar(value=1.0)
+        self.micgain_scale = ttk.Scale(mg, from_=0.0, to=64.0, orient="horizontal",
+                                         variable=self.micgain_var, length=280,
+                                         command=self.on_micgain_dragged)
+        self.micgain_scale.grid(row=0, column=0, padx=(0, 8))
+        # Same "only send on release, not every drag tick" pattern as
+        # Volume above.
+        self.micgain_scale.bind("<ButtonRelease-1>", self.on_micgain_released)
+        self.micgain_label = ttk.Label(mg, text="1.00x", width=6)
+        self.micgain_label.grid(row=0, column=1)
+
         # --- narrow filter ---
         # rx_audio.c stage 3, the ~300Hz post-demod "single signal"
         # selectivity filter - a plain on/off toggle (not a runtime-
@@ -471,7 +496,7 @@ class Panel(tk.Tk):
         # u/U NARROW (this server's own extension, not a real Hamlib
         # function - see hamlib.c's u/U comment).
         nf = ttk.LabelFrame(self, text="RX Filter", padding=8)
-        nf.grid(row=5, column=0, sticky="ew", padx=8, pady=(0, 8))
+        nf.grid(row=6, column=0, sticky="ew", padx=8, pady=(0, 8))
         self.narrow_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(nf, text="Narrow CW filter (~300Hz)", variable=self.narrow_var,
                          command=self.on_narrow_toggled).grid(row=0, column=0, sticky="w")
@@ -492,7 +517,7 @@ class Panel(tk.Tk):
         # drive a network write, just a bar + label kept current by
         # refresh_once()'s poll, same as the frequency readout above.
         sm = ttk.LabelFrame(self, text="Signal Strength (uncalibrated)", padding=8)
-        sm.grid(row=6, column=0, sticky="ew", padx=8, pady=(0, 8))
+        sm.grid(row=7, column=0, sticky="ew", padx=8, pady=(0, 8))
         self.smeter_canvas_w = 380
         self.smeter_canvas_h = 40
         self.smeter_canvas = tk.Canvas(sm, width=self.smeter_canvas_w,
@@ -506,7 +531,7 @@ class Panel(tk.Tk):
 
         # --- spectrum ---
         spec = ttk.LabelFrame(self, text="Spectrum (±15kHz around dial)", padding=8)
-        spec.grid(row=7, column=0, sticky="ew", padx=8, pady=(0, 8))
+        spec.grid(row=8, column=0, sticky="ew", padx=8, pady=(0, 8))
         self.spectrum_canvas_w = 560
         self.spectrum_canvas_h = 180
         self.spectrum_canvas = tk.Canvas(spec, width=self.spectrum_canvas_w,
@@ -600,18 +625,20 @@ class Panel(tk.Tk):
         freq_reply = self.client.query("f")
         rit_reply = self.client.query("j")
         vol_reply = self.client.query("l AF")
+        micgain_reply = self.client.query("l MICGAIN")
         mode_reply = self.client.query("m")
         narrow_reply = self.client.query("u NARROW")
         fftfilt_reply = self.client.query("u FFTFILT")
         strength_reply = self.client.query("l STRENGTH")
         if freq_reply is None or rit_reply is None or vol_reply is None \
-                or mode_reply is None or narrow_reply is None or fftfilt_reply is None \
-                or strength_reply is None:
+                or micgain_reply is None or mode_reply is None or narrow_reply is None \
+                or fftfilt_reply is None or strength_reply is None:
             self.after(0, self.disconnect)
             return
         self.after(0, lambda: self.apply_freq(freq_reply))
         self.after(0, lambda: self.apply_rit(rit_reply))
         self.after(0, lambda: self.apply_volume(vol_reply))
+        self.after(0, lambda: self.apply_micgain(micgain_reply))
         self.after(0, lambda: self.apply_mode(mode_reply))
         self.after(0, lambda: self.apply_narrow(narrow_reply))
         self.after(0, lambda: self.apply_fftfilt(fftfilt_reply))
@@ -648,6 +675,18 @@ class Panel(tk.Tk):
             return
         self.vol_var.set(pct)
         self.vol_label.configure(text=f"{pct}%")
+
+    def apply_micgain(self, reply):
+        # No _syncing guard needed, same reasoning as apply_volume above -
+        # this Scale only ever sends on a real <ButtonRelease-1> click,
+        # not a variable-write trace, so a poll-driven .set() here can't
+        # loop back into on_micgain_released().
+        try:
+            gain = float(reply)
+        except ValueError:
+            return
+        self.micgain_var.set(gain)
+        self.micgain_label.configure(text=f"{gain:.2f}x")
 
     def apply_strength(self, reply):
         try:
@@ -803,6 +842,19 @@ class Panel(tk.Tk):
         pct = int(round(self.vol_var.get()))
         val = pct / 100.0
         threading.Thread(target=lambda: self.client.query(f"L AF {val:.3f}"), daemon=True).start()
+
+    def on_micgain_dragged(self, _value):
+        # Live label update while dragging; see on_micgain_released for
+        # when the L MICGAIN command actually goes out.
+        gain = self.micgain_var.get()
+        self.micgain_label.configure(text=f"{gain:.2f}x")
+
+    def on_micgain_released(self, _event):
+        if not self.client.connected():
+            return
+        gain = self.micgain_var.get()
+        threading.Thread(target=lambda: self.client.query(f"L MICGAIN {gain:.3f}"),
+                          daemon=True).start()
 
     def on_mode_changed(self):
         if self._syncing_mode:
