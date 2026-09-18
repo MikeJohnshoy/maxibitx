@@ -51,9 +51,14 @@ left as an assumption — the FFT filter turned out to be the *narrower,
 deeper* filter of the two by every measure (-3dB width, stopband floor),
 so "little effect on the hiss" isn't the FFT filter under-filtering;
 it's consistent with the same resonance-vs-flat-response explanation,
-now on firmer footing. See §10 for the actual measured/verified
-detail on all seven steps, and step 5's own entry for what still needs
-on-air re-verification on the TX side.
+now on firmer footing. **Step 5's TX side has its own on-air
+confirmation now too**: the first real CW transmission on the new live
+`tx_pipeline.c` path was copied by a remote receiver exactly on
+frequency — dial accuracy confirmed in both directions (RX via W1AW,
+step 7; TX via this remote copy, step 5). Image rejection and
+transmitted power on air are still open (step 5's own entry has the
+detail). See §10 for the actual measured/verified detail on all seven
+steps.
 What's left for RX specifically: the on-air listening comparison itself
 (step 7's own entry) — the code is complete and integration-tested
 (`src/rx_audio_test.c`), but "sounds at least as good for real CW copy"
@@ -893,6 +898,22 @@ for keying an external accessory's PTT, not this input line.)
    had (it jumped straight from "still bench-only" to RX/SSB work below
    without ever specifying a step that both wires CW in live *and*
    checks it on air).
+
+   **Dial accuracy confirmed on air.** First real CW transmission on the
+   new live pipeline was copied by a remote receiver and reported exactly
+   on frequency — direct confirmation that `tx_pipeline.c`'s bin-rotate
+   (aimed at `xtal_filter_center` per step 4's derivation) and
+   `radio_tx_apply()`'s simplified clk2 math (no more `- CW_PITCH_HZ`
+   residual) land the transmitted signal where the dial says, with a real
+   receiver on the other end rather than a bench measurement. Pairs with
+   step 7's RX-side W1AW confirmation — both directions of this rebuild
+   are now dial-accurate on real hardware. Still open from this step:
+   image rejection and transmitted power (the wattmeter re-check above)
+   haven't been separately measured on air yet — a clean, on-frequency
+   copy is strong evidence the fundamental is landing correctly, but says
+   nothing about how well the unwanted sideband is suppressed or whether
+   `TX_GAIN_CORRECTION` still gives the same output power the old scheme
+   did.
 6. **Done, bench-only.** Wrote a new, parallel module (`src/rx_filter.c`/`.h`)
    implementing §5's RX plan: the same `fft_filter.c` overlap-save engine
    TX uses, with pitch and width as live `rx_filter_retune()` parameters
