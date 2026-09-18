@@ -172,6 +172,14 @@ that exercises `TX_PIPELINE_KEEP_LOWER` for the first time, now reading
 the old bug would have produced. Bench-proven only - not yet re-tested
 on air; next step is re-trying LSB to confirm it now matches USB.
 
+**On-air re-test confirms it: LSB and USB now put out comparable power
+at the same mic gain setting.** Step 8 is now on-air verified for both
+sidebands, not just USB. First real calibration data point for
+`mic_tx_gain` itself: the right operating point turned out to be at the
+low end of its 0-64 range, under ~5 - close to `sound.c`'s existing
+default of 1.0. An exact bisected value is still open, but doesn't
+block calling step 8 done.
+
 See `ARCHITECTURE.md` §10 for the measured/verified detail on all eight
 steps, including these follow-ups.
 
