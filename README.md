@@ -1,9 +1,9 @@
 # maxiBitx — an all-mode TX/RX pipeline, built on miniBitx
 
-maxiBitx is a fresh, separate project (not a fork or branch) built on
+maxiBitx is a follow-on project to
 [miniBitx](https://github.com/MikeJohnshoy/minibitx)'s control and
 hardware layer, adding an all-mode (SSB/CW/DIGITAL) TX processing
-pipeline in the style of sbitx's own FFT-based approach "only
+pipeline in the style of sbitx's own FFT-based approach - "only
 better". miniBitx was the first attempt to build a clean SDR platform
 the harder I looked the more I kept coming back to Farhan's choices 
 in sbitx. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for more
