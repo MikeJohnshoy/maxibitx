@@ -4,9 +4,10 @@ maxibitx is a fresh, separate project (not a fork or branch) built on
 [minibitx](https://github.com/MikeJohnshoy/minibitx)'s control and
 hardware layer, adding an all-mode (SSB/CW/DIGITAL) TX processing
 pipeline in the style of sbitx's own FFT-based approach "only
-better". The
-full rationale, the shared-FFT-pipeline design decision, and the build
-order are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+better". minibitx was the first attempt to build a clean SDR platform
+the harder I looked the more I kept coming back to Farhan's choices 
+in sbitx. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for more
+of how we got here.
 
 **Current state: build order steps 1-7 of `ARCHITECTURE.md`.**
 Step 1 carried minibitx over unchanged. Step 2 added the shared FFT
@@ -80,7 +81,7 @@ measured/verified detail on all seven steps, including these follow-ups.
 
 ---
 
-minibitx is a project to experiment with software from the sbitx codebase. 
+minibitx was a project to experiment with software from the sbitx codebase. 
 The 'mini' in minibitx means we're assembling the minimal set of code necessary to configure and operate the sbitx hardware with the best performance possible.
 Code for each required function has been pulled from the sbitx baseline, refined and added to minibitx.
 minibitx can now be compiled and run on the Rpi-4 in the sbitx to demonstrate and test performance.
@@ -133,7 +134,7 @@ Some significant changes in the digital signal processing software design are be
 ```
 A transmit processing pipeline also exists (just imagine the reverse of the process above), currently for CW transmission only.
 
-A secondary minibitx objective is to replace code dependent on deprecated libraries, so wiringPi has been replaced with libgpio.  The 'bit banging' code used for i2c bus was replaced with i2c support built into the kernel.  
+A secondary minibitx objective was to replace code dependent on deprecated libraries, so wiringPi has been replaced with libgpio.  The 'bit banging' code used for i2c bus was replaced with i2c support built into the kernel.  
 
 minibitx is quite small - much of the code is in the interface software that passes data through various protocols (hpsdr protocol 1, USB audio and control gadget, and UDP interface) to external SDR applications.
 
