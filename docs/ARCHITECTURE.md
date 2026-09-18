@@ -1720,4 +1720,22 @@ for keying an external accessory's PTT, not this input line.)
      old wrong one. Not yet re-tested on air - this is a bench-only
      proof; the next step is re-trying LSB on 40m against the wattmeter
      to confirm it now matches USB's already-working power output.
+   - **On-air re-test confirms the fix: LSB and USB now put out
+     comparable power at the same `mic_tx_gain` setting.** This closes
+     out the bench-only caveat above - the `filter_tune_real()` +
+     `TX_IF_SHIFT_BINS_LSB` fix is now on-air verified, not just
+     bench-proven, and step 8's mode-branching TX path is confirmed
+     working symmetrically for both sidebands, not just USB. Also gives
+     the first real data point for `mic_tx_gain` itself: the correct
+     operating point was found at the low end of its 0-64 range, under
+     ~5 - i.e. much closer to `sound.c`'s existing default of 1.0 than
+     to its max, consistent with the "a real mic peaks far below
+     `cw_get_sample()`'s near-unity CW tone" reasoning from the
+     gain-staging writeup above. Genuinely still open: an exact,
+     bisected optimal value (rather than just "somewhere under ~5"),
+     and whether 1.0 is close enough to leave as the compiled default or
+     worth nudging once a tighter number is in hand - neither blocks
+     step 8 being done, both are just further calibration precision, the
+     same category as the still-open ALC/power-calibration item (§9)
+     below.
 9. Power/ALC calibration for voice, per §9.
