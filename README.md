@@ -180,6 +180,16 @@ low end of its 0-64 range, under ~5 - close to `sound.c`'s existing
 default of 1.0. An exact bisected value is still open, but doesn't
 block calling step 8 done.
 
+**Sideband sense confirmed correct, not just power.** Comparable power
+alone didn't rule out USB/LSB being swapped end-to-end (a classic risk
+in a double-conversion superhet, and nothing in `radio.c`'s mixer setup
+or `maxibitx`'s own RX path could confirm it either way, since neither
+one branches on mode). Settled with a whistled steady tone watched on a
+remote receiver's waterfall instead of listened to through its mode
+demodulator, so the result only depends on which side of the dial the
+energy falls on: LSB's tone appeared below the dial, USB's above -
+both correct, not swapped.
+
 See `ARCHITECTURE.md` §10 for the measured/verified detail on all eight
 steps, including these follow-ups.
 
