@@ -31,13 +31,21 @@
 void cw_init(void);
 
 // Call once per audio block (~10.7ms - sound.c's PERIOD_FRAMES at
-// 96kHz) from the audio thread. Polls the key, manages the keying-burst
-// hang timer, and is the only place this module calls radio_set_tx().
+// 96kHz) from the audio thread. Polls the one physical key/PTT line and
+// is the only place this module calls radio_set_tx() - what a closure
+// actually means depends on radio_get_mode() (radio.h): in
+// RADIO_MODE_CW it's a straight key, managing the keying-burst semi
+// break-in hang timer same as always; in RADIO_MODE_USB/_LSB it's read
+// as an immediate mic PTT switch instead (no hang timer - see this
+// function's own comment in cw.c). RADIO_MODE_DIGITAL ignores this line
+// entirely (no TX source wired to it in that mode yet).
 void cw_poll_key(void);
 
-// True while a keying burst has TX asserted (radio_set_tx(1) called and
-// not yet released). sound.c checks this before pulling samples from
-// cw_get_sample().
+// True while cw_poll_key() has TX asserted via this key/PTT line
+// (radio_set_tx(1) called and not yet released) - true for the same
+// reason regardless of which mode's branch set it. sound.c checks this
+// before pulling TX audio samples (cw_get_sample()'s sidetone in CW
+// mode, real mic audio in USB/LSB - see sound.c).
 int cw_tx_active(void);
 
 // Call once per audio sample while cw_tx_active() is true. Returns the
