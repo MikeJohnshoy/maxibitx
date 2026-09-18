@@ -112,15 +112,35 @@
 // USB/LSB TX (see the cw_tx_active() branch below) - the mic-audio
 // counterpart to cw.c's cw_get_sample(), which is already exactly
 // [-1,1] by construction since it's a synthetic tone. Unlike that
-// tone, real mic level depends on the physical mic, the "Mic" capture
-// gain below, and how hard the operator talks - this maps full-scale
-// straight to 1.0 as the simplest possible starting point, same
-// "first cut, flag it, calibrate for real once the hardware exists"
-// discipline docs/dsp_design_notes/tx_power_calibration.md's
-// TX_GAIN_CORRECTION and rx_gain_and_level_calibration.md's
-// RX_CAPTURE_GAIN_PERCENT both started from - NOT yet checked against
-// real speech on a wattmeter or a scope.
+// tone, real mic level depends on the physical mic, the analog gain
+// ahead of the ADC, and how hard the operator talks - this maps
+// full-scale straight to 1.0 as a fixed, purely mechanical unit
+// conversion, NOT itself a tunable gain (that's mic_tx_gain below,
+// same "keep the unit conversion and the operator-adjustable gain as
+// two separate things" split rx_audio.c's rx_volume/AGC already use).
 #define MIC_TX_INPUT_SCALE (1.0 / 2147483648.0)
+
+// mic_tx_gain: live multiplier on top of MIC_TX_INPUT_SCALE above -
+// see sound_set_mic_tx_gain()'s comment (sound.h) for why this is a
+// runtime control rather than another #define needing a rebuild per
+// trial. Plain double, no lock: written from rigctld's connection
+// thread (hamlib.c's L MICGAIN), read once per TX audio block from the
+// audio thread - the exact same "eventually consistent is fine for a
+// human-timescale control knob" convention rx_audio.c's rx_volume
+// already relies on (see its own comment), not a data race that
+// matters at these update rates.
+#define SOUND_MIC_TX_GAIN_MAX 64.0
+static double mic_tx_gain = 1.0;
+
+void sound_set_mic_tx_gain(double gain) {
+  if (gain < 0.0) gain = 0.0;
+  if (gain > SOUND_MIC_TX_GAIN_MAX) gain = SOUND_MIC_TX_GAIN_MAX;
+  mic_tx_gain = gain;
+}
+
+double sound_get_mic_tx_gain(void) {
+  return mic_tx_gain;
+}
 
 /* ------------------------------------------------------------------ */
 /*  Module state                                                      */
@@ -918,13 +938,18 @@ static void *audio_loop(void *arg) {
         } else {
           // USB/LSB (docs/ARCHITECTURE.md build order step 8): real mic
           // audio (mic_buf, captured above) is the i_sample source
-          // instead of cw.c's tone - see MIC_TX_INPUT_SCALE's comment
-          // for the [-1,1]-ish conversion, still bench-unconfirmed.
-          // cw_poll_key() (cw.c) only ever asserts TX for this mode pair
-          // (plus CW) today, so this else covers exactly USB/LSB in
-          // practice.
+          // instead of cw.c's tone - MIC_TX_INPUT_SCALE does the fixed
+          // int32->float unit conversion, mic_tx_gain is the live,
+          // operator-adjustable multiplier on top of it (see both
+          // comments above/sound.h) - first on-air result (audible on
+          // the local monitor, but no measurable power out) is exactly
+          // what mic_tx_gain exists to bisect against a real wattmeter
+          // without a rebuild per trial. cw_poll_key() (cw.c) only ever
+          // asserts TX for this mode pair (plus CW) today, so this else
+          // covers exactly USB/LSB in practice.
+          double mic_gain = MIC_TX_INPUT_SCALE * mic_tx_gain;
           for (int i = 0; i < n; i++)
-            tx_audio_buf[i] = mic_buf[i] * MIC_TX_INPUT_SCALE;
+            tx_audio_buf[i] = mic_buf[i] * mic_gain;
           sideband = (tx_mode == RADIO_MODE_LSB) ? TX_PIPELINE_KEEP_LOWER
                                                   : TX_PIPELINE_KEEP_UPPER;
         }
