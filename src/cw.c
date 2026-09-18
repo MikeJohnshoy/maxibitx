@@ -1,11 +1,16 @@
 // cw.c
 //
-// Straight-key CW support: polls a physical key wired into GPIO
-// (radio_hw.h's CW_KEY line), holds PTT/the T/R relay for the duration
-// of a keying burst, and generates a single tone gated by a
-// table-driven envelope. minibitx stays a support layer for external
-// SDR apps so there is no iambic keyer, no macros - this gets clean dots and dashes
-// out, nothing more.
+// Polls the one physical key/PTT line wired into GPIO (radio_hw.h's
+// CW_KEY line) and holds PTT/the T/R relay for the duration of a burst.
+// In CW mode this is a straight key: semi break-in via a hang timer,
+// and this file also generates the single tone (gated by a table-driven
+// envelope) that both the local sidetone monitor and the shared TX
+// pipeline use. In USB/LSB mode the same physical line is read as a
+// plain mic PTT switch instead (see cw_poll_key()'s comment) - real
+// mic audio, not this file's tone, is what sound.c feeds the TX
+// pipeline in that case. minibitx stays a support layer for external
+// SDR apps so there is no iambic keyer, no macros - this gets clean
+// dots and dashes (or a plain PTT switch) in, nothing more.
 //
 // Table-driven Blackman-Harris attack/decay envelope: 480 samples (5ms
 // rise and fall time at 96kHz, similar to the implementation in sBitx's own
@@ -124,22 +129,63 @@ void cw_init(void) {
 
 void cw_poll_key(void) {
     key_down = radio_hw_key_down();
+    enum radio_mode mode = radio_get_mode();
 
-    if (key_down) {
-        if (!tx_active) {
-            tx_active = 1;
-            radio_set_tx(1);
-            //printf("key down!\n");
+    // This one physical line (radio_hw.h's CW_KEY, BCM4) is genuinely
+    // dual-purpose on real sbitx hardware, not a maxibitx-only quirk:
+    // Farhan's own sbitx_gtk.c defines the identical wiringPi pin (7,
+    // which is this same BCM4/physical-pin-7 line - see
+    // docs/01_hardware_init_and_control.md's migration table) as `PTT`,
+    // read as a straight key in CW mode and as a plain mic PTT switch in
+    // voice modes ("Farhan sometimes demonstrates operating CW with his
+    // thumb on the mic PTT switch" - it's the same contact closure
+    // either way). So sensing mic PTT needs no new GPIO at all; what was
+    // missing was this function treating a closure the same way
+    // regardless of mode. Now it doesn't.
+    if (mode == RADIO_MODE_CW) {
+        // Straight-key CW: semi break-in - the hang timer holds TX
+        // through the gaps between individual dits/dahs so the relay
+        // doesn't chatter (see CW_HANG_POLLS above). Unchanged from
+        // before this function became mode-aware.
+        if (key_down) {
+            if (!tx_active) {
+                tx_active = 1;
+                radio_set_tx(1);
+                //printf("key down!\n");
+            }
+            hang_counter = CW_HANG_POLLS;
+        } else if (tx_active) {
+            if (hang_counter > 0) {
+                hang_counter--;
+            } else {
+                radio_set_tx(0);
+                tx_active = 0;
+            }
         }
-        hang_counter = CW_HANG_POLLS;
-    } else if (tx_active) {
-        if (hang_counter > 0) {
-            hang_counter--;
-        } else {
+    } else if (mode == RADIO_MODE_USB || mode == RADIO_MODE_LSB) {
+        // Same line, read as a plain mic PTT switch instead: assert/
+        // release TX immediately with the switch, no hang timer - a
+        // voice transmission has no inter-element gap to bridge the way
+        // CW's dits/dahs do, and holding a switch down is exactly what a
+        // real PTT should do while held. Matches real sbitx's own
+        // `tx_on(TX_PTT)`/`tx_off()` on this identical GPIO
+        // (sbitx_gtk.c's main loop, PTT low -> tx_on, PTT high -> tx_off
+        // while in_tx == TX_PTT).
+        if (key_down) {
+            if (!tx_active) {
+                tx_active = 1;
+                radio_set_tx(1);
+            }
+        } else if (tx_active) {
             radio_set_tx(0);
             tx_active = 0;
         }
+        hang_counter = 0; // no semi break-in outside CW mode
     }
+    // RADIO_MODE_DIGITAL: this key line isn't wired to a TX source in
+    // that mode yet (external digital-mode audio, e.g. WSJT-X, is still
+    // unbuilt - docs/ARCHITECTURE.md) - ignore it here rather than
+    // keying an undefined transmission.
 }
 
 int cw_tx_active(void) {
