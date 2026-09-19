@@ -1,5 +1,19 @@
 # USB Gadget (UAC2 + CDC-ACM) OS Setup — Raspberry Pi 4, USB-C Port
 
+**Forward-pointer (`ARCHITECTURE.md` §10 step 9):** everything below is a
+historical bench-testing log against the gadget's original design - raw
+baseband I/Q, product string "sBitx IQ" - and is left as-is rather than
+rewritten, since it's a record of what actually happened at the time.
+The gadget itself has since been replaced end-to-end: it now carries
+real, already-demodulated 16-bit/48kHz PCM audio, genuinely bidirectional,
+and enumerates as "sBitx Audio" - see `usb_gadget.h`,
+`dsp_design_notes/usb_uac_decimation_design.md`'s own update note, and
+`10_external_digital_modes_wsjtx.md` for the current design and setup
+steps. The gadget bring-up mechanics this document covers (configfs
+layout, UDC binding/self-heal, the two kernel shutdown-hang workarounds
+in §14, FLRig/CAT setup in §13) are unaffected by that change and remain
+accurate.
+
 Status: §3-§11 are all bench-confirmed end-to-end on real hardware
 (2026-09, Pi 4, Raspberry Pi OS Trixie, Windows 11 host) - the gadget
 binds cleanly (including on repeat restarts) with no xrun flood, either
