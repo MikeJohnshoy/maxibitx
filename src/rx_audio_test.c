@@ -80,7 +80,7 @@ static double run_tone(int n, int blocks, double freq_hz) {
 			if (phase > 2.0 * M_PI)
 				phase -= 2.0 * M_PI;
 		}
-		rx_audio_process(i_samples, q_samples, n, out);
+		rx_audio_process(i_samples, q_samples, n, out, NULL);
 		if (!all_finite(out, n)) {
 			fprintf(stderr, "run_tone: out-of-range sample at block %d (n=%d) - FAIL\n", b, n);
 			exit(1);
