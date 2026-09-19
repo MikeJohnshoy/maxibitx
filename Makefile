@@ -40,7 +40,7 @@ CFLAGS  := -O3 -march=native -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces
 LDFLAGS := -lm -lasound -lpthread -ldl -lfftw3f
 SRC := src/maxibitx.c src/radio.c src/radio_hw.c src/interfaces/hpsdr_p1.c src/interfaces/usb_gadget.c src/i2c.c \
      src/si5351v2.c src/sound.c src/vfo.c src/interfaces/hamlib.c src/hw_settings.c src/antialias.c src/decim48k.c src/cw.c \
-     src/rx_audio.c src/gpio.c src/interfaces/iq_stream.c src/fft_filter.c src/tx_pipeline.c src/rx_filter.c
+     src/rx_audio.c src/gpio.c src/interfaces/iq_stream.c src/fft_filter.c src/tx_pipeline.c src/rx_filter.c src/upsample48k.c
 OBJ := $(SRC:.c=.o)
 
 all: maxibitx
@@ -55,9 +55,9 @@ maxibitx: $(OBJ)
 	-sudo setcap cap_sys_nice,cap_dac_override+ep $@
 
 clean:
-	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio \
+	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-upsample48k \
 		src/fft_filter.o src/fft_filter_test.o src/tx_pipeline.o src/tx_pipeline_test.o \
-		src/rx_filter.o src/rx_filter_test.o src/rx_audio_test.o
+		src/rx_filter.o src/rx_filter_test.o src/rx_audio_test.o src/upsample48k_test.o
 
 # docs/ARCHITECTURE.md step 2: fft_filter.c/.h's own standalone bench
 # harness (fft_filter_test.c) against synthetic tones - fft_filter.c
@@ -103,3 +103,15 @@ test-rx-filter: src/rx_filter.c src/rx_filter_test.c src/rx_filter.h src/fft_fil
 # (CW_PITCH_HZ), same as the other harnesses.
 test-rx-audio: src/rx_audio.c src/rx_audio_test.c src/rx_audio.h src/vfo.c src/vfo.h src/fft_filter.c src/rx_filter.c src/cw.h
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/rx_audio.c src/vfo.c src/fft_filter.c src/rx_filter.c src/rx_audio_test.c -o $@ -lfftw3f -lm
+
+# WSJT-X TX audio bridge: upsample48k.c/.h's own standalone bench harness
+# (upsample48k_test.c) against synthetic tones, the interpolation-side
+# counterpart to decim48k.c (which has no bench harness of its own - see
+# docs/dsp_design_notes/usb_uac_decimation_design.md; this is the first
+# one either direction has had). upsample48k.c itself is real, shipped
+# code now (part of $(SRC)/$(OBJ) above, wired into sound.c's
+# RADIO_MODE_DIGITAL TX branch), but this harness stays separate, same
+# "not part of the build" convention as the other test- targets above.
+# No dependencies beyond upsample48k.c/.h itself - no hardware, no FFTW.
+test-upsample48k: src/upsample48k.c src/upsample48k_test.c src/upsample48k.h
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/upsample48k.c src/upsample48k_test.c -o $@ -lm
