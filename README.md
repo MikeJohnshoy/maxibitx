@@ -238,12 +238,16 @@ Some significant changes in the digital signal processing software design are be
      v
   Anti-alias FIR (antialias.c, 21 taps, applied separately to I and Q)
      |
-     +---> hpsdr_p1.c / usb_gadget.c (UAC2) / iq_stream.c - baseband I/Q handed to an
-     |       external SDR app (04_remote_control_and_iq_output.md)
+     +---> hpsdr_p1.c / iq_stream.c - baseband I/Q handed to an external
+     |       SDR app (04_remote_control_and_iq_output.md)
      |
-     +---> rx_audio.c - optional local CW demod, straight to the
-             WM8731's own speaker/headphone output, no external app
-             needed (dsp_design_notes/rx_audio_demod_design.md)
+     +---> rx_audio.c - demodulated to real audio, straight to the
+             WM8731's own speaker/headphone output (no external app
+             needed), AND to usb_gadget.c's UAC2 gadget as real 16-bit/
+             48kHz PCM for WSJT-X and similar digital-mode apps - this
+             gadget carries no I/Q any more, both directions now
+             (dsp_design_notes/rx_audio_demod_design.md,
+             10_external_digital_modes_wsjtx.md)
 
 ```
 A transmit processing pipeline also exists (just imagine the reverse of the process above), currently for CW transmission only.
@@ -260,7 +264,8 @@ Changes:
   - CW receive processing uses a FIR filter for unwanted image rejection
   - sharp 8-pole elliptic filter for 300 Hz cw filter
   - on TX, cw waveform is built at high end of baseband IF, and then mixed to crystal filter freq where the unwanted product is well outside the crystal filter
-- hpsdr_p1.c and usb_gadget.c (UAC2) have been refined through experience gained with some windows SDR apps, but they sre not plug-and-play yet
+- hpsdr_p1.c has been refined through experience gained with some windows SDR apps, but it's not plug-and-play yet
+- usb_gadget.c's UAC2 gadget no longer carries I/Q at all - it's now a genuinely bidirectional 16-bit/48kHz real-audio device for WSJT-X and similar digital-mode apps (see docs/10_external_digital_modes_wsjtx.md), alongside its existing Kenwood-CAT-over-USB control surface
 
 
 ## Building
@@ -281,7 +286,10 @@ Produces a single `maxibitx` binary from the sources in `src/`. Requires
 
 Brings up the radio hardware, starts the audio and network threads, and
 listens for control connections — a rigctld-compatible server on TCP
-4532, and an HPSDR Protocol 1 UDP listener. A composite USB gadget provides I&Q data as audio and a CAT control interface.  Additional interfaces will be experimented with.
+4532, and an HPSDR Protocol 1 UDP listener. A composite USB gadget
+provides bidirectional real 16-bit/48kHz PCM audio (for WSJT-X and
+similar digital-mode apps) alongside a CAT control interface. Additional
+interfaces will be experimented with.
 
 ## Documentation
 
