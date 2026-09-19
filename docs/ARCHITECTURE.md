@@ -344,16 +344,21 @@ separate:
   - SSB: mic audio (sound.c already captures this - mic_buf[] exists,
          passed into sound_process() as input_mic, currently
          (void)input_mic;)
-  - DIGITAL (placeholder, v1): same source as SSB, unchanged - an
-         external digital-mode app (WSJT-X on a host PC first) already
-         generates its own audio and just needs it to reach input_mic
-         over the existing mic/line-in path; no new i_sample branch
-         needed for this alone. Kept as a distinct mode value (not
-         reused MODE_USB) purely so ALC/power calibration and CAT mode
-         reporting can differ later - see §8, §9. Onboard generation/
-         decoding (an actual FT8 encoder/decoder running on-target)
-         stays deferred; this placeholder is only about naming the
-         mode, not building that.
+  - DIGITAL: real audio from an external digital-mode app (WSJT-X on a
+         host PC) - see step 9 below for what was actually built, which
+         supersedes this section's original placeholder plan. Rather
+         than reaching input_mic over the existing mic/line-in path (the
+         plan this bullet originally described), the operator asked for
+         a dedicated path instead: usb_gadget.c's UAC2 gadget carries
+         real 16-bit/48kHz PCM audio in both directions over the same
+         USB link WSJT-X already uses for CAT, and sound.c pulls this
+         mode's i_sample source from there (uac_pull_audio_tx(),
+         upsampled to 96kHz by upsample48k.c) instead of from mic_buf.
+         Kept as a distinct mode value (not reused MODE_USB) purely so
+         ALC/power calibration and CAT mode reporting can differ later -
+         see §8, §9. Onboard generation/decoding (an actual FT8
+         encoder/decoder running on-target) stays deferred; this is only
+         about getting a host app's own audio to and from the exciter.
      |
      v
   Shared FFT overlap-save filter                 (port fft_filter.c's
@@ -1529,9 +1534,9 @@ for keying an external accessory's PTT, not this input line.)
      `radio_set_tx()` asserted the instant it closes, released the
      instant it opens, no hang timer (a voice transmission has no
      inter-element gap to bridge the way CW's dits/dahs do).
-     `RADIO_MODE_DIGITAL` still ignores this line entirely — no TX
-     source is wired to it in that mode (externally-generated
-     digital-mode audio remains unbuilt future work, §5/§8).
+     `RADIO_MODE_DIGITAL` still ignores this line entirely — correctly:
+     that mode has no physical key/mic PTT to sense in the first place,
+     since WSJT-X keys the rig over CAT instead (see below and step 9).
    - `sound.c`'s TX audio-generation block now branches on
      `radio_get_mode()`: CW keeps pulling `cw_get_sample()`'s tone and
      `TX_PIPELINE_KEEP_UPPER`, unchanged; USB/LSB instead pull real mic
@@ -1766,4 +1771,131 @@ for keying an external accessory's PTT, not this input line.)
      real, live risk (double-conversion superhet designs are a classic
      place for exactly this kind of inversion to hide) that turned out
      not to be a bug.
-9. Power/ALC calibration for voice, per §9.
+9. **Done, code-complete — on-air test still outstanding.** WSJT-X TX
+   audio bridge: replaced `usb_gadget.c`'s UAC2 gadget end to end, from
+   raw baseband I/Q (for an external SDR-console app to demodulate
+   itself) to genuinely bidirectional, already-demodulated 16-bit/48kHz
+   real PCM audio - closing the actual gap behind step 4/8's `DIGITAL`
+   placeholder, and superseding §5's original "reaches input_mic over
+   the mic/line-in path" plan for that mode entirely. Prompted by the
+   operator asking, in plain terms, how WSJT-X was ever supposed to get
+   its own generated tone back to the exciter - tracing the existing
+   I/Q gadget's actual data (`sound.c`'s old `uac_push_iq(out_i, out_q)`
+   call, fed straight from the VFO-mixed `i_samples`/`q_samples`, never
+   touched by `rx_audio.c`'s real demodulator) confirmed it never
+   carried anything WSJT-X could decode without a separate SDR-console
+   app doing real demodulation in between - not the architecture the
+   operator actually wanted.
+   - **Why real audio, not I/Q, and why a dedicated USB path rather than
+     the mic input:** WSJT-X (and any similar digital-mode app) wants an
+     ordinary sound-card-style device to decode from, not raw I/Q it has
+     no built-in way to demodulate; real demodulation already happens
+     on-target (`rx_audio.c`), so the gadget now carries that same
+     signal directly instead of asking a host-side app to redo the job.
+     Genuinely bidirectional now, unlike the I/Q version (whose
+     playback/host-to-device direction was declared in the USB
+     descriptor but never used): WSJT-X's own generated TX tone arrives
+     over this same gadget's capture-side PCM and rides into the shared
+     `tx_pipeline.c` instance step 8 already built for CW/USB/LSB.
+   - **RX tap point - post-AGC, pre-`rx_volume`:** `rx_audio_process()`
+     (`rx_audio.c`/`.h`) gained a new `uac_out` output parameter, tapped
+     one stage earlier than `out[]`'s own codec-bound samples - after
+     stage 4's AGC makeup gain (so a remote decoder still gets signal
+     conditioning that keeps its input in a decodable range regardless
+     of band conditions, the same thing stage 1/3's filtering already
+     does for it) but before `out[]`'s own `* rx_volume` multiply (so
+     WSJT-X's decoded level doesn't silently change every time the
+     operator touches their own listening-volume knob) - the same
+     "line out"/ACC-jack independence a real rig's front-panel volume
+     already has from its own fixed-level rear connector. Deliberately
+     NOT independent of the AGC too - AGC is signal-conditioning, not an
+     operator loudness preference, so a remote decoder wants it exactly
+     as much as the local speaker does.
+   - **New module, `upsample48k.c`/`.h`:** the direction `decim48k.c`
+     never needed - 48kHz (the gadget's TX/capture-side rate) back up to
+     96kHz (`tx_pipeline.c`'s native rate). Deliberately reuses
+     `decim48k.c`'s own 25-tap coefficient table rather than deriving a
+     new filter from scratch: a real anti-aliasing filter for decimation
+     and a real anti-imaging filter for interpolation are the same
+     prototype lowpass when the rate-change factor matches (here, M=2/
+     L=2), differing only in the zero-stuffing insertion point and a
+     ×2 makeup-gain correction the interpolation direction needs (zero-
+     stuffing halves a signal's average energy). Bench-verified against
+     synthetic tones (`src/upsample48k_test.c`,
+     `make test-upsample48k && ./test-upsample48k`, same "not part of
+     the shipped binary" convention as every other DSP module's own
+     harness in this doc) - real numbers: a steady input settles to
+     within ~2% of unity passband gain (0.978-0.982 measured, vs. 1.0
+     ideal), a 3000Hz tone reappears at 1.0019 (essentially unity)
+     amplitude once upsampled, and the zero-stuffing image at 45000Hz
+     (48000 - 3000) measures **55.7dB down** - well past the harness's
+     own 20dB bar and consistent with the same coefficient table's
+     already-bench-proven decimation-direction rejection.
+   - **Compile-time scale, as asked for:** `usb_gadget.c`'s new
+     `UAC_RX_AUDIO_SCALE` (`32767.0 / 500000000.0`, referencing
+     `rx_audio.c`'s own `AGC_TARGET_AMPLITUDE`) is the one knob that
+     maps the DSP's natural post-AGC amplitude range onto 16-bit PCM's
+     ±32767 - retune that, not any caller, if the level WSJT-X actually
+     sees on a real host ever needs adjusting; nothing downstream of
+     `uac_writer_thread()` needs to change. The reverse (host-to-device)
+     direction needed no equivalent knob - unpacking a 16-bit PCM sample
+     back to a normalized double is a fixed, unambiguous conversion, not
+     an amplitude judgment call the way mapping onto the gadget's own
+     outbound range was.
+   - **Threading/queueing, both directions:** `usb_gadget.c` now runs two
+     independent lock-free SPSC ring buffers (the same producer-writes-
+     head/consumer-writes-tail split `hpsdr_p1.c`'s I/Q queue already
+     established, doubled rather than restructured) instead of one
+     paired I/Q queue - `uac_writer_thread()` (RX/outbound, unchanged in
+     spirit from the old writer, just packing mono 16-bit PCM instead of
+     paired 24-bit I/Q) and a new `uac_reader_thread()` (TX/inbound,
+     mirroring the writer's backoff/retry/transition-logging pattern in
+     reverse, the sole caller of the blocking `snd_pcm_readi()` on the
+     gadget's capture-side PCM substream). Both keep `sound.c`'s
+     real-time audio thread fully isolated from a stalled or absent USB
+     host in either direction, for the same reason step-1-era
+     `hpsdr_p1.c` needed this split in the first place.
+   - **`sound.c` wiring:** `sound_process()`'s old per-block
+     `decim48k_apply()`-on-raw-I/Q loop (feeding `uac_push_iq()`) is
+     gone entirely, replaced by decimating `rx_audio_process()`'s new
+     `uac_out` tap and feeding `uac_push_audio_rx()` instead - one rail,
+     not two, since real audio has no I/Q pairing to preserve.
+     `audio_loop()`'s TX branch gained a third `tx_mode` case alongside
+     CW's tone and USB/LSB's mic audio: `RADIO_MODE_DIGITAL` pulls from
+     `uac_pull_audio_tx()`, upsamples via `upsample48k_apply()`, and
+     always selects `TX_PIPELINE_KEEP_UPPER` (FT8/digital-mode
+     convention: always transmitted as USB regardless of band). The
+     branch's own outer gate also had to change - `cw_tx_active()` alone
+     (cw.c's key/mic-PTT-driven flag) is never true in `DIGITAL`, since
+     that mode's PTT is CAT-only and was already working unconditionally
+     before this step (`hamlib.c`'s `T`, `usb_gadget.c`'s own `TX`/`RX`/
+     `TQ` handlers all call `radio_set_tx()` regardless of mode) - so the
+     gate is now `cw_tx_active() || (in_tx && radio_get_mode() ==
+     RADIO_MODE_DIGITAL)`, and any shortfall in what the host actually
+     sent is silence-filled by feeding zero through the (still-running,
+     history-preserving) upsampler rather than skipping it, the same
+     "keep it warm across a gap" reasoning `rx_audio.c`'s stage-3 filters
+     already use while bypassed.
+   - **Regression check:** full rebuild (`make clean && make`) clean
+     under `-Wall -Wextra`; `test-fft-filter`, `test-tx-pipeline`,
+     `test-rx-filter`, and `test-rx-audio` (the latter's call site
+     updated for `rx_audio_process()`'s new `uac_out` parameter) all
+     still pass with numbers matching their own steps' original bench
+     results - this step touched `rx_audio.c`'s signature but not its
+     DSP, and touched `sound.c`'s RX-side gadget feed but not
+     `hpsdr_p1.c`/`iq_stream.c`'s own I/Q consumption, which is
+     unchanged and still gets native 96kHz I/Q exactly as before.
+   - **What's genuinely still open, not yet bench- or air-verified:**
+     nothing has actually been plugged into a real WSJT-X session yet -
+     `UAC_RX_AUDIO_SCALE`'s real-world level (does WSJT-X's own decoder
+     actually see a comfortably-decodable signal, or does it need
+     retuning the same way `MIC_TX_INPUT_SCALE`/`mic_tx_gain` did for
+     step 8's voice path), whether WSJT-X's own generated tone survives
+     the round trip through `uac_reader_thread()`/`upsample48k_apply()`/
+     `tx_pipeline.c` cleanly enough to actually decode on the other end,
+     and real wattmeter/ALC calibration for `DIGITAL`'s own TX power (§9
+     below, unchanged from before this step - a level problem here is a
+     different, still-open question from whether the audio arrives at
+     all).
+
+10. Power/ALC calibration for voice, per §9.
