@@ -459,11 +459,11 @@ static struct vfo bfo;                 // CW_PITCH_HZ mixing oscillator
 // 0.0-1.0 - see rx_audio_set_volume(). Startup default only (any CAT/USB
 // `AG` client or tools/rigctl_panel.py's own slider can still set this to
 // whatever it wants at runtime) - was 0.5 (50%), which real-hardware
-// listening found uncomfortably loud on this radio; 0.10 (10%) is where
+// listening found uncomfortably loud on this radio; 0.20 (20%) is where
 // the operator actually runs it for comfortable copy, so that's now
 // where a fresh process starts instead of requiring a manual turn-down
 // every time.
-static double rx_volume = 0.10;
+static double rx_volume = 0.20;
 
 // 1 (default) = stage 3 shapes the output, matching every design note
 // above; 0 = stage 3 is bypassed (audio from stage 2 reaches the AGC
@@ -676,7 +676,7 @@ int rx_audio_get_strength_db(void) {
 #define RX_AUDIO_MAX_BLOCK 4096
 
 void rx_audio_process(const double *i_samples, const double *q_samples,
-                       int n, int32_t *out) {
+                       int n, int32_t *out, double *uac_out) {
     // Stage 2's output and both stage-3 candidates, buffered across this
     // whole call - needed because rx_filter.c's FFT filter is block-based
     // (one call per RX_FILTER_BLOCK_LEN new samples), unlike stage 1/2/
@@ -791,6 +791,15 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
         double meter_mag = fabs(narrowed);
         double meter_alpha = (meter_mag > meter_env) ? agc_attack_alpha : agc_release_alpha;
         meter_env += meter_alpha * (meter_mag - meter_env);
+
+        // uac_out: the same post-AGC signal, BEFORE rx_volume - see
+        // rx_audio.h's comment on this parameter for why a second,
+        // volume-independent tap exists at all. Written before out[]
+        // below purely for readability (this is the earlier stage in the
+        // signal path); order doesn't matter since neither write reads
+        // the other.
+        if (uac_out)
+            uac_out[k] = narrowed * gain;
 
         double sample = narrowed * gain * rx_volume;
         if (sample >  2000000000.0) sample =  2000000000.0;
