@@ -251,31 +251,59 @@ touching that list are ordinary priority, never the audio thread, which
 is what makes a plain mutex safe there but not around the sample ring
 buffer itself), and full bench verification.
 
-## USB Audio Class (UAC2) output
+## USB Audio Class (UAC2) — bidirectional real audio (WSJT-X bridge)
 
-`usb_gadget.c` presents the radio as a standard USB Audio Class 2.0
-capture device, if the hardware/kernel support it (needs a USB
-device-mode controller and `libcomposite`) - see
+`usb_gadget.c` presents the radio as a standard, full-duplex USB Audio
+Class 2.0 device ("sBitx Audio"), if the hardware/kernel support it
+(needs a USB device-mode controller and `libcomposite`) - see
 [`usb_gadget_os_setup.md`](dsp_design_notes/usb_gadget_OS_setup.md) for the Raspberry Pi 4
 config.txt/cmdline.txt changes and GPIO-power caveat this requires; it is
-not on by default on a stock Raspberry Pi OS install. It's fed its own I/Q copy
-directly from `sound.c`, with no ALSA/gadget dependency on
-`hpsdr_p1.c`. Ported near-verbatim from the UAC2 section of sbitx's
-`hpsdr_p1.c`, since that code had no sBitx/GTK dependency of its own —
-only ALSA and Linux configfs/sysfs — making the port mechanical.
+not on by default on a stock Raspberry Pi OS install.
 
-The gadget advertises 48kHz, but `sound.c` runs natively at 96kHz -
-`sound_process()` runs I/Q through a real decimating lowpass
-(`decim48k.c`) before handing it to `uac_push_iq()`, so what the gadget
-delivers actually matches what it advertises. See
-[`dsp_design_notes/usb_uac_decimation_design.md`](dsp_design_notes/usb_uac_decimation_design.md)
-for the filter design and the real UAC2 host (a panadapter project) that
-motivated getting this right. `hpsdr_p1.c` is unaffected - it still gets
-native 96kHz I/Q.
+**This gadget no longer carries I/Q at all** (see `ARCHITECTURE.md` §10
+step 9 for the full design and why) - an earlier version carried raw
+baseband I/Q here, for an external SDR-console app (SDR#, HDSDR, GQRX,
+SDR Console) to demodulate itself; that entire path is gone. In its
+place: real, already-demodulated 16-bit/48kHz PCM audio, genuinely
+bidirectional, meant for a control-surface app like WSJT-X to decode/
+encode from directly, the same way it would talk to a real radio's own
+USB audio codec - see
+[`10_external_digital_modes_wsjtx.md`](10_external_digital_modes_wsjtx.md)
+for the operator-facing setup steps.
 
-Either stream works without the other: a client connected over USB audio
-alone, with no HPSDR app connected, still gets I/Q, and vice versa. None
-of `uac_init()`, `cat_init()`, or `hamlib_init()` failing is treated as
-fatal at startup — minibitx keeps running on whatever subset of
-control/streaming surfaces came up successfully; see
+- **RX (device → host):** fed from `rx_audio.c`'s own on-target
+  demodulation - the same signal the local speaker gets, tapped one
+  stage earlier (after the AGC's makeup gain, before the operator's own
+  `rx_volume` knob - see `rx_audio.h`'s `uac_out` parameter) so a remote
+  decoder's level doesn't drift with the operator's own listening
+  volume. Decimated from `sound.c`'s native 96kHz down to the 48kHz this
+  gadget advertises, exactly as the old I/Q version was (`decim48k.c`,
+  unchanged - see
+  [`dsp_design_notes/usb_uac_decimation_design.md`](dsp_design_notes/usb_uac_decimation_design.md)
+  for the filter design).
+- **TX (host → device):** genuinely used now, unlike the old I/Q
+  version's declared-but-unused playback direction. WSJT-X's own
+  generated tone arrives over this gadget's capture-side PCM at 48kHz
+  and is upsampled to 96kHz (`upsample48k.c` - the interpolating
+  counterpart `decim48k.c` never needed until this) before riding into
+  the shared TX pipeline (`tx_pipeline.c`) for `RADIO_MODE_DIGITAL`.
+
+One card, two independent PCM substream directions, not two separate
+devices: binding the UAC2 function to a UDC makes the kernel register a
+single ALSA card ("UAC2Gadget"), whose one device exposes both a
+playback substream (what streams out to the host, as its capture/mic
+input - `uac_writer_thread()`'s job) and a capture substream (what the
+host sends, as its playback/speaker output - the new
+`uac_reader_thread()`'s job). Both threads use the same lock-free
+single-producer/single-consumer ring-buffer pattern `hpsdr_p1.c`'s I/Q
+queue already established, one queue per direction, so a stalled or
+absent USB host in either direction can only cost USB audio quality,
+never `sound.c`'s real-time audio thread.
+
+Either direction works without the other: RX audio keeps flowing to a
+connected WSJT-X even if the capture-side PCM never opens (no host
+sending TX audio yet), and none of `uac_init()`, `cat_init()`, or
+`hamlib_init()` failing is treated as fatal at startup — minibitx keeps
+running on whatever subset of control/streaming surfaces came up
+successfully; see
 [`05_process_and_threading_model.md`](05_process_and_threading_model.md).
