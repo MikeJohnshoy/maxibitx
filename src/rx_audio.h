@@ -89,8 +89,27 @@ int rx_audio_get_narrow_filter_impl(void);
 // hpsdr_send_iq()) into n real PCM samples ready for the codec's local
 // monitor channel. Call once per audio block, same n as the I/Q block it
 // was given.
+//
+// uac_out, if non-NULL, receives the SAME n samples one stage earlier -
+// post-AGC (stage 4's makeup gain already applied, so it doesn't ride the
+// input's own raw amplitude swings) but pre-rx_volume (the operator's
+// manual AF gain, applied only to out[] below). First use:
+// usb_gadget.c's WSJT-X audio bridge (docs/ARCHITECTURE.md) - decoded
+// audio sent to a fixed remote consumer must not silently change level
+// every time the operator touches their own listening volume, the same
+// reasoning a real rig's "line out"/ACC jack is independent of its front-
+// panel volume knob. Deliberately NOT also independent of the AGC:
+// AGC is signal-conditioning (keeps the level in a decodable range
+// regardless of band conditions), not an operator loudness preference -
+// a remote decoder wants that, the same way it wants stage 1/3's
+// filtering. Units match narrowed*gain's own natural scale (see
+// rx_audio.c's AGC_TARGET_AMPLITUDE) - unnormalized, uncapped to int32 -
+// deliberately: this is a different consumer with a different target
+// range (16-bit PCM, not the codec's int32 convention out[] uses), so
+// scaling/clamping into that range is usb_gadget.c's own job (its
+// UAC_RX_AUDIO_SCALE), not something baked in here.
 void rx_audio_process(const double *i_samples, const double *q_samples,
-                       int n, int32_t *out);
+                       int n, int32_t *out, double *uac_out);
 
 // Debug/test only - the AGC's current smoothed envelope estimate (see
 // rx_audio.c). As of "Why the AGC samples the raw input, not stage 2 or
