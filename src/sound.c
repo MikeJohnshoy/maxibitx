@@ -11,6 +11,7 @@
 #include "rx_audio.h"
 #include "sound.h"
 #include "tx_pipeline.h"
+#include "upsample48k.h"
 #include "usb_gadget.h"
 #include <alsa/asoundlib.h>
 #include <math.h>
@@ -158,10 +159,12 @@ static volatile int g_running = 0;
 // created/destroyed per TX burst. CW and USB/LSB now share this one
 // instance (docs/ARCHITECTURE.md build order step 8) - same passband
 // filter either way (tx_pipeline.c's filter_tune() call has no
-// sideband-dependent term), only the `i_sample` source (cw.c's tone vs
-// real mic audio) and the sideband-zero direction passed to
+// sideband-dependent term), only the `i_sample` source (cw.c's tone,
+// real mic audio, or now WSJT-X's own generated tone via
+// usb_gadget.c's uac_pull_audio_tx()/upsample48k.c for
+// RADIO_MODE_DIGITAL) and the sideband-zero direction passed to
 // tx_pipeline_process_block() differ per audio_loop()'s TX branch
-// below. DIGITAL's externally-generated audio is still future work.
+// below.
 static struct tx_pipeline *cw_tx_pipeline = NULL;
 
 /* ------------------------------------------------------------------ */
@@ -625,11 +628,18 @@ static void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output
   static struct antialias_state aa_i;
   static struct antialias_state aa_q;
   // 96kHz->48kHz decimation for usb_gadget.c's UAC2 gadget only (see
-  // docs/dsp_design_notes/usb_uac_decimation_design.md) - independent
-  // history/phase per rail, same as aa_i/aa_q above. hpsdr_p1.c keeps
-  // getting native 96kHz IQ unchanged; only the USB path is decimated.
-  static struct decim48k_state dec_i;
-  static struct decim48k_state dec_q;
+  // docs/dsp_design_notes/usb_uac_decimation_design.md) - now applied to
+  // rx_audio.c's real demodulated audio tap (uac_audio[] below), not raw
+  // I/Q (the gadget no longer carries I/Q at all - see usb_gadget.h).
+  // One rail, not two: real audio has no I/Q pairing to preserve.
+  // hpsdr_p1.c keeps getting native 96kHz IQ unchanged; only the USB
+  // path is decimated.
+  static struct decim48k_state dec_audio;
+  // rx_audio_process()'s pre-rx_volume/post-AGC tap (rx_audio.h's
+  // uac_out parameter) - this block's audio at the native 96kHz rate,
+  // before decim48k_apply() below brings it down to what the gadget
+  // advertises.
+  static double uac_audio[4096];
 
   (void)input_mic;
   if (n_samples > 4096)
@@ -671,27 +681,27 @@ static void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output
   hpsdr_send_iq(i_samples, q_samples, n_samples);
   iq_stream_send(i_samples, q_samples, n_samples);
 
+  // output_speaker carries the RX audio demod (rx_audio.c) - the
+  // receiver's own I/Q turned into an audible CW tone. uac_audio[]
+  // receives the SAME demodulation one stage earlier - post-AGC,
+  // pre-rx_volume (rx_audio.h's uac_out parameter) - for
+  // usb_gadget.c's WSJT-X audio bridge below. output_tx stays silent
+  // here; it's only driven by the CW sidetone/TX-IF chain in
+  // audio_loop() below.
+  rx_audio_process(i_samples, q_samples, n_samples, output_speaker, uac_audio);
+  memset(output_tx, 0, n_samples * sizeof(int32_t));
+
   // usb_gadget.c's UAC2 gadget is fixed at 48kHz (matches real UAC2
   // hosts like the QMX/Tab5 panadapter this was built to interoperate
   // with - see docs/dsp_design_notes/usb_uac_decimation_design.md),
-  // but this block's i_samples[]/q_samples[] are still native 96kHz -
-  // decim48k_apply() only emits a kept sample on every other call, so
-  // uac_push_iq() is only called when both rails have one ready
-  // (they always agree, since both are fed in lockstep every n here).
+  // but uac_audio[] above is still native 96kHz - decim48k_apply()
+  // only emits a kept sample on every other call, so
+  // uac_push_audio_rx() is only called when one's actually ready.
   for (int n = 0; n < n_samples; n++) {
-    double out_i, out_q;
-    int have_i = decim48k_apply(&dec_i, i_samples[n], &out_i);
-    int have_q = decim48k_apply(&dec_q, q_samples[n], &out_q);
-    if (have_i && have_q)
-      uac_push_iq(out_i, out_q);
+    double out_audio;
+    if (decim48k_apply(&dec_audio, uac_audio[n], &out_audio))
+      uac_push_audio_rx(out_audio);
   }
-
-  // output_speaker carries the RX audio demod (rx_audio.c) - the
-  // receiver's own I/Q turned into an audible CW tone. output_tx
-  // stays silent here; it's only driven by the CW sidetone/TX-IF
-  // chain in audio_loop() below.
-  rx_audio_process(i_samples, q_samples, n_samples, output_speaker);
-  memset(output_tx, 0, n_samples * sizeof(int32_t));
 }
 
 /* ------------------------------------------------------------------ */
@@ -899,7 +909,16 @@ static void *audio_loop(void *arg) {
     struct timespec t_write0, t_write1;
     if (pcm_playback) {
       clock_gettime(CLOCK_MONOTONIC, &t_write0);
-      if (cw_tx_active()) {
+      // DIGITAL mode has no physical key/mic PTT to drive cw_tx_active()
+      // (cw.c's cw_poll_key() deliberately ignores that GPIO in this
+      // mode - see its own comment) - PTT is CAT-only there (hamlib.c's
+      // "T"/usb_gadget.c's own TX/RX/TQ handlers, both already
+      // mode-independent), asserting in_tx directly. So this branch is
+      // entered either the original way (a physical key/mic closure the
+      // CW/USB/LSB path below drove tx_active for) or, new, whenever
+      // in_tx is set while in DIGITAL mode - see the tx_mode branch
+      // below for where the two audio sources actually diverge.
+      if (cw_tx_active() || (in_tx && radio_get_mode() == RADIO_MODE_DIGITAL)) {
         // Per-band calibrated scale (see the TX_SAMPLE_HEADROOM
         // comment above) - looked up once per block, not per
         // sample, since freq_hdr doesn't change mid-block.
@@ -922,6 +941,12 @@ static void *audio_loop(void *arg) {
         static double tx_audio_buf[MAX_FRAMES];
         static float tx_pipe_in[TX_PIPELINE_BLOCK_LEN];
         static float tx_pipe_out[TX_PIPELINE_BLOCK_LEN];
+        // DIGITAL mode's own upsampler state (usb_gadget.c's TX/inbound
+        // queue is 48kHz, this pipeline needs 96kHz) and its 48kHz-side
+        // scratch buffer - persistent across calls like tx_pipe_in/out
+        // above, since upsample48k_apply() carries real filter history.
+        static struct upsample48k_state tx_upsampler;
+        static double tx_audio_48k[MAX_FRAMES / 2 + 1];
 
         enum radio_mode tx_mode = radio_get_mode();
         enum tx_pipeline_sideband sideband = TX_PIPELINE_KEEP_UPPER;
@@ -935,6 +960,35 @@ static void *audio_loop(void *arg) {
             tx_audio_buf[i] = cw_get_sample();
           sideband = TX_PIPELINE_KEEP_UPPER; // CW groups with USB - see
                                               // tx_pipeline.h's enum comment
+        } else if (tx_mode == RADIO_MODE_DIGITAL) {
+          // WSJT-X's own generated tone, pulled from usb_gadget.c's
+          // TX/inbound queue (uac_pull_audio_tx(), 48kHz) and upsampled
+          // to this pipeline's native 96kHz (upsample48k.c, decim48k.c's
+          // own interpolation counterpart - see docs/ARCHITECTURE.md).
+          // need_48k is ceil(n/2): each 48kHz input sample expands into
+          // exactly 2 96kHz outputs (upsample48k_apply()), so this many
+          // inputs always cover n outputs with at most one to spare.
+          int need_48k = (n + 1) / 2;
+          int got_48k = uac_pull_audio_tx(tx_audio_48k, need_48k);
+          int out_idx = 0;
+          for (int i = 0; i < need_48k; i++) {
+            // Past what the host actually sent this block (no WSJT-X
+            // running, capture PCM not open, or just a momentary gap),
+            // feed silence through the upsampler rather than skip it -
+            // keeps its filter history warm across a gap the same way
+            // rx_audio.c's stage-3 filters stay warm while bypassed
+            // (rx_audio.h), instead of a settling-time thump on the
+            // next real sample.
+            double in_sample = (i < got_48k) ? tx_audio_48k[i] : 0.0;
+            double out2[2];
+            upsample48k_apply(&tx_upsampler, in_sample, out2);
+            if (out_idx < n)
+              tx_audio_buf[out_idx++] = out2[0];
+            if (out_idx < n)
+              tx_audio_buf[out_idx++] = out2[1];
+          }
+          sideband = TX_PIPELINE_KEEP_UPPER; // FT8/digital convention:
+                                              // always USB regardless of band
         } else {
           // USB/LSB (docs/ARCHITECTURE.md build order step 8): real mic
           // audio (mic_buf, captured above) is the i_sample source
@@ -1037,9 +1091,11 @@ static void *audio_loop(void *arg) {
           play_buf[i * 2 + 1] = 0;
         }
       } else {
-        // in_tx but not cw_tx_active (e.g. PTT asserted between key
-        // presses, or via CAT/network MOX without a CW burst) - stay
-        // silent rather than play back RX audio while transmitting.
+        // in_tx but neither cw_tx_active() nor DIGITAL (e.g. CAT/network
+        // MOX asserted for CW/USB/LSB without a physical key/mic PTT
+        // closure - DIGITAL's own CAT-only PTT is handled by the branch
+        // above) - stay silent rather than play back RX audio while
+        // transmitting.
         memset(play_buf, 0, (size_t)n * 2 * sizeof(int32_t));
       }
       snd_pcm_sframes_t wframes = snd_pcm_writei(pcm_playback, play_buf, n);
