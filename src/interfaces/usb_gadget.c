@@ -1,4 +1,11 @@
 // usb_gadget.c
+//
+// See usb_gadget.h for the full design (bidirectional 16-bit/48kHz real
+// audio over the UAC2 function, Kenwood CAT over the ACM function). This
+// file used to carry raw I/Q for an external SDR application to
+// demodulate; that entire path (the paired I/Q ring buffer, the 24-bit
+// packing math, uac_push_iq()) is gone - see git history if it's ever
+// needed again.
 
 #include "usb_gadget.h"
 #include "cw.h"
@@ -28,51 +35,85 @@
  * Compile-time configuration
  * --------------------------------------------------------------------- */
 
-// Root of the Linux USB gadget configfs hierarchy
+// Root of the Linux USB gadget configfs hierarchy. Deliberately left as
+// "sbitx_iq" rather than renamed to match the new "sBitx Audio" product
+// string - this is an internal configfs path, never seen by the host, and
+// renaming it risks breaking any existing OS-level gadget setup script
+// that references it (see usb_gadget.h's path-layout comment).
 #define UAC_GADGET_ROOT "/sys/kernel/config/usb_gadget/sbitx_iq"
 
 // PCM parameters to match the UAC2 descriptor
 #define UAC_RATE 48000
 #define UAC_CHANNELS 2
-#define UAC_SAMPLE_BYTES 3    // packed on-wire bytes (24-bit PCM)
+#define UAC_SAMPLE_BYTES 2    // packed on-wire bytes (16-bit PCM - was 3/24-bit for I/Q)
 #define UAC_PERIOD_FRAMES 512 // ALSA period size in frames
 #define UAC_PERIODS 4         // number of periods in the ring buffer
 
 // One frame = UAC_CHANNELS * UAC_SAMPLE_BYTES bytes
 #define UAC_FRAME_BYTES (UAC_CHANNELS * UAC_SAMPLE_BYTES)
 
-// Internal ring: hold up to UAC_PERIOD_FRAMES samples before each ALSA write
+// Internal per-period byte buffers: one for the playback (RX/outbound)
+// direction, one for the capture (TX/inbound) direction - each holds up to
+// UAC_PERIOD_FRAMES frames before/after an ALSA write/read.
 #define UAC_BUF_FRAMES UAC_PERIOD_FRAMES
-static uint8_t uac_pcm_buf[UAC_BUF_FRAMES * UAC_FRAME_BYTES];
+static uint8_t uac_pcm_buf[UAC_BUF_FRAMES * UAC_FRAME_BYTES];         // playback (RX)
+static uint8_t uac_pcm_capture_buf[UAC_BUF_FRAMES * UAC_FRAME_BYTES]; // capture (TX)
+
+// Maps rx_audio.c's uac_out tap (rx_audio.h) onto 16-bit PCM's +-32767
+// range. rx_audio.c's AGC keeps that tap's natural amplitude centered
+// around its own AGC_TARGET_AMPLITUDE (500000000.0, rx_audio.c) - this is
+// the one compile-time knob the user asked for to retune the level WSJT-X
+// actually sees; nothing downstream of uac_writer_thread() needs to change
+// if this is adjusted. Not shared with rx_audio.c's own macro (different
+// translation units, and this is usb_gadget.c's own concern, not
+// rx_audio.c's) - if AGC_TARGET_AMPLITUDE is ever changed there, this
+// should be revisited too.
+#define UAC_RX_AUDIO_SCALE (32767.0 / 500000000.0)
 
 /* ---------------------------------------------------------------------
- * IQ handoff queue - see the "producer/consumer split" note above
- * uac_push_iq() below. Same lock-free SPSC ring design as hpsdr_p1.c's
- * IQ queue (that file's comments have the full derivation of why a
- * plain mutex isn't safe to share with a real-time producer thread) -
- * producer (uac_push_iq(), called from sound.c's SCHED_FIFO audio
- * thread) only ever writes uac_q_head; consumer (uac_writer_thread())
- * only ever writes uac_q_tail. Neither ever blocks on the other.
+ * Audio handoff queues - two independent lock-free SPSC ring buffers, one
+ * per direction, replacing the single paired I/Q queue the old version
+ * used. Same design as hpsdr_p1.c's I/Q queue (that file's comments have
+ * the full derivation of why a plain mutex isn't safe to share with a
+ * real-time producer/consumer thread): each queue's producer only ever
+ * writes its own head; its consumer only ever writes its own tail.
+ * Neither ever blocks on the other, and the two queues don't interact.
+ *
+ * RX (device -> host, decoded audio for WSJT-X to decode): producer is
+ * uac_push_audio_rx() (sound.c's SCHED_FIFO audio thread), consumer is
+ * uac_writer_thread() (drains it into the gadget's playback PCM).
+ *
+ * TX (host -> device, WSJT-X's own generated tone): producer is
+ * uac_reader_thread() (reads the gadget's capture PCM), consumer is
+ * uac_pull_audio_tx() (sound.c's audio thread, for RADIO_MODE_DIGITAL).
  * --------------------------------------------------------------------- */
 #define UAC_QUEUE_CAP                                                                             \
   8192 // power of two; ~170ms at 48kHz -
        // generous slack against USB-side stalls
 #define UAC_QUEUE_MASK (UAC_QUEUE_CAP - 1)
 
-static double uac_q_i[UAC_QUEUE_CAP];
-static double uac_q_q[UAC_QUEUE_CAP];
-static atomic_uint uac_q_head = 0;
-static atomic_uint uac_q_tail = 0;
+static double uac_q_rx[UAC_QUEUE_CAP]; // device -> host (RX/outbound audio)
+static atomic_uint uac_q_rx_head = 0;
+static atomic_uint uac_q_rx_tail = 0;
+
+static double uac_q_tx[UAC_QUEUE_CAP]; // host -> device (TX/inbound audio)
+static atomic_uint uac_q_tx_head = 0;
+static atomic_uint uac_q_tx_tail = 0;
 
 /* ---------------------------------------------------------------------
  * Module-level state
  * --------------------------------------------------------------------- */
-static snd_pcm_t *uac_pcm_handle = NULL; // ALSA PCM write handle - owned
-                                         // by uac_writer_thread() only
-static int uac_gadget_up = 0;            // 1 after configfs gadget is created
-static volatile int uac_active = 0;      // 1 while host is streaming
+static snd_pcm_t *uac_pcm_handle = NULL;         // ALSA PCM write handle (playback/RX) -
+                                                  // owned by uac_writer_thread() only
+static snd_pcm_t *uac_pcm_capture_handle = NULL; // ALSA PCM read handle (capture/TX) -
+                                                  // owned by uac_reader_thread() only
+static int uac_gadget_up = 0;                    // 1 after configfs gadget is created
+static volatile int uac_active = 0;              // 1 while the RX/playback stream is up
+static volatile int uac_capture_active = 0;      // 1 while the TX/capture stream is up
 static pthread_t uac_writer_tid;
 static volatile int uac_writer_running = 0; // 1 while uac_writer_thread() should keep looping
+static pthread_t uac_reader_tid;
+static volatile int uac_reader_running = 0; // 1 while uac_reader_thread() should keep looping
 
 /* ---------------------------------------------------------------------
  * Internal helpers
@@ -208,7 +249,7 @@ static int uac_gadget_create(void) {
   snprintf(path, sizeof(path), "%s/strings/0x409/manufacturer", UAC_GADGET_ROOT);
   uac_write_attr(path, "sBitx");
   snprintf(path, sizeof(path), "%s/strings/0x409/product", UAC_GADGET_ROOT);
-  uac_write_attr(path, "sBitx IQ");
+  uac_write_attr(path, "sBitx Audio");
   snprintf(path, sizeof(path), "%s/strings/0x409/serialnumber", UAC_GADGET_ROOT);
   uac_write_attr(path, "0000001");
 
@@ -219,19 +260,24 @@ static int uac_gadget_create(void) {
     return -1;
   }
 
-  // Capture (host reads IQ from us): 2 ch, 24-bit, 48 kHz
+  // Capture (host reads decoded audio from us): 2 ch, 16-bit, 48 kHz - both
+  // channels carry the SAME mono sample (see uac_writer_thread()), purely
+  // for compatibility with host-side apps/drivers that assume a stereo
+  // audio interface.
   snprintf(path, sizeof(path), "%s/functions/uac2.0/c_srate", UAC_GADGET_ROOT);
   uac_write_attr(path, "48000");
   snprintf(path, sizeof(path), "%s/functions/uac2.0/c_ssize", UAC_GADGET_ROOT);
-  uac_write_attr(path, "3"); // 3 bytes = 24-bit PCM
+  uac_write_attr(path, "2"); // 2 bytes = 16-bit PCM (was 3/24-bit for I/Q)
   snprintf(path, sizeof(path), "%s/functions/uac2.0/c_chmask", UAC_GADGET_ROOT);
   uac_write_attr(path, "3"); // bitmask: ch0 | ch1  = L+R
 
-  // Playback (host -> device, unused but the UAC2 function requires it)
+  // Playback (host -> device): WSJT-X's own generated TX tone for
+  // RADIO_MODE_DIGITAL - genuinely used now, unlike the I/Q version's
+  // declared-but-unused pair (see usb_gadget.h).
   snprintf(path, sizeof(path), "%s/functions/uac2.0/p_srate", UAC_GADGET_ROOT);
   uac_write_attr(path, "48000");
   snprintf(path, sizeof(path), "%s/functions/uac2.0/p_ssize", UAC_GADGET_ROOT);
-  uac_write_attr(path, "3");
+  uac_write_attr(path, "2");
   snprintf(path, sizeof(path), "%s/functions/uac2.0/p_chmask", UAC_GADGET_ROOT);
   uac_write_attr(path, "3");
 
@@ -340,14 +386,15 @@ static void uac_gadget_destroy(void) {
  * --------------------------------------------------------------------- */
 
 // Open and configure the UAC2 gadget's own ALSA PCM for write (playback
-// side). Once bound to a UDC, the kernel's UAC2 function driver
-// registers its OWN independent ALSA card, always id "UAC2Gadget" in
-// /proc/asound/cards - its device-0 playback PCM is what's actually
-// wired to the real USB isochronous endpoint the host reads. An earlier
-// version wrote to a separate snd-aloop "Loopback" card instead, on the
-// mistaken assumption UAC2 reads its capture side from that
-// automatically - it doesn't, so nothing ever reached the USB link; see
-// docs/dsp_design_notes/usb_gadget_OS_setup.md §11 for that bench story.
+// side, device -> host). Once bound to a UDC, the kernel's UAC2 function
+// driver registers its OWN independent ALSA card, always id "UAC2Gadget"
+// in /proc/asound/cards - its device-0 playback PCM is what's actually
+// wired to the real USB isochronous endpoint the host reads (as ITS
+// capture/microphone input). An earlier version wrote to a separate
+// snd-aloop "Loopback" card instead, on the mistaken assumption UAC2 reads
+// its capture side from that automatically - it doesn't, so nothing ever
+// reached the USB link; see docs/dsp_design_notes/usb_gadget_OS_setup.md
+// §11 for that bench story.
 // Returns 0 on success, -1 on ALSA error.
 static int uac_alsa_open(void) {
   int card_idx = -1;
@@ -358,14 +405,15 @@ static int uac_alsa_open(void) {
 
   // Device 0's playback substream - the local write side that feeds the
   // host's capture stream. Device 0's *capture* substream is the reverse
-  // direction (host-to-device audio, unused here - see p_srate/p_ssize/
-  // p_chmask in uac_gadget_create()), not this device string.
+  // direction (host-to-device audio - see uac_alsa_open_capture() below,
+  // and p_srate/p_ssize/p_chmask in uac_gadget_create()), not this device
+  // string.
   char dev_name[64];
   snprintf(dev_name, sizeof(dev_name), "hw:%d,0", card_idx);
 
   int err;
   if ((err = snd_pcm_open(&uac_pcm_handle, dev_name, SND_PCM_STREAM_PLAYBACK, 0)) < 0) {
-    fprintf(stderr, "uac: snd_pcm_open(%s) failed: %s\n", dev_name, snd_strerror(err));
+    fprintf(stderr, "uac: snd_pcm_open(%s, playback) failed: %s\n", dev_name, snd_strerror(err));
     uac_pcm_handle = NULL;
     return -1;
   }
@@ -374,9 +422,9 @@ static int uac_alsa_open(void) {
   snd_pcm_hw_params_alloca(&hw);
   snd_pcm_hw_params_any(uac_pcm_handle, hw);
 
-  // Interleaved, 24-bit packed LE, 48 kHz, 2 channels
+  // Interleaved, 16-bit LE, 48 kHz, 2 channels
   snd_pcm_hw_params_set_access(uac_pcm_handle, hw, SND_PCM_ACCESS_RW_INTERLEAVED);
-  snd_pcm_hw_params_set_format(uac_pcm_handle, hw, SND_PCM_FORMAT_S24_3LE);
+  snd_pcm_hw_params_set_format(uac_pcm_handle, hw, SND_PCM_FORMAT_S16_LE);
   unsigned int rate = UAC_RATE;
   snd_pcm_hw_params_set_rate_near(uac_pcm_handle, hw, &rate, NULL);
   snd_pcm_hw_params_set_channels(uac_pcm_handle, hw, UAC_CHANNELS);
@@ -387,28 +435,88 @@ static int uac_alsa_open(void) {
   snd_pcm_hw_params_set_periods_near(uac_pcm_handle, hw, &periods, NULL);
 
   if ((err = snd_pcm_hw_params(uac_pcm_handle, hw)) < 0) {
-    fprintf(stderr, "uac: snd_pcm_hw_params failed: %s\n", snd_strerror(err));
+    fprintf(stderr, "uac: snd_pcm_hw_params (playback) failed: %s\n", snd_strerror(err));
     snd_pcm_close(uac_pcm_handle);
     uac_pcm_handle = NULL;
     return -1;
   }
 
   if ((err = snd_pcm_prepare(uac_pcm_handle)) < 0) {
-    fprintf(stderr, "uac: snd_pcm_prepare failed: %s\n", snd_strerror(err));
+    fprintf(stderr, "uac: snd_pcm_prepare (playback) failed: %s\n", snd_strerror(err));
     snd_pcm_close(uac_pcm_handle);
     uac_pcm_handle = NULL;
     return -1;
   }
 
-  printf("uac: UAC2Gadget ALSA PCM opened: %s @ %u Hz, 24-bit, %d ch\n", dev_name, rate,
+  printf("uac: UAC2Gadget playback PCM opened: %s @ %u Hz, 16-bit, %d ch\n", dev_name, rate,
+         UAC_CHANNELS);
+  return 0;
+}
+
+// Open and configure the UAC2 gadget's own ALSA PCM for read (capture
+// side, host -> device) - the SAME card uac_alsa_open() above opens, same
+// device 0, just the other of its two independent PCM substream
+// directions (see usb_gadget.h's "one card, two substream directions"
+// note). What's read here is what the host SENT (WSJT-X's own generated
+// TX tone, as ITS playback/speaker output). Best-effort: a failure here is
+// logged by the caller and does not prevent the RX/playback direction
+// (uac_alsa_open() above) from working.
+// Returns 0 on success, -1 on ALSA error.
+static int uac_alsa_open_capture(void) {
+  int card_idx = -1;
+  if (uac_find_card_by_id("UAC2Gadget", &card_idx) < 0) {
+    fprintf(stderr, "uac: UAC2Gadget ALSA card not found for capture - is the gadget bound to a UDC?\n");
+    return -1;
+  }
+
+  char dev_name[64];
+  snprintf(dev_name, sizeof(dev_name), "hw:%d,0", card_idx);
+
+  int err;
+  if ((err = snd_pcm_open(&uac_pcm_capture_handle, dev_name, SND_PCM_STREAM_CAPTURE, 0)) < 0) {
+    fprintf(stderr, "uac: snd_pcm_open(%s, capture) failed: %s\n", dev_name, snd_strerror(err));
+    uac_pcm_capture_handle = NULL;
+    return -1;
+  }
+
+  snd_pcm_hw_params_t *hw;
+  snd_pcm_hw_params_alloca(&hw);
+  snd_pcm_hw_params_any(uac_pcm_capture_handle, hw);
+
+  snd_pcm_hw_params_set_access(uac_pcm_capture_handle, hw, SND_PCM_ACCESS_RW_INTERLEAVED);
+  snd_pcm_hw_params_set_format(uac_pcm_capture_handle, hw, SND_PCM_FORMAT_S16_LE);
+  unsigned int rate = UAC_RATE;
+  snd_pcm_hw_params_set_rate_near(uac_pcm_capture_handle, hw, &rate, NULL);
+  snd_pcm_hw_params_set_channels(uac_pcm_capture_handle, hw, UAC_CHANNELS);
+
+  snd_pcm_uframes_t period = UAC_PERIOD_FRAMES;
+  snd_pcm_hw_params_set_period_size_near(uac_pcm_capture_handle, hw, &period, NULL);
+  unsigned int periods = UAC_PERIODS;
+  snd_pcm_hw_params_set_periods_near(uac_pcm_capture_handle, hw, &periods, NULL);
+
+  if ((err = snd_pcm_hw_params(uac_pcm_capture_handle, hw)) < 0) {
+    fprintf(stderr, "uac: snd_pcm_hw_params (capture) failed: %s\n", snd_strerror(err));
+    snd_pcm_close(uac_pcm_capture_handle);
+    uac_pcm_capture_handle = NULL;
+    return -1;
+  }
+
+  if ((err = snd_pcm_prepare(uac_pcm_capture_handle)) < 0) {
+    fprintf(stderr, "uac: snd_pcm_prepare (capture) failed: %s\n", snd_strerror(err));
+    snd_pcm_close(uac_pcm_capture_handle);
+    uac_pcm_capture_handle = NULL;
+    return -1;
+  }
+
+  printf("uac: UAC2Gadget capture PCM opened: %s @ %u Hz, 16-bit, %d ch\n", dev_name, rate,
          UAC_CHANNELS);
   return 0;
 }
 
 /* ---------------------------------------------------------------------
  * Writer thread — owns uac_pcm_handle exclusively; the only thing that
- * ever calls snd_pcm_writei() on it. uac_push_iq() (called from
- * sound.c's real-time audio thread) only ever touches the lock-free
+ * ever calls snd_pcm_writei() on it. uac_push_audio_rx() (called from
+ * sound.c's real-time audio thread) only ever touches the RX lock-free
  * queue above and never blocks; this thread is the sole consumer,
  * waiting for a full period's worth of samples and writing them to the
  * gadget's PCM, so a blocked or absent USB host can only cost USB audio
@@ -435,8 +543,8 @@ static void *uac_writer_thread(void *arg) {
   int host_was_draining = 0;
 
   while (uac_writer_running) {
-    unsigned head = atomic_load_explicit(&uac_q_head, memory_order_acquire);
-    unsigned tail = atomic_load_explicit(&uac_q_tail, memory_order_relaxed);
+    unsigned head = atomic_load_explicit(&uac_q_rx_head, memory_order_acquire);
+    unsigned tail = atomic_load_explicit(&uac_q_rx_tail, memory_order_relaxed);
     unsigned available = (head - tail) & UAC_QUEUE_MASK;
 
     if (available < UAC_BUF_FRAMES) {
@@ -465,36 +573,30 @@ static void *uac_writer_thread(void *arg) {
     }
 
     for (int s = 0; s < UAC_BUF_FRAMES; s++) {
-      double i_val = uac_q_i[tail];
-      double q_val = uac_q_q[tail];
+      double sample = uac_q_rx[tail];
       tail = (tail + 1) & UAC_QUEUE_MASK;
 
-      // Clamp to [-1, 1] before conversion
-      if (i_val > 1.0)
-        i_val = 1.0;
-      if (i_val < -1.0)
-        i_val = -1.0;
-      if (q_val > 1.0)
-        q_val = 1.0;
-      if (q_val < -1.0)
-        q_val = -1.0;
-
-      // Scale to 24-bit signed integer range and pack as 3-byte
-      // little-endian (SND_PCM_FORMAT_S24_3LE: [LSB, mid, MSB])
-      int32_t i_int = (int32_t)(i_val * 8388607.0); // 2^23 - 1
-      int32_t q_int = (int32_t)(q_val * 8388607.0);
+      // Scale rx_audio.c's uac_out tap onto 16-bit PCM's signed range
+      // (UAC_RX_AUDIO_SCALE above) and clamp - this tap is deliberately
+      // unnormalized/uncapped (rx_audio.h), so clamping into the
+      // destination range is this file's own job, not rx_audio.c's.
+      double scaled = sample * UAC_RX_AUDIO_SCALE;
+      if (scaled > 32767.0)
+        scaled = 32767.0;
+      if (scaled < -32768.0)
+        scaled = -32768.0;
+      int16_t pcm = (int16_t)scaled;
 
       uint8_t *slot = uac_pcm_buf + s * UAC_FRAME_BYTES;
-      // I sample (left channel)
-      slot[0] = (uint8_t)(i_int & 0xFF);
-      slot[1] = (uint8_t)((i_int >> 8) & 0xFF);
-      slot[2] = (uint8_t)((i_int >> 16) & 0xFF);
-      // Q sample (right channel)
-      slot[3] = (uint8_t)(q_int & 0xFF);
-      slot[4] = (uint8_t)((q_int >> 8) & 0xFF);
-      slot[5] = (uint8_t)((q_int >> 16) & 0xFF);
+      // Same mono sample duplicated onto both channels (see
+      // uac_gadget_create()'s c_chmask comment) - SND_PCM_FORMAT_S16_LE
+      // packs each channel as 2 bytes, little-endian.
+      slot[0] = (uint8_t)(pcm & 0xFF);
+      slot[1] = (uint8_t)((pcm >> 8) & 0xFF);
+      slot[2] = (uint8_t)(pcm & 0xFF);
+      slot[3] = (uint8_t)((pcm >> 8) & 0xFF);
     }
-    atomic_store_explicit(&uac_q_tail, tail, memory_order_release);
+    atomic_store_explicit(&uac_q_rx_tail, tail, memory_order_release);
 
     // Flush a full period to the gadget's PCM. This can block (or
     // fail) if nothing is draining the other side - that's now
@@ -560,6 +662,118 @@ static void *uac_writer_thread(void *arg) {
 }
 
 /* ---------------------------------------------------------------------
+ * Reader thread — owns uac_pcm_capture_handle exclusively; the only
+ * thing that ever calls snd_pcm_readi() on it. Mirrors
+ * uac_writer_thread() above in reverse: it's the sole producer into the
+ * TX lock-free queue (uac_pull_audio_tx(), called from sound.c's
+ * real-time audio thread, is the sole consumer and never blocks), so a
+ * blocked or absent USB host (WSJT-X not running, or not yet sending TX
+ * audio) can only cost this thread's own pacing, never the radio's real
+ * hardware timing. Same backoff/retry/transition-logging pattern as the
+ * writer thread, for the same reason (docs/dsp_design_notes/
+ * usb_gadget_OS_setup.md §11) - just watching for a host that starts
+ * SENDING instead of one that starts DRAINING.
+ * --------------------------------------------------------------------- */
+static void *uac_reader_thread(void *arg) {
+  (void)arg;
+
+  unsigned err_streak = 0;
+  unsigned success_streak = 0;
+  unsigned pending_err_streak = 0;
+  int host_was_sending = 0;
+
+  while (uac_reader_running) {
+    unsigned head = atomic_load_explicit(&uac_q_tx_head, memory_order_relaxed);
+    unsigned tail = atomic_load_explicit(&uac_q_tx_tail, memory_order_acquire);
+    unsigned free_space = UAC_QUEUE_CAP - ((head - tail) & UAC_QUEUE_MASK) - 1;
+
+    if (free_space < UAC_BUF_FRAMES) {
+      // uac_pull_audio_tx() isn't draining fast enough yet (or at all,
+      // e.g. not in RADIO_MODE_DIGITAL) - same "not real-time critical,
+      // a short sleep is fine" reasoning as the writer thread's own
+      // backpressure wait above.
+      struct timespec ts = {.tv_sec = 0, .tv_nsec = 2000000L}; // 2ms
+      nanosleep(&ts, NULL);
+      continue;
+    }
+
+    if (err_streak > 0) {
+      unsigned backoff_periods = err_streak;
+      if (backoff_periods > 100)
+        backoff_periods = 100; // cap ~1.07s
+      struct timespec ts = {.tv_sec = 0, .tv_nsec = 10700000L};
+      for (unsigned b = 0; b < backoff_periods && uac_reader_running; b++)
+        nanosleep(&ts, NULL);
+      if (!uac_reader_running)
+        break;
+    }
+
+    snd_pcm_sframes_t got =
+        snd_pcm_readi(uac_pcm_capture_handle, uac_pcm_capture_buf, (snd_pcm_uframes_t)UAC_BUF_FRAMES);
+
+    if (got == -EPIPE) {
+      // Buffer overrun (most commonly: no host sending TX audio yet) -
+      // attempt recovery then retry once.
+      snd_pcm_prepare(uac_pcm_capture_handle);
+      got = snd_pcm_readi(uac_pcm_capture_handle, uac_pcm_capture_buf,
+                           (snd_pcm_uframes_t)UAC_BUF_FRAMES);
+    }
+
+    if (got < 0) {
+      // Most commonly means no USB host has activated the playback
+      // interface yet (cable unplugged, WSJT-X not running or not yet
+      // transmitting) - a normal, expected state, not a fault, so log
+      // the *transition* into it once rather than every retry.
+      if (host_was_sending) {
+        fprintf(stderr, "uac: no USB TX audio source (%s)\n", snd_strerror((int)got));
+        host_was_sending = 0;
+      }
+      success_streak = 0;
+      err_streak++;
+      snd_pcm_recover(uac_pcm_capture_handle, (int)got, 1 /*silent*/);
+      continue;
+    }
+
+    if (success_streak == 0) {
+      pending_err_streak = err_streak;
+    }
+    success_streak++;
+    err_streak = 0;
+
+    if (!host_was_sending && success_streak > UAC_PERIODS) {
+      if (pending_err_streak > 0) {
+        fprintf(stderr, "uac: USB host sending TX audio again after %u failed read(s)\n",
+                pending_err_streak);
+      } else {
+        fprintf(stderr, "uac: USB host sending TX audio\n");
+      }
+      host_was_sending = 1;
+    }
+
+    // Unpack S16_LE stereo frames into one mono sample per frame,
+    // normalized to roughly [-1, +1] - a fixed, unambiguous conversion
+    // (see usb_gadget.h's uac_pull_audio_tx() comment for why this
+    // needs no separate compile-time scale the way UAC_RX_AUDIO_SCALE
+    // does). Averaged across both channels rather than picking one, so
+    // this doesn't depend on whether the host app sends true stereo or
+    // duplicates one channel the way uac_writer_thread() does for the
+    // RX direction.
+    for (snd_pcm_sframes_t s = 0; s < got; s++) {
+      uint8_t *slot = uac_pcm_capture_buf + s * UAC_FRAME_BYTES;
+      int16_t left = (int16_t)(slot[0] | (slot[1] << 8));
+      int16_t right = (int16_t)(slot[2] | (slot[3] << 8));
+      double mono = ((double)left + (double)right) * 0.5 / 32768.0;
+
+      uac_q_tx[head] = mono;
+      head = (head + 1) & UAC_QUEUE_MASK;
+    }
+    atomic_store_explicit(&uac_q_tx_head, head, memory_order_release);
+  }
+
+  return NULL;
+}
+
+/* ---------------------------------------------------------------------
  * Public API — see usb_gadget.h
  * --------------------------------------------------------------------- */
 
@@ -590,43 +804,94 @@ int uac_init(void) {
   }
 
   uac_active = 1;
-  printf("uac: USB IQ audio stream ready — device name: 'sBitx IQ'\n");
+
+  // Capture (TX/inbound) direction is best-effort, same spirit as the
+  // rest of this file: a failure here does not unwind the RX/playback
+  // side already brought up above, and WSJT-X's decoded audio keeps
+  // flowing either way - only TX audio into RADIO_MODE_DIGITAL won't
+  // arrive until this succeeds (see usb_gadget.h's uac_init() comment).
+  if (uac_alsa_open_capture() == 0) {
+    uac_reader_running = 1;
+    if (pthread_create(&uac_reader_tid, NULL, uac_reader_thread, NULL) != 0) {
+      fprintf(stderr, "uac: failed to start reader thread\n");
+      uac_reader_running = 0;
+      snd_pcm_close(uac_pcm_capture_handle);
+      uac_pcm_capture_handle = NULL;
+    } else {
+      uac_capture_active = 1;
+    }
+  }
+
+  printf("uac: USB audio stream ready — device name: 'sBitx Audio'\n");
   return 0;
 }
 
-void uac_push_iq(double i_val, double q_val) {
+void uac_push_audio_rx(double sample) {
   if (!uac_active)
     return;
 
   // Lock-free producer (see the writer-thread comment above): never
-  // blocks, never touches uac_q_tail. On overflow (writer thread
+  // blocks, never touches uac_q_rx_tail. On overflow (writer thread
   // stalled behind a slow/absent USB host) it silently drops the new
   // sample rather than waiting - exactly hpsdr_p1.c's
   // hpsdr_send_iq()/IQ_QUEUE pattern.
-  unsigned head = atomic_load_explicit(&uac_q_head, memory_order_relaxed);
-  unsigned tail = atomic_load_explicit(&uac_q_tail, memory_order_acquire);
+  unsigned head = atomic_load_explicit(&uac_q_rx_head, memory_order_relaxed);
+  unsigned tail = atomic_load_explicit(&uac_q_rx_tail, memory_order_acquire);
   unsigned next_head = (head + 1) & UAC_QUEUE_MASK;
   if (next_head == tail)
     return; // queue full - drop this sample
 
-  uac_q_i[head] = i_val;
-  uac_q_q[head] = q_val;
-  atomic_store_explicit(&uac_q_head, next_head, memory_order_release);
+  uac_q_rx[head] = sample;
+  atomic_store_explicit(&uac_q_rx_head, next_head, memory_order_release);
+}
+
+int uac_pull_audio_tx(double *out, int n) {
+  if (!uac_capture_active)
+    return 0;
+
+  // Lock-free consumer (see the reader-thread comment above): never
+  // blocks, never touches uac_q_tx_head. Returns fewer samples than
+  // asked for (0 if none queued) rather than waiting - sound.c fills
+  // any shortfall with silence (usb_gadget.h).
+  unsigned tail = atomic_load_explicit(&uac_q_tx_tail, memory_order_relaxed);
+  unsigned head = atomic_load_explicit(&uac_q_tx_head, memory_order_acquire);
+  unsigned available = (head - tail) & UAC_QUEUE_MASK;
+
+  int count = (int)available;
+  if (count > n)
+    count = n;
+
+  for (int i = 0; i < count; i++) {
+    out[i] = uac_q_tx[tail];
+    tail = (tail + 1) & UAC_QUEUE_MASK;
+  }
+  atomic_store_explicit(&uac_q_tx_tail, tail, memory_order_release);
+  return count;
 }
 
 void uac_stop(void) {
   uac_active = 0;
+  uac_capture_active = 0;
 
   if (uac_writer_running) {
     uac_writer_running = 0;
     pthread_join(uac_writer_tid, NULL);
+  }
+  if (uac_reader_running) {
+    uac_reader_running = 0;
+    pthread_join(uac_reader_tid, NULL);
   }
 
   if (uac_pcm_handle) {
     snd_pcm_drain(uac_pcm_handle);
     snd_pcm_close(uac_pcm_handle);
     uac_pcm_handle = NULL;
-    printf("uac: ALSA PCM closed\n");
+    printf("uac: ALSA playback PCM closed\n");
+  }
+  if (uac_pcm_capture_handle) {
+    snd_pcm_close(uac_pcm_capture_handle);
+    uac_pcm_capture_handle = NULL;
+    printf("uac: ALSA capture PCM closed\n");
   }
 
   if (uac_gadget_up) {
