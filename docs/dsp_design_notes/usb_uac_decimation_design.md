@@ -8,6 +8,22 @@ Windows decoded FT8 correctly from the "sBitx IQ" capture device
 24-bit/48kHz stream is clean enough for a real decoder, not just
 numerically correct in isolation.
 
+**Update (`ARCHITECTURE.md` §10 step 9):** the call site this document
+describes moved. `usb_gadget.c`'s gadget no longer carries I/Q at all -
+`uac_push_iq()` is gone, replaced by `uac_push_audio_rx()`, fed from
+`rx_audio.c`'s real demodulated-audio tap instead of raw baseband I/Q,
+and `sound_process()` now runs a single mono rail through
+`decim48k_apply()` rather than the paired I/Q rails this document's own
+derivation (§2-§4 below) was originally written against. The filter
+itself - coefficients, decimation-phase mechanics, the double-write
+history-buffer trick, the ring-buffer real-time-safety reasoning - is
+completely unchanged; only what's fed into it changed, and everything
+below should be read with "a rail of real audio samples" in place of "I
+or Q" wherever it says the latter. The interpolating (48kHz→96kHz)
+counterpart this document never covered, needed for the new gadget's TX/
+inbound direction, is `upsample48k.c`/`.h` - see `ARCHITECTURE.md` §10
+step 9 for that design and its own bench numbers.
+
 ## 1. Background
 
 `usb_gadget.c`'s UAC2 gadget has always advertised 48kHz (`c_srate`/
