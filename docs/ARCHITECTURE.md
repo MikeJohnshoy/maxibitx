@@ -1899,3 +1899,63 @@ for keying an external accessory's PTT, not this input line.)
      all).
 
 10. Power/ALC calibration for voice, per §9.
+
+11. **Done, code-complete — on-air test still outstanding.** Simplified
+    step 9's UAC2 gadget audio from stereo-duplicated to genuinely mono,
+    both directions, prompted by the operator's own real-world bring-up:
+    initial Windows/WSJT-X testing of step 9's build got no further than
+    driver-level enumeration succeeding (confirmed via Device Manager's
+    "Devices by connection" view - both a "Microphone" and "Speakers"
+    child endpoint correctly bound under the "sBitx Audio" composite
+    device) - WSJT-X itself never successfully decoded or transmitted
+    through it. Rather than keep debugging with step 9's stereo-
+    duplication hedge still in place, the hedge itself was removed as the
+    simplification most likely to help and, independently, the more
+    correct design regardless of whether it turns out to be the actual
+    fix.
+    - **What the hedge was and why it was never load-bearing:** step 9's
+      `uac_gadget_create()` set `c_chmask`/`p_chmask` to `"3"` (2 channels,
+      both wire channels present) purely defensively - "hedging for host/
+      app compatibility with devices that assume a stereo interface," per
+      the code's own comment - not because anything in this project's own
+      signal chain is stereo. `rx_audio.c`'s `uac_out` tap and
+      `tx_pipeline.c`'s TX input were always a single mono rail;
+      `uac_writer_thread()` was writing the identical sample onto both
+      wire channels, and `uac_reader_thread()` was reading both back and
+      averaging them down to the one mono value `upsample48k_apply()`
+      actually wanted. Real ham-radio digital-mode USB audio interfaces
+      (SignaLink USB, RigBlaster, and similar) are universally mono, both
+      directions - mono is the normal, expected case for this exact
+      application, not an edge case that needs a stereo hedge.
+    - **Changed:** `usb_gadget.h`'s configfs doc comment and
+      `usb_gadget.c`'s `uac_gadget_create()` (`c_chmask`/`p_chmask` from
+      `"3"` to `"1"` - one channel, ch0 only), `UAC_CHANNELS` (2 to 1),
+      `uac_writer_thread()`'s packing loop (writes one 16-bit sample per
+      frame instead of duplicating it onto `slot[0]`/`slot[1]` and
+      `slot[2]`/`slot[3]`), and `uac_reader_thread()`'s unpacking loop
+      (reads one `int16_t` directly instead of reading and averaging a
+      `left`/`right` pair). Nothing upstream or downstream of the two ring
+      buffers changed - `decim48k_apply()`, `upsample48k_apply()`,
+      `rx_audio.c`'s `uac_out` tap, and `tx_pipeline.c`'s TX input are all
+      unchanged, since this only touches how a sample is packed onto or
+      off of the USB wire, not the DSP itself.
+    - **Regression check:** full rebuild (`make clean && make`) clean
+      under `-Wall -Wextra`; `test-fft-filter`, `test-tx-pipeline`,
+      `test-rx-filter`, `test-rx-audio`, and `test-upsample48k` all still
+      pass with numbers matching their own steps' original bench results
+      - expected, since none of those harnesses touch `usb_gadget.c` at
+      all (it isn't linked into any of them - it needs real configfs/ALSA
+      gadget hardware none of the harnesses provide), so this is
+      confirmation the DSP chain feeding the gadget is untouched, not a
+      test of the gadget change itself.
+    - **What's genuinely still open, not yet bench- or air-verified:**
+      whether this actually fixes WSJT-X decode/encode. Step 9's own
+      failure mode was never root-caused - no dmesg/ALSA error was ever
+      captured showing *why* WSJT-X didn't work with the stereo-
+      duplicated build, so this change is the most standards-aligned
+      simplification available (matching real hardware precedent and
+      removing a hedge that was never necessary), not a confirmed fix for
+      a diagnosed bug. Needs the same real end-to-end WSJT-X test step 9
+      itself never got - if WSJT-X still doesn't work against a genuinely
+      mono gadget, the channel count wasn't the problem and the real
+      cause is still unfound.
