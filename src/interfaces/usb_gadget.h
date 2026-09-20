@@ -94,7 +94,7 @@
  *     idVendor, idProduct, bcdUSB, bcdDevice       unchanged from the I/Q
  *     strings/0x409/manufacturer  = "sBitx"        version deliberately -
  *     strings/0x409/product       = "sBitx Audio"  it's an internal path,
- *     strings/0x409/serialnumber  = "0000001"       not host-visible, and
+ *     strings/0x409/serialnumber  = "0000002"       not host-visible, and
  *     configs/c.1/                                  renaming it risks
  *       strings/0x409/configuration = "Default"    breaking any existing
  *       bmAttributes, MaxPower                      OS-level setup script
