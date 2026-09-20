@@ -70,7 +70,12 @@ What's left for RX specifically: the on-air listening comparison itself
 (step 7's own entry) — the code is complete and integration-tested
 (`src/rx_audio_test.c`), but "sounds at least as good for real CW copy"
 is the operator's judgment call on real hardware, not something
-bench-verifiable. This document is both the
+bench-verifiable. That judgment has now been made once, and it went
+against the FFT implementation — but the bench could not reproduce the
+reported selectivity problem, and instead found a large time-domain
+difference at keying transitions; see step 7's on-air entry and
+[`dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md`](dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md).
+Elliptic remains the default, and no code changed. This document is both the
 design rationale that justified starting `maxibitx` as its own repo
 (not a minibitx branch, not an sbitx fork-in-place) and the plan for
 §10's remaining steps. Everything below is grounded in minibitx's
@@ -1100,6 +1105,42 @@ for keying an external accessory's PTT, not this input line.)
    something any bench harness can settle — `narrow_filter_coeffs[]`
    stays in the tree, and elliptic stays the default, until that
    judgment is made.
+
+   **On-air comparison, first report (2026-09) — and what the bench said
+   about it.** The operator's verdict came back negative for the FFT
+   implementation: the elliptic "performs as expected," while the FFT
+   filter "lets a lot of wideband hiss and far-off-center signals get
+   through." That is a falsifiable claim about selectivity, so it was
+   measured rather than argued with, in
+   [`dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md`](dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md).
+   **The reported symptom was not reproduced.** Against the real
+   compiled filter at the shipped 700Hz/300Hz design point, the FFT
+   implementation measures *narrower* at -3dB (134Hz vs ~160Hz off
+   pitch), 30-55dB deeper across the whole stopband (worst case above
+   2kHz: -80.2dB vs the elliptic's flat -49.6dB equiripple floor, which
+   never improves past ~5kHz), passes 0.8dB *less* stationary broadband
+   noise, and sits **13.6dB quieter between CW elements** under a
+   realistic keyed-CW-plus-interferer scenario with the real AGC
+   applied. Ruled out by direct measurement: stopband leakage,
+   overlap-save history corruption from dropped ALSA periods (a dropped
+   block every 50 moves a steady tone's output RMS by 0.0011),
+   block-size fallback (`RX_FILTER_BLOCK_LEN` and `PERIOD_FRAMES` are
+   both 1024, so the FFT path really does run), and passband gain
+   difference.
+   What the bench *does* show is a large time-domain difference confined
+   to keying transitions: 16.0ms group delay against the elliptic's
+   2.6ms, and 8.5ms of **pre**-ringing that a causal IIR cannot have at
+   all. Note also that `RX_FILTER_IMPULSE_LEN` (3073) is not a chosen
+   number — it is `RX_FILTER_N - RX_FILTER_BLOCK_LEN + 1`, i.e. whatever
+   the FFT size and ALSA period leave over — and the note tabulates what
+   shortening it would cost (at 1025 taps the -3dB width barely moves,
+   134Hz→138Hz, while delay and pre-ringing both fall by two thirds;
+   what the extra taps actually buy is ultimate skirt steepness).
+   Nothing was changed as a result: this remains a measurement-only
+   finding, the "hiss" report is still unexplained (impulsive rather
+   than stationary band noise interacting with the pre-ringing is the
+   leading untested hypothesis), and elliptic stays the default — which
+   §5's transition-region result independently supports for CW.
 
    **Step 7 real-hardware follow-up (first on-air test).** The step 7
    binary was actually run on real sBitx hardware for the first time,
