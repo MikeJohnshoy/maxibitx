@@ -1959,3 +1959,47 @@ for keying an external accessory's PTT, not this input line.)
       itself never got - if WSJT-X still doesn't work against a genuinely
       mono gadget, the channel count wasn't the problem and the real
       cause is still unfound.
+    - **Follow-up: USB serial number bumped `0000001` -> `0000002`, as a
+      deliberate one-time cache break.** Bench work on the real Windows
+      11 host turned up the specific mechanism behind "WSJT-X and
+      Audacity both refuse to open this device": the gadget advertises
+      exactly ONE audio format and no alternates (`c_srate`/`p_srate`
+      48000, `c_ssize`/`p_ssize` 2, `c_chmask`/`p_chmask` 1 - see
+      `uac_gadget_create()`), which is far more rigid than a typical
+      commercial USB audio device. Windows' legacy wave mapper
+      ("Microsoft Sound Mapper - Input") performs automatic sample-rate
+      and channel conversion between what an app asks for and what the
+      device really supports; opening a specific device *by name* does
+      not, and fails outright on any mismatch. That asymmetry was
+      directly observed: inside one Audacity instance, the mapper path
+      streamed real audio that tracked maxibitx's own volume control
+      live, while a direct open of the same device returned PortAudio
+      -9999 ("Unanticipated Host Error") - which also rules out the
+      usual -9999 causes (mic privacy, exclusive-mode lock, device busy),
+      since all of those would have broken the mapper path too.
+    - **Why the serial number is implicated at all:** Windows caches an
+      audio endpoint's believed format keyed on VID/PID/serial, and this
+      gadget deliberately holds all three fixed so a host sees one stable
+      device across replugs (and the ACM function keeps its COM port
+      number). That stability is exactly what lets a host go on believing
+      this device is stereo after step 11 made it mono - and no amount of
+      unplugging/replugging clears it, because nothing in the identity
+      changed. Bumping the serial forces one clean break: the host
+      enumerates an entirely new device and builds its endpoint state
+      fresh from the current descriptors. Deliberately a fixed new value,
+      NOT randomized per run - a serial that changed on every start would
+      leave a trail of ghost device instances and hand FLRig a different
+      COM port on every restart.
+    - **Known, accepted side effect:** because the host sees a new device,
+      Windows assigns the CAT/ACM function a NEW COM port number. FLRig
+      (and anything else pointed at the old port) has to be repointed
+      once, after which the new port is as stable as the old one was.
+    - **Still unverified at the time of writing:** whether the bump
+      actually clears the symptom. If it does, the cached-stale-format
+      theory is confirmed; if a freshly-enumerated device still refuses
+      direct opens, the cache was never the problem and the remaining
+      suspect is simply the app-side format request (Audacity's project
+      rate defaults to 44100 and its recording channels to 2; WSJT-X's
+      Settings -> Audio input channel selector must be on "Mono"), which
+      is an operator-facing setup matter for
+      `10_external_digital_modes_wsjtx.md` rather than a code defect.
