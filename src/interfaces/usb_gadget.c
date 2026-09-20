@@ -44,7 +44,9 @@
 
 // PCM parameters to match the UAC2 descriptor
 #define UAC_RATE 48000
-#define UAC_CHANNELS 2
+#define UAC_CHANNELS 1        // mono, both directions (was 2 - see uac_gadget_create()'s
+                              // c_chmask/p_chmask comment for why the duplicate-to-stereo
+                              // hedge was removed)
 #define UAC_SAMPLE_BYTES 2    // packed on-wire bytes (16-bit PCM - was 3/24-bit for I/Q)
 #define UAC_PERIOD_FRAMES 512 // ALSA period size in frames
 #define UAC_PERIODS 4         // number of periods in the ring buffer
@@ -260,26 +262,37 @@ static int uac_gadget_create(void) {
     return -1;
   }
 
-  // Capture (host reads decoded audio from us): 2 ch, 16-bit, 48 kHz - both
-  // channels carry the SAME mono sample (see uac_writer_thread()), purely
-  // for compatibility with host-side apps/drivers that assume a stereo
-  // audio interface.
+  // Capture (host reads decoded audio from us): 1 ch (mono), 16-bit,
+  // 48 kHz - genuinely single-channel, matching the convention every
+  // real ham-radio digital-mode audio interface (SignaLink, RigBlaster,
+  // and similar) already uses, both directions. An earlier revision
+  // duplicated the mono sample onto 2 channels "for compatibility with
+  // host-side apps/drivers that assume a stereo audio interface" - that
+  // hedge was never actually needed (WSJT-X and Windows' own audio stack
+  // treat a mono UAC2 device as the ordinary case, not an edge case) and
+  // cost real code: uac_writer_thread()'s packing had to write every
+  // sample twice, and uac_reader_thread() had to average two channels
+  // back into one on the way in, inventing an ambiguity (true stereo vs.
+  // duplicated-mono from the host) that a single real channel doesn't
+  // have. Removed once WSJT-X bring-up on real hardware stalled and this
+  // was identified as unnecessary complexity worth shedding.
   snprintf(path, sizeof(path), "%s/functions/uac2.0/c_srate", UAC_GADGET_ROOT);
   uac_write_attr(path, "48000");
   snprintf(path, sizeof(path), "%s/functions/uac2.0/c_ssize", UAC_GADGET_ROOT);
   uac_write_attr(path, "2"); // 2 bytes = 16-bit PCM (was 3/24-bit for I/Q)
   snprintf(path, sizeof(path), "%s/functions/uac2.0/c_chmask", UAC_GADGET_ROOT);
-  uac_write_attr(path, "3"); // bitmask: ch0 | ch1  = L+R
+  uac_write_attr(path, "1"); // bitmask: ch0 only (mono) - was "3" (L+R)
 
   // Playback (host -> device): WSJT-X's own generated TX tone for
   // RADIO_MODE_DIGITAL - genuinely used now, unlike the I/Q version's
-  // declared-but-unused pair (see usb_gadget.h).
+  // declared-but-unused pair (see usb_gadget.h). Mono, same reasoning
+  // as the capture side above.
   snprintf(path, sizeof(path), "%s/functions/uac2.0/p_srate", UAC_GADGET_ROOT);
   uac_write_attr(path, "48000");
   snprintf(path, sizeof(path), "%s/functions/uac2.0/p_ssize", UAC_GADGET_ROOT);
   uac_write_attr(path, "2");
   snprintf(path, sizeof(path), "%s/functions/uac2.0/p_chmask", UAC_GADGET_ROOT);
-  uac_write_attr(path, "3");
+  uac_write_attr(path, "1"); // was "3" (L+R)
 
   // --- ACM (CDC-ACM) function: Kenwood TS-480-subset CAT control ---
   // See the CAT section near the bottom of this file and
@@ -422,7 +435,7 @@ static int uac_alsa_open(void) {
   snd_pcm_hw_params_alloca(&hw);
   snd_pcm_hw_params_any(uac_pcm_handle, hw);
 
-  // Interleaved, 16-bit LE, 48 kHz, 2 channels
+  // Interleaved, 16-bit LE, 48 kHz, mono (UAC_CHANNELS)
   snd_pcm_hw_params_set_access(uac_pcm_handle, hw, SND_PCM_ACCESS_RW_INTERLEAVED);
   snd_pcm_hw_params_set_format(uac_pcm_handle, hw, SND_PCM_FORMAT_S16_LE);
   unsigned int rate = UAC_RATE;
@@ -588,13 +601,10 @@ static void *uac_writer_thread(void *arg) {
       int16_t pcm = (int16_t)scaled;
 
       uint8_t *slot = uac_pcm_buf + s * UAC_FRAME_BYTES;
-      // Same mono sample duplicated onto both channels (see
-      // uac_gadget_create()'s c_chmask comment) - SND_PCM_FORMAT_S16_LE
-      // packs each channel as 2 bytes, little-endian.
+      // One mono channel (see uac_gadget_create()'s c_chmask comment) -
+      // SND_PCM_FORMAT_S16_LE packs it as 2 bytes, little-endian.
       slot[0] = (uint8_t)(pcm & 0xFF);
       slot[1] = (uint8_t)((pcm >> 8) & 0xFF);
-      slot[2] = (uint8_t)(pcm & 0xFF);
-      slot[3] = (uint8_t)((pcm >> 8) & 0xFF);
     }
     atomic_store_explicit(&uac_q_rx_tail, tail, memory_order_release);
 
@@ -750,19 +760,18 @@ static void *uac_reader_thread(void *arg) {
       host_was_sending = 1;
     }
 
-    // Unpack S16_LE stereo frames into one mono sample per frame,
-    // normalized to roughly [-1, +1] - a fixed, unambiguous conversion
-    // (see usb_gadget.h's uac_pull_audio_tx() comment for why this
-    // needs no separate compile-time scale the way UAC_RX_AUDIO_SCALE
-    // does). Averaged across both channels rather than picking one, so
-    // this doesn't depend on whether the host app sends true stereo or
-    // duplicates one channel the way uac_writer_thread() does for the
-    // RX direction.
+    // Unpack S16_LE mono frames, normalized to roughly [-1, +1] - a
+    // fixed, unambiguous conversion (see usb_gadget.h's
+    // uac_pull_audio_tx() comment for why this needs no separate
+    // compile-time scale the way UAC_RX_AUDIO_SCALE does). One real
+    // channel now (c_chmask/p_chmask above), not two averaged together -
+    // removes the earlier "does the host send true stereo or duplicate
+    // one channel" ambiguity entirely, since there's only one channel to
+    // read.
     for (snd_pcm_sframes_t s = 0; s < got; s++) {
       uint8_t *slot = uac_pcm_capture_buf + s * UAC_FRAME_BYTES;
-      int16_t left = (int16_t)(slot[0] | (slot[1] << 8));
-      int16_t right = (int16_t)(slot[2] | (slot[3] << 8));
-      double mono = ((double)left + (double)right) * 0.5 / 32768.0;
+      int16_t sample = (int16_t)(slot[0] | (slot[1] << 8));
+      double mono = (double)sample / 32768.0;
 
       uac_q_tx[head] = mono;
       head = (head + 1) & UAC_QUEUE_MASK;
