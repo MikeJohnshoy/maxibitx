@@ -252,8 +252,32 @@ static int uac_gadget_create(void) {
   uac_write_attr(path, "sBitx");
   snprintf(path, sizeof(path), "%s/strings/0x409/product", UAC_GADGET_ROOT);
   uac_write_attr(path, "sBitx Audio");
+  // Serial number: a FIXED value on purpose, so a host sees one stable
+  // device identity across replugs rather than minting a fresh device
+  // instance (and, on Windows, a fresh COM port number for the ACM
+  // function) every time the cable is touched.
+  //
+  // The cost of that stability is that a host also caches per-device
+  // state against this identity, and keeps using it even after the
+  // gadget's own descriptors change underneath. Windows in particular
+  // caches an audio endpoint's supported/default PCM format keyed on
+  // VID/PID/serial - so after step 11's 2-channel -> 1-channel change,
+  // a Windows box that had already enumerated the stereo version can go
+  // on believing this device is stereo, and refuse every direct (non-
+  // Sound-Mapper) open with a format it no longer supports. Unplugging
+  // and replugging does NOT clear that, precisely because the serial
+  // hasn't changed.
+  //
+  // Bumped 0000001 -> 0000002 to force exactly one clean break: a host
+  // that has cached the old stereo descriptors sees an entirely new
+  // device and builds its endpoint state fresh from the current
+  // descriptors. This is a deliberate one-time bump, not a value to
+  // randomize per run - a serial that changed every start would leave a
+  // trail of ghost device instances and hand FLRig a different COM port
+  // number on every restart. Bump it again (0000003, ...) only if some
+  // future descriptor change needs the same clean break.
   snprintf(path, sizeof(path), "%s/strings/0x409/serialnumber", UAC_GADGET_ROOT);
-  uac_write_attr(path, "0000001");
+  uac_write_attr(path, "0000002");
 
   // --- UAC2 function ---
   snprintf(path, sizeof(path), "%s/functions/uac2.0", UAC_GADGET_ROOT);
