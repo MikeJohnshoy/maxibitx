@@ -102,13 +102,19 @@
  *     functions/uac2.0/
  *       c_srate  = 48000
  *       c_ssize  = 2        (2 bytes = 16-bit PCM, was 3/24-bit for I/Q)
- *       c_chmask = 3        (2 channels - both carry the SAME mono audio,
- *                             see uac_writer_thread(), for host/app
+ *       c_chmask = 1        (mono - ch0 only. An earlier revision used 2
+ *                             channels with the same sample duplicated
+ *                             onto both, hedging for host/app
  *                             compatibility with devices that assume a
- *                             stereo audio interface)
+ *                             stereo interface - removed as unnecessary
+ *                             complexity once real WSJT-X bring-up made
+ *                             clear that mono is the normal case for a
+ *                             ham-radio digital-mode audio interface, not
+ *                             an edge case, the same way a SignaLink or
+ *                             RigBlaster is mono both directions)
  *       p_srate  = 48000    (playback side - genuinely used now, unlike
  *       p_ssize  = 2         the I/Q version's declared-but-unused pair)
- *       p_chmask = 3
+ *       p_chmask = 1        (mono, same reasoning as c_chmask above)
  *     functions/acm.usb0/
  *       (no attributes set — port_num is read-only/assigned by the kernel)
  *
