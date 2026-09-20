@@ -965,20 +965,32 @@ static pthread_t cat_thread_tid;
 // mode_to_kenwood_digit()/kenwood_digit_to_mode() below translate
 // between that enum and the single-digit Kenwood MD codes this CAT
 // surface actually sends/parses. 1/2/3 (LSB/USB/CW) are the standard
-// Kenwood convention every TS-480-alike (QMX included) agrees on; 9 for
-// RADIO_MODE_DIGITAL is this project's own best-effort guess at what a
-// real QMX sends for its DATA mode (a data-capable rig's own extension
-// to the base Kenwood set, not itself part of the original TS-480
-// convention) - NOT yet confirmed against a real QMX/FLRig packet
-// capture, same "flag it, don't block on it" spirit as the IF command's
-// own comment on its field layout below. If FLRig ever shows the wrong
-// mode name for MD9 while FA/RT/TQ all work fine, this is the first
-// place to check.
+// Kenwood convention every TS-480-alike (QMX included) agrees on.
+//
+// RADIO_MODE_DIGITAL reports as '2' (USB), and that is deliberate.
+// An earlier revision sent '9' as a guess at "some data mode", flagged
+// in this comment as unconfirmed. It is now confirmed WRONG, by two
+// independent sources that agree: QRP Labs' own QMX CAT Programming
+// Manual documents digit 9 as "FSK Reverse", and Hamlib's default
+// kenwood_mode_table (kenwood.c - ts480.c defines no table of its own,
+// so the default is what WSJT-X gets) maps 9 to RTTY-REVERSE. That
+// table has no DATA/PKT digit at all in the 1-9 range a TS-480 IF
+// response can even express, so there is no honest digit to send: a
+// real TS-480 has no data mode. Sending '9' made WSJT-X display the rig
+// as RTTY-R.
+//
+// '2' is the truthful answer instead - FT8 and friends ARE upper
+// sideband, and "run the rig in USB and let the digital-mode app own
+// the audio" is exactly how a TS-480 is operated for data. The cost is
+// that DIGITAL is not reachable or distinguishable over CAT, only
+// selectable locally; see the MD set handler for the guard that keeps a
+// host's own "MD2" from silently dropping us out of DIGITAL (and with
+// it, the uac_pull_audio_tx() TX path) back into mic-sourced USB.
 static const struct { enum radio_mode mode; char digit; } mode_digits[] = {
   { RADIO_MODE_LSB,     '1' },
   { RADIO_MODE_USB,     '2' },
   { RADIO_MODE_CW,      '3' },
-  { RADIO_MODE_DIGITAL, '9' },
+  { RADIO_MODE_DIGITAL, '2' }, // reports as USB - see comment above
 };
 #define MODE_DIGITS_COUNT (sizeof(mode_digits) / sizeof(mode_digits[0]))
 
@@ -1209,8 +1221,21 @@ static void cat_handle_command(char *cmd) {
     } else {
       enum radio_mode m;
       if (kenwood_digit_to_mode(cmd[2], &m)) {
-        radio_set_mode(m);
-        printf("cat: MD%c -> ok\n", cmd[2]);
+        // DIGITAL reports itself as '2'/USB (see mode_digits[] above),
+        // so a host that reads the mode back and writes it out again -
+        // which WSJT-X does routinely - would otherwise walk us out of
+        // DIGITAL and into plain USB, quietly switching the TX source
+        // from uac_pull_audio_tx() to the mic and killing transmit.
+        // Treat an incoming USB request while already in DIGITAL as the
+        // no-op it was almost certainly meant to be. Any OTHER mode
+        // request (CW, LSB) is a genuine change and still applies, so
+        // this doesn't strand the radio in DIGITAL.
+        if (m == RADIO_MODE_USB && radio_get_mode() == RADIO_MODE_DIGITAL) {
+          printf("cat: MD%c -> already DIGITAL (reports as USB), staying\n", cmd[2]);
+        } else {
+          radio_set_mode(m);
+          printf("cat: MD%c -> ok\n", cmd[2]);
+        }
       } else {
         // Unrecognized digit - same "anything else is silently
         // ignored" convention as any other unhandled CAT command, see
@@ -1221,33 +1246,58 @@ static void cat_handle_command(char *cmd) {
     return;
   }
 
-  // --- IF: combined status string - get only. Best-effort reconstruction
-  // of the classic Kenwood IF layout (11-digit freq, 5-char step/blank,
-  // 5-char signed RIT offset, RIT on/off, XIT on/off, memory bank,
-  // 2-digit memory channel, TX/RX, mode, VFO/memory, scan, split, tone
-  // status, 2-digit tone number, one reserved digit) with everything
-  // minibitx doesn't have (XIT/memory/scan/split/tone) reported as
-  // off/zero. RIT is real now (radio_get_rit()/radio_rit_enabled()) -
-  // the 5-char signed offset and the RIT-on digit both reflect actual
-  // state; the field WIDTH is deliberately unchanged from the all-zero
-  // version this replaced, so whatever confidence or doubt applied to
-  // the overall layout before still applies equally now, just with a
-  // real number in one more place. NOTE: the exact field widths here are
-  // reconstructed from the general Kenwood IF convention, not confirmed
-  // character-for-character against QMX's own manual text (only a
-  // paraphrased summary of it was available while writing this) - if
-  // FLRig's status display looks wrong (frequency in the wrong place,
-  // mode misread, RIT digits landing somewhere unexpected) while FA/MD/
-  // TQ/RT individually work fine, this is the first place to check,
-  // ideally against a packet capture of a real QMX's IF response. ---
+  // --- IF: combined status string - get only. The field layout is no
+  // longer a guess: it is the classic 38-byte Kenwood IF response, and
+  // Hamlib (which is what WSJT-X drives its rig control through) parses
+  // it by FIXED character offsets and rejects a wrong-length reply
+  // outright. Hamlib's kenwood.c defaults `if_len` to 37 for any backend
+  // that doesn't override it - ts480.c doesn't - where if_len counts the
+  // reply INCLUDING the leading "IF" but EXCLUDING the ';' terminator.
+  // So the wire reply must be exactly 38 bytes: "IF" + 35 payload + ';'.
+  // A length mismatch is a hard -RIG_EPROTO after the port's retries,
+  // not something Hamlib shrugs off.
+  //
+  // Layout, as 0-indexed offsets into the reply (';' stripped), which is
+  // exactly how Hamlib indexes it:
+  //    [0..1]   "IF"
+  //    [2..12]  frequency, 11 digits
+  //    [13..16] frequency step, 4 chars       (we send zeros)
+  //    [17..22] RIT/XIT offset, sign + 5 digits
+  //    [23]     RIT on/off
+  //    [24]     XIT on/off                    (we have none - '0')
+  //    [25]     memory bank                   (none - '0')
+  //    [26..27] memory channel                (none - "00")
+  //    [28]     RX/TX          <- kenwood_get_ptt() reads exactly here
+  //    [29]     mode digit     <- kenwood_get_mode()/IF reads exactly here
+  //    [30]     VFO A/B/MEM    <- kenwood_get_vfo_if() reads exactly here,
+  //                               and returns -RIG_EPROTO on anything but
+  //                               '0'/'1'/'2' - we are always VFO A ('0')
+  //    [31]     scan, [32] split, [33] tone, [34..35] tone number,
+  //    [36]     reserved                      (all zero here)
+  //
+  // This replaces an earlier best-effort reconstruction that was 38
+  // payload+IF chars (39 on the wire) and put RX/TX and mode one
+  // position late, because its RIT field was 5 chars instead of 6 and
+  // its tail was one digit too long. That made every Hamlib IF-based
+  // call - get_ptt, get_vfo, get_split_vfo - fail with -RIG_EPROTO,
+  // which is what WSJT-X surfaces as a "Rig Control Error". rig_open()
+  // itself had always succeeded, since Hamlib's kenwood_open() only
+  // hard-fails if `ID;` goes unanswered (ours answers ID020;) - which is
+  // why CAT looked healthy from FLRig, whose parser is far more
+  // forgiving, while WSJT-X refused to connect.
+  //
+  // RIT_MAX_HZ is 9999, so the signed 6-char field can never overflow.
   if (len == 2 && strncmp(cmd, "IF", 2) == 0) {
-    static char last[40] = "";
-    char buf[40], log_line[96];
+    static char last[48] = "";
+    char buf[48], log_line[96];
     int rit = radio_get_rit();
     int rit_on = radio_rit_enabled();
-    snprintf(buf, sizeof(buf), "IF%011d00000%+05d%d00%02d%d%c00000000;", freq_hdr,
-             rit, rit_on ? 1 : 0,
-             0 /* memory channel */, in_tx ? 1 : 0, mode_to_kenwood_digit(radio_get_mode()));
+    //                       freq      step  RIT   riton xit/bank/memch
+    //                         |         |     |     |    |  txrx mode
+    //                         |         |     |     |    |    |   |  tail
+    snprintf(buf, sizeof(buf), "IF%011d" "0000" "%+06d" "%d" "0000" "%d" "%c" "0000000;",
+             freq_hdr, rit, rit_on ? 1 : 0,
+             in_tx ? 1 : 0, mode_to_kenwood_digit(radio_get_mode()));
     cat_send(buf);
     snprintf(log_line, sizeof(log_line), "cat: IF -> sent (freq %d, RIT %+d%s, %s, mode %c)\n",
              freq_hdr, rit, rit_on ? " on" : " (off)", in_tx ? "TX" : "RX", mode_to_kenwood_digit(radio_get_mode()));
@@ -1295,6 +1345,45 @@ static void cat_handle_command(char *cmd) {
       int percent = (int)((level255 * 100 + 127) / 255); // 0-255 -> 0-100, rounded
       rx_audio_set_volume(percent);
       printf("cat: %s -> volume %d%%\n", cmd, percent);
+    }
+    return;
+  }
+
+  // --- PS: power status. Hamlib's kenwood_open() queries this right
+  // after ID, and explicitly tolerates a timeout (it just clears its own
+  // has_ps flag and carries on), so this is not required for correctness
+  // - but a timeout costs the port's full retry budget on every open,
+  // for no reason. maxibitx is trivially "on" whenever it is answering
+  // CAT at all, so answer honestly and instantly. A set is accepted and
+  // ignored: there is no software power switch to throw, and silently
+  // shutting the daemon down on a stray "PS0;" would be a nasty
+  // surprise. ---
+  if (len >= 2 && cmd[0] == 'P' && cmd[1] == 'S') {
+    if (len == 2) {
+      static char last[8] = "";
+      cat_send("PS1;");
+      cat_log_get(last, sizeof(last), "PS1;", "cat: PS -> 1 (on)\n");
+    } else {
+      printf("cat: PS%c -> accepted, ignored (no software power switch)\n", cmd[2]);
+    }
+    return;
+  }
+
+  // --- AI: auto-information. Kenwood rigs can be told to push
+  // unsolicited status updates; this surface never does that, so the
+  // truthful answer is always 0. Hamlib's kenwood_open() both reads this
+  // and may write "AI0;" (ignoring errors either way) - again not
+  // required, but answering avoids a pointless timeout on every open.
+  // A set to any value is accepted and ignored rather than honored:
+  // implementing real auto-reporting would mean pushing status from the
+  // CAT thread unprompted, which nothing needs yet. ---
+  if (len >= 2 && cmd[0] == 'A' && cmd[1] == 'I') {
+    if (len == 2) {
+      static char last[8] = "";
+      cat_send("AI0;");
+      cat_log_get(last, sizeof(last), "AI0;", "cat: AI -> 0 (no auto-information)\n");
+    } else {
+      printf("cat: AI%c -> accepted, ignored (auto-information not implemented)\n", cmd[2]);
     }
     return;
   }
