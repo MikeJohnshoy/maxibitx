@@ -70,7 +70,33 @@ static uint8_t uac_pcm_capture_buf[UAC_BUF_FRAMES * UAC_FRAME_BYTES]; // capture
 // translation units, and this is usb_gadget.c's own concern, not
 // rx_audio.c's) - if AGC_TARGET_AMPLITUDE is ever changed there, this
 // should be revisited too.
-#define UAC_RX_AUDIO_SCALE (32767.0 / 500000000.0)
+//
+// UAC_RX_AUDIO_HEADROOM_DB: deliberate margin below full scale, added
+// after an on-air FT8 decode-count investigation
+// (docs/dsp_design_notes/rx_uac_out_digital_mode_bandwidth.md §8) found
+// this tap clipping right at the AGC_TARGET_AMPLITUDE reference point
+// itself - a single steady tone at stage 1's flat passband center
+// already measured 0.3-0.7dB over that reference with stage 3 (the
+// narrow CW filter, DIGITAL mode's operators must disable for FT8's
+// wide sub-band) bypassed, because AGC_TARGET_AMPLITUDE/this scale were
+// implicitly calibrated assuming stage 3's own attenuation was always
+// present to provide headroom. FT8 also means several to dozens of
+// simultaneous tones, not one - a bench sweep (same note, §8) measured
+// the combined peak growing with tone count purely from ordinary
+// multi-tone crest factor (independent sinusoids' peaks occasionally
+// aligning), reaching +5.1dB over the old, headroom-free reference at
+// 40 simultaneous tones and +6.4dB at 60, with no sign of leveling off.
+// 15dB was chosen to clear that with real margin (8.6dB still spare at
+// 60 tones in the same bench run) while still leaving the tap comfortably
+// inside 16-bit PCM's ~96dB range. Without this, real busy-band FT8
+// operation would clip on ordinary strong signals, spraying broadband
+// intermodulation splatter across the whole sub-band right when WSJT-X
+// is trying to pull dozens of much weaker ones out of the noise -
+// plausibly the dominant cause behind the decode-count deficit that
+// prompted this investigation, well beyond stage 1's own passband shape
+// (measured adequate as-is, same note §4-§6).
+#define UAC_RX_AUDIO_HEADROOM      5.6234133       // 10^(15/20), i.e. 15dB
+#define UAC_RX_AUDIO_SCALE (32767.0 / (500000000.0 * UAC_RX_AUDIO_HEADROOM))
 
 /* ---------------------------------------------------------------------
  * Audio handoff queues - two independent lock-free SPSC ring buffers, one
