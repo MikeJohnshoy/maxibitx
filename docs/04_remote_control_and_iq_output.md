@@ -271,6 +271,14 @@ USB audio codec - see
 [`10_external_digital_modes_wsjtx.md`](10_external_digital_modes_wsjtx.md)
 for the operator-facing setup steps.
 
+Mono, both directions (`ARCHITECTURE.md` §10 step 11) - an earlier
+revision advertised 2 channels per direction with the same sample
+duplicated onto both, hedging for host/app compatibility with devices
+that assume a stereo interface; removed as unnecessary once real WSJT-X
+bring-up made clear that mono is the normal case for a ham-radio
+digital-mode audio interface, not an edge case, the same way a SignaLink
+or RigBlaster is mono both directions.
+
 - **RX (device → host):** fed from `rx_audio.c`'s own on-target
   demodulation - the same signal the local speaker gets, tapped one
   stage earlier (after the AGC's makeup gain, before the operator's own
