@@ -886,6 +886,21 @@ the debugging trail this caused.
   3 is now a fixed design (§8.2), changing it means regenerating
   `narrow_filter_coeffs[]` from Python and rebuilding, not a runtime
   knob.
+- **Which stage-3 implementation should be the default** is a real
+  question rather than a hypothetical one now: stage 3 gained a second
+  implementation after this document was written - `rx_filter.c`'s FFT
+  overlap-save filter (`ARCHITECTURE.md` §10 steps 6/7), selectable at
+  runtime alongside §8.2's elliptic. An on-air report that the two
+  "sound very different" was chased to the bench in
+  [`rx_narrow_filter_fft_vs_elliptic.md`](rx_narrow_filter_fft_vs_elliptic.md),
+  which measures the FFT one as narrower at -3dB and 30-55dB deeper
+  across the stopband - that note also confirms directly that §8.2's
+  equiripple floor is flat at -49.6dB from ~5kHz out to Nyquist, which
+  is the expected behavior of an equiripple design rather than a defect -
+  while carrying 16.0ms of group delay and 8.5ms of *pre*-ringing
+  against this design's 2.6ms and none. The reported symptom itself was
+  not reproduced, and nothing was changed; the elliptic stays the
+  default.
 - **Group delay / ring time / settling time** from the elliptic stage 3
   (§8.3/§8.5) are all bench-verified numerically (group delay barely
   moves at the tone itself; ring time and full AGC settling both grow,
