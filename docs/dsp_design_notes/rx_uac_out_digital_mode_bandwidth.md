@@ -1,9 +1,16 @@
 # RX Audio Bandwidth Reaching WSJT-X (`uac_out`) vs. a Raw-I/Q Path
 
-Status: measurement only, no code changed - the reported symptom's
-leading cause is identified and bench-quantified, but not yet on-air
-confirmed, and no fix (operator-side or code) has been applied or
-requested yet.
+Status: **implemented (§8) - on-air confirmation still outstanding.**
+§§1-6 below were written before the operator confirmed the narrow
+(stage 3) filter was already off during the original SparkSDR-vs-
+usb_gadget comparison, which ruled out this note's original leading
+hypothesis and prompted asking directly whether stage 1 could be
+redesigned to "work for everything." That question led to §7/§8's real
+finding instead: stage 1's shape was never the problem, but the
+`uac_out`→16-bit-PCM level chain was clipping - fixed in
+`usb_gadget.c`'s `UAC_RX_AUDIO_SCALE` (§8). Code-complete and
+bench-verified; not yet re-tested against the original on-air
+SparkSDR comparison.
 
 ## 1. Why this note exists
 
@@ -208,22 +215,158 @@ either effect, once addressed, actually closes the reported gap on
 air - both are one real A/B test away rather than a bench-only
 question at this point.
 
-## 7. What's not decided yet
+## 7. New information: both filters were already off
 
-- Whether to fix this operator-side only (document "turn stage 3 off
-  before running WSJT-X" in `10_external_digital_modes_wsjtx.md`, same
-  as any other digital-mode setup step) or in code - e.g. having the
-  `uac_out` tap bypass stage 3 unconditionally, regardless of the local
-  `narrow_filter_enabled` setting used for CW listening, treating a
-  remote/digital-mode consumer as categorically different from a human
-  on headphones. That would directly revisit the reasoning quoted in
-  §1 from `ARCHITECTURE.md` §10 step 9.
-- Whether stage 1/2's own passband asymmetry (§4/§5) is worth
-  addressing at all once the (much larger) stage-3 effect is ruled out
-  or fixed - and if so, whether that means widening/recentering stage
-  1's design specifically for the `uac_out` consumer, or leaving CW
-  listening's own filter alone and giving `DIGITAL` mode a separate,
-  wider stage-1 design point entirely.
-- An on-air re-test of the SparkSDR-vs-usb_gadget comparison with the
-  narrow filter confirmed OFF, to see how much of the reported 10x gap
-  actually closes - not yet done.
+The operator confirmed, after reading §§1-6, that *both* filters
+(stage 3's narrow selectivity filter, and its FFT/elliptic
+implementation choice) were already off during the original
+SparkSDR-vs-usb_gadget comparison - ruling out §6's leading hypothesis
+entirely. That leaves the smaller, secondary effect from §5/§6 (stage
+1's own passband asymmetry) as the only *frequency-response* candidate
+left, and prompted a direct question: **can stage 1 use one filter
+design that works for both CW and digital modes**, rather than
+maintaining (or inventing) separate designs?
+
+The answer turned out to be yes, but not for the reason the question
+assumed - and chasing it down surfaced a real bug that has nothing to
+do with stage 1's shape at all.
+
+**Why stage 1 was never really in conflict between the two modes:**
+CW's own fine selectivity is stage 3's job, not stage 1's - stage 1
+exists purely to pick one sideband of the raw baseband I/Q and reject
+the other (`rx_audio_demod_design.md` §7.5's "which side is wanted").
+Both CW and FT8 want the *identical* selection (upper sideband,
+matching the universal FT8 convention already documented in
+`10_external_digital_modes_wsjtx.md` §2) - there is no real design
+tradeoff between them here, because CW's narrowing happens downstream,
+in a stage FT8 already needs disabled. And §4's own OFF-state
+measurement already showed stage 1 passing a clean, flat, correctly
+one-sided ~3000Hz-wide band above dial center - not far at all from
+what FT8's ~2.7kHz sub-band needs, once §5's assumption about where
+real FT8 traffic sits relative to dial center is set aside (a
+correctly-tuned FT8 dial, per convention, parks *below* all wanted
+traffic, putting it entirely on stage 1's already-passed, positive-
+offset side - the §5 concern about content needing to come from
+*below* dial center may not reflect how FT8 is normally operated at
+all). So: one stage 1 filter, unchanged, is already the right answer
+for both modes' *frequency response*. It was never necessary, and
+would likely be counterproductive, to widen it toward the rejected
+sideband - that side carries other stations' real, independent
+traffic, not a self-image, and letting it through would reintroduce
+genuine interference for both CW and digital use.
+
+## 8. The real bug: `uac_out` clips at the 16-bit PCM stage
+
+Ruling out stage 1's shape raised an obvious question: if the
+passband was already fine, what *does* explain a 10x decode deficit?
+Re-reading `usb_gadget.c`'s own scaling comment for the answer -
+`UAC_RX_AUDIO_SCALE` maps `rx_audio.c`'s `AGC_TARGET_AMPLITUDE`
+(500000000.0) directly onto 16-bit PCM full scale (32767), with no
+margin at all - and checking what that means once stage 3 is off
+(the confirmed, required condition for FT8) turned up real clipping.
+
+**Mechanism:** `uac_out = narrowed * gain`, where `gain =
+AGC_TARGET_AMPLITUDE / agc_env` and `agc_env` tracks the *raw input's*
+own magnitude - so `gain` is whatever it takes to bring the raw input
+up to the AGC's target, regardless of the input's real-world scale.
+With stage 3 bypassed, `narrowed` is stage 1+2's output, whose own
+passband gain at a signal's frequency is close to unity but not
+exactly - stage 1's equiripple design (`rx_audio_demod_design.md` §7)
+has passband ripple that measures 0.3-0.7dB *above* unity at some
+frequencies. Multiplying that by `gain` (calibrated to land exactly
+on `AGC_TARGET_AMPLITUDE`) means a single steady tone, alone, with
+nothing else present, already overshoots the exact level
+`UAC_RX_AUDIO_SCALE` maps to full scale.
+
+**Measured (extending §3's harness with the same modules, no
+`radio.c`):** a lone tone at a flat-passband frequency (dial offset
+1500Hz, narrow filter off) drives `uac_out` to +0.58dB over the old,
+headroom-free full-scale reference - **27.2% of samples clipped**
+after 16-bit packing, from one single steady signal with nothing else
+on the band at all. Adding more simultaneous tones (a synthetic
+"busy band" - N equal-power tones spread across 100-2900Hz offset,
+their combined RMS held constant so the AGC settles to the same
+overall envelope regardless of N) makes it worse in the way ordinary
+multi-tone crest factor predicts - independent tones' peaks
+occasionally align:
+
+| simultaneous tones | peak level vs. old full-scale reference |
+|---:|---:|
+| 1 | +0.58dB |
+| 2 | +0.96dB |
+| 5 | +1.85dB |
+| 10 | +2.08dB |
+| 20 | +3.34dB |
+| 40 | +5.11dB |
+| 60 | +6.43dB |
+
+(Each row is the worst peak seen over a ~4.3s measurement window per
+tone count - a real 12.64s FT8 transmission would have more chances
+for independent tones' peaks to align, so these likely understate the
+true worst case somewhat.) Real FT8 bands routinely have several to
+dozens of simultaneous decodable signals, so this is squarely a real
+operating condition, not an edge case - and every one of those
+clipping events is a hard 16-bit saturation, which sprays broadband
+intermodulation splatter across the *entire* sub-band right when
+WSJT-X is trying to pull dozens of much weaker signals out of the
+noise. This is a far more direct, better-quantified explanation for a
+10x decode deficit than either of §2's original candidates - it
+degrades every decode on the band simultaneously, not just the ones
+outside some filter's passband.
+
+**Root cause:** `AGC_TARGET_AMPLITUDE`/`UAC_RX_AUDIO_SCALE` were
+seemingly never bench-checked with stage 3 off - `ARCHITECTURE.md`
+§10 step 9 (which added `uac_out`) predates stage 3 gaining a
+disable switch at all in any digital-mode context, and every prior
+bench/on-air check of level (`rx_audio_demod_design.md`'s own
+history) was done for CW listening, where stage 3's own attenuation
+outside its ~300Hz passband happens to supply exactly the headroom
+this calibration silently assumed would always be there.
+
+**Fix, implemented:** `usb_gadget.c`'s `UAC_RX_AUDIO_SCALE` now
+includes a fixed 15dB headroom margin (`UAC_RX_AUDIO_HEADROOM =
+5.6234133`, i.e. `10^(15/20)`) below the old, headroom-free reference
+point - a compile-time-only change, nothing in `rx_audio.c` or the
+AGC itself was touched, so local CW listening (`out[]`) is completely
+unaffected. Re-measured with the new scale: the single-tone case's
+27.2% clip rate drops to **0.00%**, and the 20-simultaneous-tone case's
+1.86% also drops to **0.00%**, with **8.6dB of margin still spare at
+60 simultaneous tones** in the same bench sweep - a comfortable
+margin for real band conditions, still leaving `uac_out` well within
+16-bit PCM's ~96dB dynamic range. Full rebuild (`make clean && make`)
+is clean under `-Wall -Wextra`; `test-rx-audio`,
+`test-fft-filter`, `test-rx-filter`, `test-upsample48k`, and
+`test-tx-pipeline` all still pass with unchanged numbers - none of
+those harnesses link `usb_gadget.c` at all (same reasoning
+`ARCHITECTURE.md` §10 step 11's regression check already gives), so
+this confirms the DSP chain is untouched, not a test of this change
+itself.
+
+## 9. What's not decided yet
+
+- **On-air re-test of the original SparkSDR-vs-usb_gadget comparison**
+  with this fix in place - not yet done. §8's bench numbers make a
+  strong case, but the reported 10x gap hasn't yet been re-measured on
+  real air with real signals.
+- Whether **15dB is the right amount of headroom**, versus more or
+  less - chosen from the measured 40/60-tone crest-factor trend plus a
+  safety margin, not tuned against a real, very busy band. Easy to
+  revisit: `UAC_RX_AUDIO_HEADROOM` is the one knob, isolated to
+  `usb_gadget.c`, same as `UAC_RX_AUDIO_SCALE` always was.
+  `rx_audio.c`'s `out[]`/local-speaker path was deliberately left
+  alone rather than also adding headroom there - it has never been
+  reported as clipping, and stage 3's own narrow passband (CW's normal
+  operating condition) already keeps it far from this problem.
+- §5/§6's stage-1 asymmetry finding **still stands as a real,
+  measured, secondary effect** (real signals landing very close to or
+  slightly below dial center are still attenuated) - just no longer
+  believed to be a major contributor to the reported 10x gap now that
+  clipping is quantified. Not worth acting on unless the on-air
+  re-test above still shows a gap after §8's fix.
+- §7's "one stage 1 filter already works for everything" conclusion
+  rests partly on an assumption about standard FT8 dial-tuning
+  convention (dial parked below all wanted traffic) - worth confirming
+  that's actually how the operator runs WSJT-X, since if the dial is
+  instead parked mid-band, some real traffic would legitimately need
+  the currently-rejected sideband, and stage 1 genuinely would need
+  reconsidering rather than being cleared.
