@@ -71,6 +71,26 @@ already used in `antialias_filter_design.md`.
   practice - the filter and AGC "work very nice"), but still not tested
   with two simultaneous signals in one buffer, on the bench or on air
   (see the doc's §8.8/§10).
+- [`rx_narrow_filter_fft_vs_elliptic.md`](rx_narrow_filter_fft_vs_elliptic.md)
+  — a measured comparison of stage 3's two implementations (the fixed
+  8-pole elliptic IIR above, and `rx_filter.c`'s FFT overlap-save
+  filter), prompted by an on-air report that the FFT one "lets a lot of
+  wideband hiss and far-off-center signals get through." The headline
+  result is that the reported symptom is **not reproduced**: the FFT
+  filter is narrower at -3dB, 30-55dB deeper across the stopband, passes
+  0.8dB less broadband noise, and sits 13.6dB quieter between CW
+  elements. The real difference is time-domain and confined to keying
+  transitions — 16.0ms of group delay against the elliptic's 2.6ms, and
+  8.5ms of *pre*-ringing that a causal IIR cannot have at all. Also
+  records a measurement error made and corrected along the way (a
+  missing guard band around key transitions produced a
+  plausible-looking +4.5dB result in the opposite direction), what was
+  ruled out and how, the impulse-length tradeoff table if shortening
+  `RX_FILTER_IMPULSE_LEN` turns out to be the answer, and why that
+  constant is an accident of the FFT and ALSA period sizes rather than
+  anything CW asked for. Status: measurement only, no code changed — the
+  on-air "hiss" report remains unexplained, with impulsive (rather than
+  stationary) band noise the leading untested hypothesis.
 - [`iq_stream_design.md`](iq_stream_design.md) — a third, minimal I/Q
   export path (`iq_stream.c`), independent of both `hpsdr_p1.c` (single-
   client - a second HPSDR client would silently steal its stream) and
