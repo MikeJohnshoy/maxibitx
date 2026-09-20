@@ -2003,3 +2003,89 @@ for keying an external accessory's PTT, not this input line.)
       Settings -> Audio input channel selector must be on "Mono"), which
       is an operator-facing setup matter for
       `10_external_digital_modes_wsjtx.md` rather than a code defect.
+    - **Confirmed on the bench: the serial bump worked.** Audacity opens
+      "Microphone (Source/Sink)" by name, and **WSJT-X is decoding**.
+      That settles the diagnosis above: Windows had been holding cached
+      endpoint format state against the old fixed VID/PID/serial, and
+      replugging could never clear it. Step 11's own "not yet
+      bench-verified" caveat is closed for the RX/audio half.
+
+12. **Done, code-complete — on-air test still outstanding.** Fixed the
+    Kenwood `IF` reply's field layout, which was silently breaking
+    Hamlib-based rig control. With audio working (step 11), WSJT-X moved
+    on to its next complaint: "Rig Control Error" when configuring rig
+    control, against a CAT surface that FLRig had been driving happily
+    for weeks.
+    - **Root cause, and why FLRig never noticed:** WSJT-X drives rig
+      control through Hamlib, and Hamlib's `ts480.c` wires
+      `.get_vfo = kenwood_get_vfo_if`, so VFO, PTT and split all come
+      from parsing the `IF;` reply at FIXED character offsets.
+      `kenwood.c` defaults `if_len` to 37 for any backend that doesn't
+      override it (ts480.c doesn't), where `if_len` counts the reply
+      including `"IF"` but excluding `';'` - so the wire reply must be
+      exactly 38 bytes. Ours was 39, and because its RIT field was 5
+      chars where the real layout is 6 (sign + 5 digits), RX/TX and the
+      mode digit both sat one position late. A length mismatch is a hard
+      `-RIG_EPROTO` after the port's retries, not something Hamlib
+      shrugs off. FLRig never cared because its parser is far more
+      forgiving, and `rig_open()` itself had always succeeded - Hamlib's
+      `kenwood_open()` only hard-fails when `ID;` goes unanswered, and
+      ours has always answered `ID020;`. That is exactly why CAT looked
+      completely healthy from FLRig (frequency and volume control both
+      worked, clean attach/detach) while WSJT-X refused to connect: the
+      two clients exercise entirely different parts of the same surface.
+      The `IF` comment in `usb_gadget.c` had flagged this field layout as
+      an unverified reconstruction since it was written; it was wrong.
+    - **Verified, not assumed:** the corrected format string is pulled
+      back out of `usb_gadget.c` programmatically and exercised across
+      six cases (RX/TX, both RIT extremes at `RIT_MAX_HZ` = ±9999, three
+      bands, three modes), asserting reply length 37 excluding `';'` and
+      the PTT/mode/VFO digits landing on offsets 28/29/30 - the literal
+      indices Hamlib's `kenwood_get_ptt()`, `kenwood_get_mode()` and
+      `kenwood_get_vfo_if()` read. All six pass.
+    - **`RADIO_MODE_DIGITAL` now reports as `'2'` (USB), closing the
+      digit-9 question this project had been carrying as an open flag.**
+      Two independent sources agree the old `'9'` was wrong: QRP Labs'
+      QMX CAT manual documents digit 9 as "FSK Reverse", and Hamlib's
+      default `kenwood_mode_table` (which is what a TS-480 gets, since
+      ts480.c defines no table of its own) maps 9 to RTTY-REVERSE. That
+      table has no DATA/PKT digit anywhere in the 1-9 range an `IF`
+      response can express - a real TS-480 simply has no data mode - so
+      `'9'` was making WSJT-X display the rig as RTTY-R. `'2'` is the
+      truthful answer: FT8 *is* upper sideband, and "run the rig in USB
+      and let the digital-mode app own the audio" is how a TS-480 is
+      operated for data.
+    - **The one judgment call, flagged deliberately:** because DIGITAL
+      now reports as USB, a host that reads the mode back and writes it
+      out again - which WSJT-X does routinely - would walk the radio out
+      of DIGITAL into plain USB, switching the TX source from
+      `uac_pull_audio_tx()` to the mic and killing transmit. The MD set
+      handler therefore treats an incoming USB request while already in
+      DIGITAL as the no-op it was almost certainly meant to be. Any
+      other mode request (CW, LSB) still applies normally, so this
+      cannot strand the radio in DIGITAL. The trade accepted here is
+      that DIGITAL becomes locally-selectable only, not reachable or
+      distinguishable over CAT - which is the same position a real
+      TS-480 is in, and is worth revisiting if a future client needs to
+      command it.
+    - **`PS` and `AI` added:** Hamlib's `kenwood_open()` queries both and
+      tolerates a timeout on either, so neither is required for
+      correctness - but each unanswered query burns the port's full
+      retry budget on every open, for nothing. `PS;` answers `PS1;`
+      (maxibitx is trivially "on" whenever it is answering CAT at all)
+      and `AI;` answers `AI0;` (this surface never pushes unsolicited
+      status). Sets for both are accepted and ignored rather than
+      honored - there is no software power switch to throw, and
+      auto-reporting isn't implemented.
+    - **Regression check:** full rebuild clean under `-Wall -Wextra`;
+      `test-fft-filter`, `test-tx-pipeline`, `test-rx-filter`,
+      `test-rx-audio`, `test-upsample48k` all pass. As in step 11, none
+      of them link `usb_gadget.c`, so they confirm the DSP chain is
+      untouched rather than testing the CAT change - that is what the
+      six-case `IF` harness above is for.
+    - **Still open:** whether WSJT-X's Test CAT now passes end to end,
+      and whether PTT over CAT keys the radio correctly from WSJT-X (as
+      opposed to from FLRig, which was already working). Also untested:
+      whether WSJT-X's split operation works, since Hamlib reaches split
+      through `FR`/`FT`/`SP`, none of which this surface implements yet -
+      split should be left off in WSJT-X until it does.
