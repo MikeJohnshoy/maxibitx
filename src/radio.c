@@ -4,6 +4,7 @@
 #include "radio_hw.h"
 #include "si5351.h"
 #include "sound.h"
+#include "rx_audio.h" // rx_audio_set_demod() - radio_set_mode() below
 #include <pthread.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -131,6 +132,17 @@ static enum radio_mode current_mode = RADIO_MODE_CW;
 
 void radio_set_mode(enum radio_mode m) {
   current_mode = m;
+  // Keep rx_audio.c's demodulator in step - every mode change (rigctld M,
+  // Kenwood MD, the control panel) already funnels through here. DIGITAL
+  // demodulates as USB, the universal FT8/digital-mode convention (same
+  // choice sound.c's TX branch makes with TX_PIPELINE_KEEP_UPPER).
+  switch (m) {
+  case RADIO_MODE_USB:
+  case RADIO_MODE_DIGITAL: rx_audio_set_demod(RX_DEMOD_USB); break;
+  case RADIO_MODE_LSB:     rx_audio_set_demod(RX_DEMOD_LSB); break;
+  case RADIO_MODE_CW:
+  default:                 rx_audio_set_demod(RX_DEMOD_CW);  break;
+  }
 }
 
 enum radio_mode radio_get_mode(void) {
