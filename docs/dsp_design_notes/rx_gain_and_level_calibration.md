@@ -292,7 +292,7 @@ designs before landing:
 **v1 - `agc_env` (retired).** `rx_audio.c`'s AGC already tracks
 `agc_env`, a smoothed envelope of the raw baseband I/Q magnitude,
 measured before any of stages 1-3 do any frequency-selective shaping
-(see rx_audio.c's "Why the AGC samples the raw input" and
+(see rx_audio_demod_design.md §8.7-8.8 and
 `rx_audio_debug_agc_envelope()`'s own comment) - frequency-independent
 by construction, and already sampled at exactly the point Caveat 1 says
 any such measurement should start from (the same "fraction of full
