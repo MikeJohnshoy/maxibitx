@@ -14,13 +14,7 @@
 #include <netinet/tcp.h>
 #include "hamlib.h"
 #include "cw.h"
-#include "radio.h"    // freq_hdr, in_tx, radio_tune_to()/radio_set_tx(),
-                       // RIT_MAX_HZ, radio_get_rit()/radio_set_rit() -
-                       // previously hand-declared below one at a time;
-                       // now pulled in directly since the J command
-                       // needs RIT_MAX_HZ too and duplicating that
-                       // constant here would risk it drifting out of
-                       // sync with radio.h's real one.
+#include "radio.h"    // freq_hdr, in_tx, tuning, PTT, RIT, mode
 #include "rx_audio.h"
 #include "sound.h"    // sound_set_mic_tx_gain()/sound_get_mic_tx_gain() - l/L MICGAIN below
 
@@ -28,21 +22,10 @@ static int listen_fd = -1;
 static volatile int running = 0;
 static pthread_t accept_thread;
 
-// Mode itself is real now - radio_get_mode()/radio_set_mode() (radio.h)
-// are the single owner both control surfaces agree on - see radio.h's
-// enum radio_mode comment. current_passband stays a local, cosmetic-
-// only stand-in: minibitx has no onboard demod (the SDR app does all
-// filtering in software), so there is no real passband-width setting
-// anywhere to actually apply this to yet.
-//
-// mode_to_name()/name_to_mode() translate between radio.h's enum and
-// the Hamlib RIG_MODE string names rigctld clients actually send/
-// expect. PKTUSB for RADIO_MODE_DIGITAL is a best-effort choice - the
-// standard Hamlib name for "USB with a digital-mode modem attached",
-// which is the closest existing name to what that placeholder mode is
-// for (see ARCHITECTURE.md §5) - not yet confirmed against a real
-// WSJT-X rigctld session, same "flag it, don't block on it" spirit as
-// usb_gadget.c's own MD/IF comments about the QMX CAT convention.
+// Mode lives in radio.c (radio_get_mode()/radio_set_mode()); these
+// translate to and from Hamlib's RIG_MODE names. DIGITAL goes out as
+// PKTUSB, the standard Hamlib name for USB with a data modem - not yet
+// checked against a stock Hamlib client over this server.
 static const struct { enum radio_mode mode; const char *name; } mode_names[] = {
     { RADIO_MODE_CW,      "CW"     },
     { RADIO_MODE_USB,     "USB"    },
@@ -59,25 +42,10 @@ static const char *mode_to_name(enum radio_mode m)
     return "CW"; // unreachable given the enum's own values; a safe fallback if that ever changes
 }
 
-// Returns 1 and sets *out on a recognized name, 0 (leaving *out
-// untouched) otherwise - so the caller can reject an unrecognized mode
-// name with RPRT -1, same convention as J's out-of-range RIT check,
-// rather than silently accepting (and thereby misrepresenting) it.
-//
-// "DIGITAL" is accepted here as an extra alias for RADIO_MODE_DIGITAL,
-// alongside mode_names[]'s own "PKTUSB" - found because
-// tools/rigctl_panel.py's mode selector sends "M DIGITAL 2400" by name
-// (its own friendlier convention - see that file's mode-selector
-// comment), which used to hit this function's fallthrough, return 0,
-// and get RPRT -1'd right back: set_mode silently never called
-// radio_set_mode() at all, so the very next poll's "m" reply reported
-// whatever mode was already active (typically USB) and the panel's
-// radio button appeared to instantly "snap back" - not a display bug,
-// the mode change had genuinely never happened. mode_to_name() below
-// deliberately still reports "PKTUSB" on the way out (real Hamlib
-// clients, if any ever query over this rigctld surface, expect the
-// standard name) - tools/rigctl_panel.py's own apply_mode() is the
-// half of this fix that maps that back to "DIGITAL" for display.
+// Returns 1 and sets *out for a recognized name, else 0 (the caller then
+// replies RPRT -1 rather than misreport the mode). Also accepts "DIGITAL",
+// which tools/rigctl_panel.py sends; replies still say PKTUSB, and the
+// panel maps that back to DIGITAL.
 static int name_to_mode(const char *name, enum radio_mode *out)
 {
     if (strcasecmp(name, "DIGITAL") == 0) {
@@ -93,6 +61,8 @@ static int name_to_mode(const char *name, enum radio_mode *out)
     return 0;
 }
 
+// Accepted by M and echoed back by m, but not applied - the RX passband
+// is fixed (rx_audio.c).
 static int current_passband = 2400;
 
 #define LINE_MAX_LEN 256
@@ -168,8 +138,8 @@ static int handle_line(int fd, char *line)
     }
 
     if (cmd[0] == 'T' && (cmd[1] == '\0' || cmd[1] == ' ')) {
-        // set_ptt <0|1|2|3> - minibitx has one TX state, no separate
-        // mic/data distinction, so anything nonzero means TX.
+        // set_ptt <0|1|2|3> - one TX state here, no mic/data distinction,
+        // so any nonzero value means TX.
         long v = strtol(cmd + 1, NULL, 10);
         int tx_on = (v != 0);
         if (cw_tx_active()) {
@@ -196,14 +166,8 @@ static int handle_line(int fd, char *line)
     }
 
     if (cmd[0] == 'J' && (cmd[1] == '\0' || cmd[1] == ' ')) {
-        // set_rit <hz> - receive-only offset, +/-RIT_MAX_HZ (radio.h).
-        // "J 0" is how a real rigctl client turns RIT off, same as
-        // dialing it back to zero on the front panel - there's nothing
-        // to enable/disable beyond the value itself. Auto-clears back to
-        // 0 on the next F - see radio_tune_to()'s comment (radio.c) -
-        // and never touches TX's own clk2 line at all - see
-        // radio_set_rit()'s comment there for why that's RX-only by
-        // design, not a limitation.
+        // set_rit <hz> - RX-only offset, +/-RIT_MAX_HZ. "J 0" turns RIT off
+        // (rigctld has no separate on/off). Cleared by the next F.
         long hz = strtol(cmd + 1, NULL, 10);
         if (hz < -RIT_MAX_HZ || hz > RIT_MAX_HZ) {
             send_rprt(fd, -1);
@@ -217,9 +181,7 @@ static int handle_line(int fd, char *line)
     }
 
     if (cmd[0] == 'm' && (cmd[1] == '\0' || cmd[1] == ' ')) {
-        // get_mode - two lines: mode, then passband. Mode itself is
-        // real (radio_get_mode()); passband stays cosmetic - see the
-        // comment above current_passband.
+        // get_mode - two lines: mode, then passband (see current_passband).
         char buf[64];
         const char *name = mode_to_name(radio_get_mode());
         snprintf(buf, sizeof(buf), "%s\n%d\n", name, current_passband);
@@ -229,14 +191,8 @@ static int handle_line(int fd, char *line)
     }
 
     if (cmd[0] == 'M' && (cmd[1] == '\0' || cmd[1] == ' ')) {
-        // set_mode <mode> <passband> - mode is validated against
-        // radio.h's real enum now; passband is accepted and echoed
-        // back by get_mode above but not applied anywhere (see
-        // current_passband's comment). An unrecognized mode name is
-        // rejected outright (RPRT -1) rather than silently accepted -
-        // same convention as J's out-of-range RIT check - since there
-        // is now a real, meaningful value underneath it that a bogus
-        // name would otherwise misrepresent.
+        // set_mode <mode> <passband> - an unknown mode name gets RPRT -1.
+        // The passband is stored and echoed by m, not applied.
         char mode[32] = "";
         int passband = current_passband;
         sscanf(cmd + 1, "%31s %d", mode, &passband);
@@ -256,15 +212,9 @@ static int handle_line(int fd, char *line)
     }
 
     if (cmd[0] == 'l' && (cmd[1] == '\0' || cmd[1] == ' ')) {
-        // get_level <name> - AF (audio/volume) and STRENGTH (S-meter) are
-        // backed by something real; everything else in the hamlib level
-        // set (RF, SQL, preamp, attenuator, ...) has no minibitx
-        // equivalent, same spirit as dump_state's empty preamp/attenuator
-        // lists above. Unlike u/U NARROW, STRENGTH IS a real Hamlib
-        // RIG_LEVEL (see dump_state's comment below), so this replies in
-        // the standard convention real Hamlib clients expect - see
-        // rx_audio_get_strength_db()'s comment for what the number means
-        // and doesn't mean.
+        // get_level <name>. AF and STRENGTH are real Hamlib levels (see
+        // dump_state); MICGAIN is this server's extension. Anything else
+        // (RF, SQL, preamp, ...) has no equivalent here.
         char level_name[32] = "";
         sscanf(cmd + 1, "%31s", level_name);
         if (strcmp(level_name, "AF") == 0) {
@@ -279,16 +229,9 @@ static int handle_line(int fd, char *line)
             send_line(fd, buf);
             printf("rigctl: l STRENGTH -> %d (dB relative to S9)\n", db);
         } else if (strcmp(level_name, "MICGAIN") == 0) {
-            // This server's own extension (not a real Hamlib RIG_LEVEL,
-            // unlike AF/STRENGTH above) - the raw sound.c mic_tx_gain
-            // multiplier itself, not a 0.0-1.0 normalized value like AF,
-            // since unlike volume there's no natural "100%" ceiling for
-            // this one (see sound_set_mic_tx_gain()'s comment, sound.h,
-            // for why it's a live control at all). Same "extend the
-            // protocol with a plain string name, comment why it's not
-            // standard" precedent u/U NARROW/FFTFILT already set - just
-            // living under l/L instead of u/U since this is a continuous
-            // value, not an on/off func.
+            // Extension, not a Hamlib RIG_LEVEL: the raw mic_tx_gain multiplier
+            // (sound.h), not 0.0-1.0, since it has no natural 100%. Under l/L
+            // rather than u/U because it's a continuous value.
             char buf[32];
             snprintf(buf, sizeof(buf), "%.6f\n", sound_get_mic_tx_gain());
             send_line(fd, buf);
@@ -301,11 +244,8 @@ static int handle_line(int fd, char *line)
     }
 
     if (cmd[0] == 'L' && cmd[1] == ' ') {
-        // set_level <name> <value 0.0-1.0> - STRENGTH deliberately has no
-        // case here: it's read-only, same as a real rig's S-meter, so
-        // "L STRENGTH ..." falls through to the unsupported-level reply
-        // below, matching real Hamlib rigs (nothing implements set_level
-        // for RIG_LEVEL_STRENGTH).
+        // set_level <name> <value>. STRENGTH is read-only, like a real
+        // S-meter, so "L STRENGTH" falls through to the error reply.
         char level_name[32] = "";
         double val = 0.0;
         if (sscanf(cmd + 1, "%31s %lf", level_name, &val) == 2 &&
@@ -327,16 +267,9 @@ static int handle_line(int fd, char *line)
     }
 
     if (cmd[0] == 'u' && (cmd[1] == '\0' || cmd[1] == ' ')) {
-        // get_func <name> - NARROW (the post-demod "single signal"
-        // selectivity filter, rx_audio.c stage 3, on/off) and FFTFILT
-        // (docs/ARCHITECTURE.md step 6/7 - which of stage 3's two
-        // implementations NARROW's "on" state uses) are backed by
-        // anything real, same "everything else has no minibitx
-        // equivalent" spirit as l/L AF above. Neither is a name real
-        // Hamlib ships in its own function table - this rigctld subset
-        // only ever talks to tools/rigctl_panel.py, not stock rigctl, so
-        // there's no compatibility reason to hunt for a closer standard
-        // name.
+        // get_func <name>: NARROW (rx_audio.c's narrow stage-3 filter, on/off)
+        // and FFTFILT (which stage-3 implementation it uses). Not Hamlib
+        // RIG_FUNC names - extensions for tools/rigctl_panel.py.
         char func_name[32] = "";
         sscanf(cmd + 1, "%31s", func_name);
         if (strcmp(func_name, "NARROW") == 0) {
@@ -383,14 +316,13 @@ static int handle_line(int fd, char *line)
     }
 
     if (cmd[0] == 'v' && (cmd[1] == '\0' || cmd[1] == ' ')) {
-        // get_vfo - minibitx has only one VFO, always report it
+        // get_vfo - maxibitx has one VFO; always report it
         send_line(fd, "VFOA\n");
         printf("rigctl: v -> VFOA\n");
         return 0;
     }
     if (cmd[0] == 'V' && cmd[1] == ' ') {
-        // set_vfo <vfo> - minibitx has only one VFO; accept and report success
-        // regardless of the requested name, since there's nothing else to switch to.
+        // set_vfo <vfo> - one VFO, nothing to switch to: accept any name.
         send_rprt(fd, 0);
         printf("rigctl: V %s -> ok (single VFO)\n", cmd + 2);
         return 0;
@@ -405,29 +337,16 @@ static int handle_line(int fd, char *line)
     }
 
     if (strcmp(cmd, "dump_state") == 0 || strcmp(cmd, "\\dump_state") == 0) {
-        // Minimal, spec-shaped dump_state (format confirmed against
-        // Hamlib's own rigctl_parse.c dump_state() implementation).
-        // Deliberately advertises no capabilities minibitx doesn't
-        // actually have - no XIT/IF shift, no preamp/attenuator, no
-        // onboard filters, since the SDR app does all of that in
-        // software - and an empty TX range, since minibitx has no TX
-        // audio path yet even though radio_set_tx() can key PTT. RIT is
-        // the one exception now: max_rit below is real (RIT_MAX_HZ,
-        // radio.h), backed by radio_get_rit()/radio_set_rit() via j/J
-        // above.
-        // has_get_level advertises RIG_LEVEL_AF (1<<3 = 0x8) OR'd with
-        // RIG_LEVEL_STRENGTH (1<<30 = 0x40000000, per hamlib's rig.h) =
-        // 0x40000008 - the two real levels, backed by
-        // rx_audio_set_volume()/rx_audio_get_volume() via l/L AF and
-        // rx_audio_get_strength_db() via l STRENGTH above. has_set_level
-        // stays 0x8 (AF only): STRENGTH is deliberately absent from it,
-        // same as on a real rig - S-meter readings are get_level-only,
-        // there's no "set the S-meter" operation (see L's own comment).
-        // has_get_func/has_set_func stay 0x0 despite u/U NARROW/FFTFILT
-        // above actually doing something: neither is a real RIG_FUNC bit
-        // (see u/U's own comment), and this dump_state is only ever read
-        // by tools/rigctl_panel.py, which doesn't gate anything on it - real
-        // rigctl/Hamlib clients would have no bit to advertise it under.
+        // Minimal, spec-shaped dump_state (format checked against Hamlib's
+        // rigctl_parse.c). Advertises only what exists: no XIT/IF shift, no
+        // preamp/attenuator, no filter list; max_rit is real (RIT_MAX_HZ).
+        // has_get_level = RIG_LEVEL_AF (0x8) | RIG_LEVEL_STRENGTH (1<<30) =
+        // 0x40000008; has_set_level is AF only (an S-meter can't be set).
+        // has_get_func/set_func stay 0: NARROW/FFTFILT aren't RIG_FUNC bits.
+        //
+        // The TX range list is empty - left from before maxibitx could
+        // transmit, even though t/T keys PTT. tools/rigctl_panel.py ignores it;
+        // untested with a stock Hamlib client.
         send_line(fd, "0\n");                        // protocol version
         send_line(fd, "1\n");                        // rig model (1 = RIG_MODEL_DUMMY)
         send_line(fd, "2\n");                         // ITU region (best-effort default)
@@ -440,7 +359,7 @@ static int handle_line(int fd, char *line)
         {
             char buf[16];
             snprintf(buf, sizeof(buf), "%d\n", RIT_MAX_HZ);
-            send_line(fd, buf);                        // max_rit - real now, see j/J above
+            send_line(fd, buf);                        // max_rit
         }
         send_line(fd, "0\n");                         // max_xit
         send_line(fd, "0\n");                         // max_ifshift
