@@ -7,8 +7,8 @@
 // Signal chain, per sample except where noted:
 //
 //   1. Wide complex bandpass (ssb_filter_apply): keeps 0..~3000Hz of
-//      positive baseband, rejects negative. Sideband selection for
-//      USB/LSB happens by conjugating the input first - see
+//      positive baseband, rejects negative. Sideband selection
+//      happens by conjugating the input first (or not) - see
 //      rx_audio_process().
 //   2. Demod: CW mixes up to CW_PITCH_HZ; USB/LSB take the real part
 //      directly, so audio Hz == |RF - dial|.
@@ -25,7 +25,7 @@
 //
 // Design rationale, measurements and the history of how each stage got
 // here: docs/dsp_design_notes/rx_audio_demod_design.md (stages 1-4, AGC)
-// and rx_uac_out_digital_mode_bandwidth.md §10 (USB/LSB demod, I/Q
+// and rx_uac_out_digital_mode_bandwidth.md §10 (sideband selection, I/Q
 // inversion).
 
 #include "rx_audio.h"
@@ -324,8 +324,8 @@ static enum rx_narrow_filter_impl narrow_filter_impl = RX_NARROW_FILTER_ELLIPTIC
 // maxibitx's raw baseband I/Q is spectrally inverted: a station +d Hz
 // above dial arrives at baseband -d. (sound.c mixes the ~24kHz IF by
 // e^{+j*2pi*RX_IF_FREQ_HZ*t}, mapping IF f to 24000-f, and the analog
-// chain puts the IF at 24000+d.) USB/LSB compensate by conjugating the
-// input - see rx_audio_process(). Deliberately not corrected in sound.c:
+// chain puts the IF at 24000+d.) Sideband selection compensates when
+// deciding whether to conjugate the input - see rx_audio_process(). Deliberately not corrected in sound.c:
 // that would flip every other I/Q consumer too, and hpsdr_p1.c (e.g.
 // SparkSDR) works as-is. Checked on air: in USB, a +100Hz dial step
 // moves signals left in WSJT-X. Set to 0 for a board whose analog chain
@@ -364,9 +364,8 @@ void rx_audio_init(void) {
     rx_volume = volume_percent_to_gain(rx_volume_percent);
 
     // CW BFO at +CW_PITCH_HZ: a station at dial center is heard at
-    // CW_PITCH_HZ. Which side of dial CW keeps is set by stage 1 and the I/Q
-    // inversion - currently the band below dial, effectively CW-reverse
-    // (rx_uac_out_digital_mode_bandwidth.md §10, "CW's own sideband").
+    // CW_PITCH_HZ, and one d Hz above dial at CW_PITCH_HZ + d (CW keeps the
+    // upper side, same as USB - see rx_audio_process()).
     vfo_start(&bfo, CW_PITCH_HZ, 0);
 
     for (int i = 0; i < 2 * SSB_FIR_TAPS; i++) {
@@ -484,13 +483,12 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
 
     // Sideband selection. Stage 1 keeps positive baseband, so choosing a
     // sideband means choosing whether to conjugate the input first. With the
-    // I/Q inverted, USB (above dial) sits at negative baseband and needs it;
-    // LSB doesn't. CW is never conjugated.
-    int conjugate = 0;
-    if (demod == RX_DEMOD_USB)
-        conjugate = RX_IQ_SPECTRUM_INVERTED;
-    else if (demod == RX_DEMOD_LSB)
-        conjugate = !RX_IQ_SPECTRUM_INVERTED;
+    // I/Q inverted, the upper side (above dial) sits at negative baseband and
+    // needs it; the lower side doesn't. CW and USB keep the upper side, LSB
+    // the lower. (A CW-reverse mode would be CW's BFO with LSB's
+    // conjugation.)
+    int upper = (demod != RX_DEMOD_LSB);
+    int conjugate = upper ? RX_IQ_SPECTRUM_INVERTED : !RX_IQ_SPECTRUM_INVERTED;
 
     for (int k = 0; k < n; k++) {
         // Stage 1: image-reject bandpass.
