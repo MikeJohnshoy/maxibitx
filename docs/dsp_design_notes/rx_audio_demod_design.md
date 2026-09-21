@@ -543,7 +543,7 @@ with individually different, precomputed `{b0,b1,b2,a1,a2}` coefficients
 (`narrow_filter_coeffs[]` in `rx_audio.c`), cascaded through the same
 `biquad_apply()` stage 3 already used. `rx_audio_set_filter_bw()`
 existed for exactly one v3 revision and is gone again - a deliberate
-choice (see rx_audio.c's "Why elliptic, and why fixed" and rx_audio.h),
+choice (see §8.2 and rx_audio.h),
 not an oversight. scipy's `sos` output normalizes each section's `a0` to
 `1.0` (confirmed to `~1e-16` before trusting it), matching how
 `biquad_apply()` is written (no explicit division by `a0`).
@@ -870,8 +870,17 @@ the debugging trail this caused.
 - **BFO sign** (the sign passed to `vfo_start(&bfo, CW_PITCH_HZ, 0)`) is
   still an untested starting point, not a bench calibration — worth
   checking by ear now that audio is actually reaching a speaker.
-- **Which side is "wanted"** (§7.5) — still arbitrary, still a one-line
-  sign flip away from reversing.
+- **Which side is "wanted"** (§7.5) — no longer arbitrary for USB/LSB/
+  `DIGITAL`. maxibitx's raw I/Q turned out to be spectrally inverted (a
+  station +d above dial arrives at -d), so stage 1's positive-baseband
+  side was the *lower* sideband, and the missing mode-awareness left
+  `DIGITAL` receiving LSB with a 700Hz offset.
+  [`rx_uac_out_digital_mode_bandwidth.md`](rx_uac_out_digital_mode_bandwidth.md)
+  §10 has the details and the fix: `rx_audio_set_demod()`, one input
+  conjugation per mode under `RX_IQ_SPECTRUM_INVERTED`, and no BFO for
+  USB/LSB. CW is deliberately unchanged, and still keeps positive
+  baseband - effectively CW-reverse. That's still a one-line decision
+  away from flipping, but now a deliberate one.
 - **`AGC_TARGET_AMPLITUDE`/`AGC_ATTACK_MS`/`AGC_RELEASE_MS`** are
   reasonable-looking starting points, not yet tuned against extended
   listening — particularly whether 300ms release feels right between
@@ -901,6 +910,17 @@ the debugging trail this caused.
   against this design's 2.6ms and none. The reported symptom itself was
   not reproduced, and nothing was changed; the elliptic stays the
   default.
+- **An on-air report of far fewer FT8 decodes than a raw-I/Q path**
+  (`uac_out`, §9's tap, `ARCHITECTURE.md` §10 step 9) was traced, in
+  [`rx_uac_out_digital_mode_bandwidth.md`](rx_uac_out_digital_mode_bandwidth.md)
+  §10, to this demodulator itself. It was CW-only in every mode, so
+  `DIGITAL` got a 700Hz pitch offset and, given the inverted raw I/Q,
+  the lower sideband. Fixed with `rx_audio_set_demod()` (see the "Which
+  side is wanted" bullet above), with CW bit-identical to before. A
+  secondary clipping issue in `usb_gadget.c`'s `UAC_RX_AUDIO_SCALE` was
+  also fixed (15dB headroom). On-air confirmed 2026-09-21: the sideband
+  sense is right, and a simultaneous A/B against SparkSDR now shows
+  matching decode counts with SNRs typically within 1dB.
 - **Group delay / ring time / settling time** from the elliptic stage 3
   (§8.3/§8.5) are all bench-verified numerically (group delay barely
   moves at the tone itself; ring time and full AGC settling both grow,
@@ -933,6 +953,23 @@ the debugging trail this caused.
   in-band signal" behavior §8.8 describes qualitatively actually behaves
   as expected quantitatively, and to get a first read on how much a busy
   band pulls gain down for a single CW signal in practice.
+- **Volume control: rescaled, then log taper (2026-09-21)** — 100% on
+  the volume control used to be unity gain, which left only the bottom
+  few percent usable on real hardware: 3% was comfortable copy.
+  `RX_VOLUME_MAX` (0.20) now sets what 100% means, following the
+  operator's judgment that ~20% of the old scale is the loudest the
+  local speaker ever needs. The control is a log (audio) taper: 1-100%
+  maps evenly across `RX_VOLUME_RANGE_DB` (50dB), so every 1% step is
+  0.5dB anywhere on the slider, and 0% is a true mute. The linear taper
+  it replaced made 1%→2% a 6dB jump while 100%→50% was only -6dB. The
+  startup default is 67%, measured at 0.03 linear (-16.5dB), which is
+  the old 3% default, so a fresh start sounds the same as before. The
+  operator's quietest old-scale setting (1%) lands at 48%. Bench-checked:
+  0.5dB per step, exact readback at every setting, and the default
+  within 0.02dB of the old level. Only the local speaker is affected -
+  `uac_out` is tapped before `rx_volume` - but every volume client (the
+  control panel, rigctld `L AF`, Kenwood `AG`) goes through the same
+  percent API, so they all get the new taper.
 - **Runtime control** — `rx_audio_set_volume()` is now reachable
   remotely via the rigctld server's `l`/`L AF` commands
   (`docs/04_remote_control_and_iq_output.md`), and there's a standalone
