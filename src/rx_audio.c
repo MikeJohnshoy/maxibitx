@@ -459,11 +459,11 @@ static struct vfo bfo;                 // CW_PITCH_HZ mixing oscillator
 // 0.0-1.0 - see rx_audio_set_volume(). Startup default only (any CAT/USB
 // `AG` client or tools/rigctl_panel.py's own slider can still set this to
 // whatever it wants at runtime) - was 0.5 (50%), which real-hardware
-// listening found uncomfortably loud on this radio; 0.20 (20%) is where
+// listening found uncomfortably loud on this radio; 0.03 (3%) is where
 // the operator actually runs it for comfortable copy, so that's now
 // where a fresh process starts instead of requiring a manual turn-down
 // every time.
-static double rx_volume = 0.20;
+static double rx_volume = 0.03;
 
 // 1 (default) = stage 3 shapes the output, matching every design note
 // above; 0 = stage 3 is bypassed (audio from stage 2 reaches the AGC
@@ -477,6 +477,28 @@ static int narrow_filter_enabled = 1;
 // selector exists specifically to make that on-air A/B comparison
 // possible without a rebuild, not to switch the default.
 static enum rx_narrow_filter_impl narrow_filter_impl = RX_NARROW_FILTER_ELLIPTIC;
+
+// RX_IQ_SPECTRUM_INVERTED: maxibitx's raw baseband I/Q (sound.c's
+// i_samples/q_samples, shared unchanged by hpsdr_p1.c, iq_stream.c and
+// this file) carries one real spectral inversion - a station +d Hz above
+// dial arrives at baseband -d. sound.c mixes the real ~24kHz IF by
+// e^{+j*2pi*RX_IF_FREQ_HZ*t} (vfo_read_iq() returns I=cos, Q=+sin), which
+// maps IF frequency f to baseband 24000-f; the analog chain's two
+// high-side conversions (clk2 = dial + xtal_filter_center, clk1 =
+// xtal_filter_center + RX_IF_FREQ_HZ) put the IF at 24000+d, so baseband
+// = -d. tools/rigctl_panel.py's spectrum already conjugates for exactly
+// this reason (its own comment), and an on-air A/B on 2026-09-21 matched
+// this model on every observation (docs/dsp_design_notes/
+// rx_uac_out_digital_mode_bandwidth.md §10). Corrected here, per demod
+// mode, rather than in sound.c's mixer: fixing it at the source would
+// silently flip every other I/Q consumer too, including SparkSDR over
+// hpsdr_p1.c, which is confirmed working as-is. If a board's analog
+// chain ever turns out to differ, this one constant is the switch.
+#define RX_IQ_SPECTRUM_INVERTED 1
+
+// Current demodulator - see rx_audio_set_demod() (rx_audio.h). CW is the
+// default, matching radio.c's own RADIO_MODE_CW default at startup.
+static enum rx_demod demod = RX_DEMOD_CW;
 
 // The shared FFT stage-3 filter (src/rx_filter.c) - one persistent
 // instance, created in rx_audio_init(), same "real FFTW plans, must not
@@ -589,6 +611,18 @@ int rx_audio_get_narrow_filter_impl(void) {
     return narrow_filter_impl == RX_NARROW_FILTER_FFT;
 }
 
+void rx_audio_set_demod(enum rx_demod d) {
+    // Plain store, like the other setters here - no filter history reset.
+    // A mode change leaves at most one stage-1 FIR length (~3.4ms) of
+    // mixed-sideband history in flight, far below anything audible or
+    // anything a 15-second FT8 decode window would notice.
+    demod = d;
+}
+
+enum rx_demod rx_audio_get_demod(void) {
+    return demod;
+}
+
 double rx_audio_debug_agc_envelope(void) {
     return agc_env;
 }
@@ -693,19 +727,43 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
     if (n > RX_AUDIO_MAX_BLOCK)
         n = RX_AUDIO_MAX_BLOCK;
 
+    // Sideband selection for USB/LSB (rx_audio_set_demod()). Stage 1 only
+    // ever keeps positive-baseband content (0..~3000Hz), so choosing a
+    // sideband is choosing whether to conjugate the input first. With the
+    // raw I/Q inverted (RX_IQ_SPECTRUM_INVERTED), USB content (above
+    // dial) sits at negative baseband and needs conjugating to land in
+    // stage 1's passband; LSB content (below dial) is already positive.
+    // CW is deliberately left exactly as it always was (never conjugated).
+    int conjugate = 0;
+    if (demod == RX_DEMOD_USB)
+        conjugate = RX_IQ_SPECTRUM_INVERTED;
+    else if (demod == RX_DEMOD_LSB)
+        conjugate = !RX_IQ_SPECTRUM_INVERTED;
+
     for (int k = 0; k < n; k++) {
         // Stage 1: wide complex bandpass - image rejection only, see the
         // file header for why this replaced v2's single combined filter.
         double fi, fq;
-        ssb_filter_apply(&ssb_state, i_samples[k], q_samples[k], &fi, &fq);
+        double q_in = conjugate ? -q_samples[k] : q_samples[k];
+        ssb_filter_apply(&ssb_state, i_samples[k], q_in, &fi, &fq);
 
         // Stage 2: mix up to CW_PITCH_HZ and keep only the real part.
         // Re[(fi + j*fq) * (cos + j*sin)] = fi*cos - fq*sin.
+        // The BFO is always advanced (keeping its phase continuous across
+        // mode changes) but only applied for CW. USB/LSB take the real
+        // part directly - no pitch offset - so a station |d| Hz from dial
+        // comes out at |d| Hz of audio, the SSB convention WSJT-X assumes
+        // when it computes RF = dial + audio.
         int bfo_cos, bfo_sin;
         vfo_read_iq(&bfo, &bfo_cos, &bfo_sin);
-        double c = (double)bfo_cos / 1073741824.0;
-        double s = (double)bfo_sin / 1073741824.0;
-        double audio = fi * c - fq * s;
+        double audio;
+        if (demod == RX_DEMOD_CW) {
+            double c = (double)bfo_cos / 1073741824.0;
+            double s = (double)bfo_sin / 1073741824.0;
+            audio = fi * c - fq * s;
+        } else {
+            audio = fi;
+        }
         audio_buf[k] = (float)audio;
 
         // Stage 3 (elliptic): narrow real bandpass, the original
