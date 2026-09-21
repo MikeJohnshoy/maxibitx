@@ -63,8 +63,27 @@ static const char *mode_to_name(enum radio_mode m)
 // untouched) otherwise - so the caller can reject an unrecognized mode
 // name with RPRT -1, same convention as J's out-of-range RIT check,
 // rather than silently accepting (and thereby misrepresenting) it.
+//
+// "DIGITAL" is accepted here as an extra alias for RADIO_MODE_DIGITAL,
+// alongside mode_names[]'s own "PKTUSB" - found because
+// tools/rigctl_panel.py's mode selector sends "M DIGITAL 2400" by name
+// (its own friendlier convention - see that file's mode-selector
+// comment), which used to hit this function's fallthrough, return 0,
+// and get RPRT -1'd right back: set_mode silently never called
+// radio_set_mode() at all, so the very next poll's "m" reply reported
+// whatever mode was already active (typically USB) and the panel's
+// radio button appeared to instantly "snap back" - not a display bug,
+// the mode change had genuinely never happened. mode_to_name() below
+// deliberately still reports "PKTUSB" on the way out (real Hamlib
+// clients, if any ever query over this rigctld surface, expect the
+// standard name) - tools/rigctl_panel.py's own apply_mode() is the
+// half of this fix that maps that back to "DIGITAL" for display.
 static int name_to_mode(const char *name, enum radio_mode *out)
 {
+    if (strcasecmp(name, "DIGITAL") == 0) {
+        *out = RADIO_MODE_DIGITAL;
+        return 1;
+    }
     for (size_t i = 0; i < MODE_NAMES_COUNT; i++) {
         if (strcasecmp(name, mode_names[i].name) == 0) {
             *out = mode_names[i].mode;
