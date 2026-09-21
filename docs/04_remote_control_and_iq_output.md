@@ -46,7 +46,7 @@ It implements a small plain-text rigctl command set:
 | `l` / `L <level> <value>` | get / set a hamlib "level" — only `AF` (audio/volume, 0.0-1.0) is backed by anything real, wired to `rx_audio.c`'s `rx_audio_get_volume()`/`rx_audio_set_volume()`; every other hamlib level (`RF`, `SQL`, preamp, ...) gets an error reply, same as an unknown command |
 | `u` / `U <func> <0\|1>` | get / set a hamlib "function" — only `NARROW` is backed by anything real: toggles `rx_audio.c`'s stage-3 narrow (~300Hz) post-demod CW filter on/off via `rx_audio_get_narrow_filter()`/`rx_audio_set_narrow_filter()`. `NARROW` isn't a name real Hamlib ships in its own function table — this server only ever talks to `tools/rigctl_panel.py`, not stock `rigctl`, so there's no compatibility reason to hunt for a closer standard name. Everything else gets an error reply. |
 | `chk_vfo` | always reports "not in VFO mode" (single-VFO radio) |
-| `dump_state` | minimal capability dump for client negotiation — advertises a real `max_rit` (`RIT_MAX_HZ`) now that `j`/`J` are backed by something; still deliberately reports no XIT/IF-shift/preamp/attenuator/onboard-filter support, and an empty TX range (no TX audio path yet) |
+| `dump_state` | minimal capability dump for client negotiation — advertises a real `max_rit` (`RIT_MAX_HZ`) now that `j`/`J` are backed by something; TX ranges come from the `[tx_band]` entries in `hw_settings.ini` (1.8–30 MHz if none loaded) at a flat 5 W, and mode masks list only CW/USB/LSB/PKTUSB; still deliberately reports no XIT/IF-shift/preamp/attenuator/onboard-filter support. The TX ranges are advertisement only — PTT isn't refused outside them |
 | `q` / `Q` / `quit` | disconnect |
 
 It's a small command set on purpose: minibitx isn't the thing making
@@ -56,15 +56,16 @@ HPSDR connection for live retuning.
 
 `l`/`L` and `u`/`U` are the two places this server reaches past pure rig
 control into DSP state: `AF` is the only level with anything behind it
-(volume of `rx_audio.c`'s local CW monitor), and `NARROW` is the only
-function with anything behind it (that same monitor's narrow post-demod
+(volume of `rx_audio.c`'s local audio), and `NARROW` is the only
+function with anything behind it (the local audio's narrow post-demod
 selectivity filter) - see
 [`dsp_design_notes/rx_audio_demod_design.md`](dsp_design_notes/rx_audio_demod_design.md).
-`dump_state`'s `has_get_level`/`has_set_level` advertise only
+`dump_state`'s `has_get_level` advertises only `RIG_LEVEL_AF` and
+`RIG_LEVEL_STRENGTH` (`0x40000008`) and `has_set_level` only
 `RIG_LEVEL_AF` (`0x8`), not the full hamlib level set; `has_get_func`/
 `has_set_func` stay `0x0` regardless, since `NARROW` isn't a real
 `RIG_FUNC` bit to advertise under (see the table above). `tools/rigctl_panel.py`
-is a small standalone desktop app (Python/Tkinter, no minibitx-side
+is a small standalone desktop app (Python/Tkinter, no maxibitx-side
 dependency beyond this server) that talks exactly this protocol - a
 frequency readout/entry, a volume slider, and a narrow-filter checkbox,
 meant to run on a laptop or the Pi's own desktop, connecting to
