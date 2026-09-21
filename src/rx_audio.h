@@ -41,7 +41,7 @@ int rx_audio_get_volume(void);
 // are deliberately independent) - originally a fixed 8-pole elliptic
 // design, not runtime-adjustable. An earlier revision had a
 // rx_audio_set_filter_bw() here; it's gone deliberately, not an
-// oversight - see rx_audio.c's "Why elliptic, and why fixed" for why:
+// oversight - see rx_audio_demod_design.md §8.2 for why:
 // the SHAPE (coefficients) was fixed. Whether the operator hears it at
 // all is a different, much cheaper question - rx_audio_set_narrow_filter()
 // below just switches between the filter's output and its bypass, no
@@ -143,8 +143,7 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
                        int n, int32_t *out, double *uac_out);
 
 // Debug/test only - the AGC's current smoothed envelope estimate (see
-// rx_audio.c). As of "Why the AGC samples the raw input, not stage 2 or
-// stage 3" in rx_audio.c's file header, this tracks the RAW input I/Q's
+// rx_audio.c). Per rx_audio_demod_design.md §8.7-8.8, this tracks the RAW input I/Q's
 // magnitude, sampled before stage 1 even runs - deliberately moved there
 // (via an intermediate stop at stage 2's output, which had its own
 // problem - see the file header) so the AGC's makeup gain no longer
@@ -163,7 +162,7 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
 double rx_audio_debug_agc_envelope(void);
 
 // Debug/test only - the METER envelope's current smoothed estimate (see
-// rx_audio.c's "Two envelopes, two jobs" above rx_audio_get_strength_db()).
+// rx_audio.c's signal-strength comment above rx_audio_get_strength_db()).
 // Unlike rx_audio_debug_agc_envelope() above, this one DOES track stage
 // 1's image rejection and stage 3's selectivity/bypass state, by design -
 // it's tapped from narrowed (post-stage-3-or-bypass, pre-AGC-gain), not
