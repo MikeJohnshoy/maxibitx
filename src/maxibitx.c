@@ -1,7 +1,7 @@
 // maxibitx.c
 //
 // initializes the sbitx radio hardware and external interfaces,
-// then handles external requests until shutting down
+// then handles processes requests until shutting down
 
 #include "hpsdr_p1.h"
 #include "iq_stream.h"
