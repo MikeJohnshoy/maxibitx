@@ -1,9 +1,10 @@
 # RX Audio Bandwidth Reaching WSJT-X (`uac_out`) vs. a Raw-I/Q Path
 
 Status: **implemented and on-air confirmed (§10, 2026-09-21)** - the
-inversion constant's sign was checked directly, and WSJT-X on the
-gadget's audio now shows many more signals. A full decode-count A/B
-against SparkSDR hasn't been recorded yet. Read §10 first: it holds the actual root cause, found
+inversion constant's sign was checked directly, and a simultaneous A/B
+against SparkSDR on the same I/Q now shows the same decode count
+(~40 each in one 20m interval) with SNRs typically within 1dB. The
+original ~10x deficit is closed. Read §10 first: it holds the actual root cause, found
 from a simultaneous on-air A/B against SparkSDR, and it **corrects**
 two conclusions earlier sections reached. `rx_audio.c` was a CW-only
 demodulator in every mode, and because maxibitx's raw I/Q is spectrally
@@ -494,10 +495,22 @@ demodulation. Nobody has listened to it yet.
 
 **What's still open.**
 
-- **On-air confirmation - first result in (2026-09-21).** After
-  deploying this, the operator reports WSJT-X on the gadget's audio
-  "now seeing many more signals." Still worth recording: the full
-  simultaneous SparkSDR A/B, after
+- **On-air confirmation - done (2026-09-21, 20m FT8, 19:44:45 UTC
+  interval).** This is the same simultaneous A/B that exposed the bug:
+  SparkSDR on `hpsdr_p1` I/Q and WSJT-X on the gadget's audio, both
+  off the same maxibitx at the same instant. Both screenshots showed
+  about 40 decodes, their lists cut off at the window edge, and the
+  same stations appeared on each - a few at the tail of each list
+  didn't make the other's visible portion. Comparing SNRs for the 37
+  stations visible in both, the gadget path read a mean of about
+  +0.5dB relative to SparkSDR, with nearly all within +-2dB and the
+  operator's own read "usually within 1dB". One outlier, YO8TVD (-3
+  vs. +3), is unexplained but isolated. For comparison, before the
+  fix the same A/B gave ~30 vs. 1-2, with SNRs that didn't agree at
+  all. The gadget's audio path now performs on par with the raw-I/Q
+  path through WSJT-X's own demodulation, which was the goal. Original
+  note on what the A/B should show, for the record: the simultaneous
+  SparkSDR A/B, after
   deploying this, is the test: WSJT-X on audio should now decode close
   to what SparkSDR does, report the same audio frequency for each
   station SparkSDR shows `f` Hz above dial, and report SNRs within a
