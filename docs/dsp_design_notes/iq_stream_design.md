@@ -37,12 +37,11 @@ simultaneous subscribers from the start - avoiding the single-client
 problem outright rather than needing to reason about whether it matters
 here too.
 
-Like `hpsdr_p1.c` and `usb_gadget.c`, this is fed its own copy of the
-I/Q from `sound_process()` and knows nothing about either of them - any
-subset of the three can be active at once (a UAC2 host, WSJT-X on HPSDR,
-and the spectrum panel here, all at the same time, none aware of the
-others) - see `sound.c`'s own comment on this at the point all three are
-called.
+Like `hpsdr_p1.c`, this is fed its own copy of the I/Q from
+`sound_process()` and knows nothing about it - either or both can be
+active at once (an HPSDR client like SparkSDR, and the spectrum panel
+here). `usb_gadget.c` was originally a third I/Q consumer; it now carries
+demodulated audio instead (`ARCHITECTURE.md` §10 step 9).
 
 ## Wire format
 
