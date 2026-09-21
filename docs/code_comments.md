@@ -10,6 +10,10 @@ machine code across the whole build:
 | `src/sound.h` | 45 -> 32 |
 | `src/radio.c` | 125 -> 57 |
 | `src/radio.h` | 88 -> 42 |
+| `src/interfaces/usb_gadget.c` | 572 -> 373 |
+| `src/interfaces/usb_gadget.h` | 203 -> 73 |
+| `src/interfaces/hamlib.c` | 142 -> 61 |
+| `src/interfaces/hamlib.h` | 20 -> 21 |
 
 This project records its engineering history carefully, and that record
 is worth keeping. But source comments are read by someone trying to
