@@ -494,6 +494,9 @@ static enum rx_narrow_filter_impl narrow_filter_impl = RX_NARROW_FILTER_ELLIPTIC
 // silently flip every other I/Q consumer too, including SparkSDR over
 // hpsdr_p1.c, which is confirmed working as-is. If a board's analog
 // chain ever turns out to differ, this one constant is the switch.
+// Confirmed on air 2026-09-21: in DIGITAL, stepping the dial +100Hz
+// moves signals LEFT in WSJT-X's waterfall - correct USB sense with
+// this set to 1.
 #define RX_IQ_SPECTRUM_INVERTED 1
 
 // Current demodulator - see rx_audio_set_demod() (rx_audio.h). CW is the
