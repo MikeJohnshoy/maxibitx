@@ -295,24 +295,14 @@ class SpectrumClient:
 
             raw = np.frombuffer(data, dtype=">i2", count=n_samples * 2, offset=12)
             iq = raw.astype(np.float64).reshape(-1, 2)
-            # Conjugated (-Q, not +Q) - display-orientation correction only,
-            # not a bug workaround. minibitx's raw baseband I/Q (shared
-            # identically by hpsdr_p1.c and usb_gadget.c's UAC2 gadget, not
-            # just this stream) has a real, single spectral inversion built
-            # in: vfo.c's vfo_read_iq() returns I=cos(phase)/Q=+sin(phase)
-            # with phase advancing at the *positive* RX_IF_FREQ_HZ rate, and
-            # sound.c multiplies the real IF sample by that directly with no
-            # compensating sign anywhere downstream - working through the
-            # mixing math (see docs/dsp_design_notes/iq_stream_design.md)
-            # shows a station at +Δ Hz above dial center lands at baseband
-            # frequency -Δ, i.e. tuning up moves every station right instead
-            # of the conventional-SDR-display left. That's a property of the
-            # shared RX chain every I/Q consumer (WSJT-X/Thetis on HPSDR,
-            # a UAC2 host) already lives with - not something to silently
-            # "fix" here by touching vfo.c/sound.c, which could disturb an
-            # already-working setup elsewhere. Conjugating here only flips
-            # this one display's left/right sense to match the orientation
-            # operators expect from a conventional SDR waterfall.
+            # Conjugated (-Q, not +Q) to correct display orientation.
+            # maxibitx's raw baseband I/Q (shared by hpsdr_p1.c and this
+            # stream) is spectrally inverted: a station +d Hz above dial
+            # lands at baseband -d, so tuning up would move stations right
+            # instead of the conventional-SDR-display left. sound.c's mixer
+            # is deliberately left as-is (hpsdr_p1.c clients work with it);
+            # rx_audio.c compensates the same way for USB/LSB - see its
+            # RX_IQ_SPECTRUM_INVERTED.
             samples = (iq[:, 0] - 1j * iq[:, 1]) / 32767.0
 
             self.sample_buf = np.concatenate((self.sample_buf, samples))
