@@ -229,9 +229,11 @@ ALSA device.
    real part with no BFO - so audio frequency equals the distance from
    the dial. With the I/Q inverted, USB (above the dial) sits at
    negative baseband, so USB and DIGITAL conjugate and LSB doesn't. CW
-   is never conjugated; it mixes up to `CW_PITCH_HZ` (700 Hz). That
-   means CW currently copies the side below the dial, effectively
-   CW-reverse.
+   keeps the upper side too, so it conjugates like USB, then mixes up
+   to `CW_PITCH_HZ` (700 Hz): a station on the dial is heard at 700 Hz,
+   one 200 Hz above it at 900 Hz, and tuning up lowers the pitch, as on
+   most rigs. CW-reverse isn't offered yet; it would be the same BFO
+   with LSB's conjugation.
 3. An optional narrow filter, about 300 Hz wide around `CW_PITCH_HZ`
    (an elliptic IIR by default, or `rx_filter.c`'s FFT filter),
    switched by rigctld `U NARROW` and `U FFTFILT` or the control panel.
