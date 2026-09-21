@@ -91,10 +91,10 @@ static uint8_t uac_pcm_capture_buf[UAC_BUF_FRAMES * UAC_FRAME_BYTES]; // capture
 // inside 16-bit PCM's ~96dB range. Without this, real busy-band FT8
 // operation would clip on ordinary strong signals, spraying broadband
 // intermodulation splatter across the whole sub-band right when WSJT-X
-// is trying to pull dozens of much weaker ones out of the noise -
-// plausibly the dominant cause behind the decode-count deficit that
-// prompted this investigation, well beyond stage 1's own passband shape
-// (measured adequate as-is, same note §4-§6).
+// is trying to pull dozens of much weaker ones out of the noise. A real
+// defect, but not the main cause of the decode-count deficit that
+// prompted this investigation - that was rx_audio.c demodulating the
+// wrong sideband with a 700Hz offset (same note, §10).
 #define UAC_RX_AUDIO_HEADROOM      5.6234133       // 10^(15/20), i.e. 15dB
 #define UAC_RX_AUDIO_SCALE (32767.0 / (500000000.0 * UAC_RX_AUDIO_HEADROOM))
 
