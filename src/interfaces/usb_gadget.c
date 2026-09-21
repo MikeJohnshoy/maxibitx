@@ -1,20 +1,11 @@
 // usb_gadget.c
 //
-// See usb_gadget.h for the full design (bidirectional 16-bit/48kHz real
-// audio over the UAC2 function, Kenwood CAT over the ACM function). This
-// file used to carry raw I/Q for an external SDR application to
-// demodulate; that entire path (the paired I/Q ring buffer, the 24-bit
-// packing math, uac_push_iq()) is gone - see git history if it's ever
-// needed again.
+// The USB gadget - UAC2 audio plus Kenwood CAT over CDC-ACM. See
+// usb_gadget.h for the design; the CAT half is the section at the bottom.
 
 #include "usb_gadget.h"
 #include "cw.h"
-#include "radio.h"    // freq_hdr, in_tx, radio_tune_to()/radio_set_tx(),
-                       // RIT_MAX_HZ, radio_get_rit()/radio_set_rit()/
-                       // radio_rit_enabled()/radio_set_rit_enabled() -
-                       // previously hand-declared below one at a time;
-                       // now pulled in directly (same cleanup hamlib.c
-                       // got when it needed RIT_MAX_HZ too).
+#include "radio.h"    // freq_hdr, in_tx, tuning, PTT, RIT, mode
 #include "rx_audio.h"
 #include <alsa/asoundlib.h>
 #include <dirent.h>
@@ -35,19 +26,14 @@
  * Compile-time configuration
  * --------------------------------------------------------------------- */
 
-// Root of the Linux USB gadget configfs hierarchy. Deliberately left as
-// "sbitx_iq" rather than renamed to match the new "sBitx Audio" product
-// string - this is an internal configfs path, never seen by the host, and
-// renaming it risks breaking any existing OS-level gadget setup script
-// that references it (see usb_gadget.h's path-layout comment).
+// configfs root. "sbitx_iq" is kept from the original I/Q version: it's
+// internal (the host never sees it), and OS setup scripts may reference it.
 #define UAC_GADGET_ROOT "/sys/kernel/config/usb_gadget/sbitx_iq"
 
 // PCM parameters to match the UAC2 descriptor
 #define UAC_RATE 48000
-#define UAC_CHANNELS 1        // mono, both directions (was 2 - see uac_gadget_create()'s
-                              // c_chmask/p_chmask comment for why the duplicate-to-stereo
-                              // hedge was removed)
-#define UAC_SAMPLE_BYTES 2    // packed on-wire bytes (16-bit PCM - was 3/24-bit for I/Q)
+#define UAC_CHANNELS 1        // mono, both directions
+#define UAC_SAMPLE_BYTES 2    // bytes per sample on the wire (16-bit PCM)
 #define UAC_PERIOD_FRAMES 512 // ALSA period size in frames
 #define UAC_PERIODS 4         // number of periods in the ring buffer
 
@@ -61,59 +47,29 @@
 static uint8_t uac_pcm_buf[UAC_BUF_FRAMES * UAC_FRAME_BYTES];         // playback (RX)
 static uint8_t uac_pcm_capture_buf[UAC_BUF_FRAMES * UAC_FRAME_BYTES]; // capture (TX)
 
-// Maps rx_audio.c's uac_out tap (rx_audio.h) onto 16-bit PCM's +-32767
-// range. rx_audio.c's AGC keeps that tap's natural amplitude centered
-// around its own AGC_TARGET_AMPLITUDE (500000000.0, rx_audio.c) - this is
-// the one compile-time knob the user asked for to retune the level WSJT-X
-// actually sees; nothing downstream of uac_writer_thread() needs to change
-// if this is adjusted. Not shared with rx_audio.c's own macro (different
-// translation units, and this is usb_gadget.c's own concern, not
-// rx_audio.c's) - if AGC_TARGET_AMPLITUDE is ever changed there, this
-// should be revisited too.
-//
-// UAC_RX_AUDIO_HEADROOM_DB: deliberate margin below full scale, added
-// after an on-air FT8 decode-count investigation
-// (docs/dsp_design_notes/rx_uac_out_digital_mode_bandwidth.md §8) found
-// this tap clipping right at the AGC_TARGET_AMPLITUDE reference point
-// itself - a single steady tone at stage 1's flat passband center
-// already measured 0.3-0.7dB over that reference with stage 3 (the
-// narrow CW filter, DIGITAL mode's operators must disable for FT8's
-// wide sub-band) bypassed, because AGC_TARGET_AMPLITUDE/this scale were
-// implicitly calibrated assuming stage 3's own attenuation was always
-// present to provide headroom. FT8 also means several to dozens of
-// simultaneous tones, not one - a bench sweep (same note, §8) measured
-// the combined peak growing with tone count purely from ordinary
-// multi-tone crest factor (independent sinusoids' peaks occasionally
-// aligning), reaching +5.1dB over the old, headroom-free reference at
-// 40 simultaneous tones and +6.4dB at 60, with no sign of leveling off.
-// 15dB was chosen to clear that with real margin (8.6dB still spare at
-// 60 tones in the same bench run) while still leaving the tap comfortably
-// inside 16-bit PCM's ~96dB range. Without this, real busy-band FT8
-// operation would clip on ordinary strong signals, spraying broadband
-// intermodulation splatter across the whole sub-band right when WSJT-X
-// is trying to pull dozens of much weaker ones out of the noise. A real
-// defect, but not the main cause of the decode-count deficit that
-// prompted this investigation - that was rx_audio.c demodulating the
-// wrong sideband with a 700Hz offset (same note, §10).
+// Maps rx_audio.c's uac_out tap onto 16-bit PCM - the one knob for the
+// level WSJT-X sees. The AGC holds that tap around rx_audio.c's
+// AGC_TARGET_AMPLITUDE (500000000.0 - revisit this if that changes), and
+// UAC_RX_AUDIO_HEADROOM puts that level 15dB below full scale. The margin
+// matters: with the narrow filter off (as for FT8) a single tone already
+// peaks slightly above the AGC target, and many simultaneous tones add
+// crest factor (+6.4dB at 60 tones on the bench, leaving 8.6dB spare).
+// Clipping here would spray intermodulation across the whole sub-band.
+// See rx_uac_out_digital_mode_bandwidth.md §8.
 #define UAC_RX_AUDIO_HEADROOM      5.6234133       // 10^(15/20), i.e. 15dB
 #define UAC_RX_AUDIO_SCALE (32767.0 / (500000000.0 * UAC_RX_AUDIO_HEADROOM))
 
 /* ---------------------------------------------------------------------
- * Audio handoff queues - two independent lock-free SPSC ring buffers, one
- * per direction, replacing the single paired I/Q queue the old version
- * used. Same design as hpsdr_p1.c's I/Q queue (that file's comments have
- * the full derivation of why a plain mutex isn't safe to share with a
- * real-time producer/consumer thread): each queue's producer only ever
- * writes its own head; its consumer only ever writes its own tail.
- * Neither ever blocks on the other, and the two queues don't interact.
+ * Audio queues - two independent lock-free SPSC ring buffers, one per
+ * direction, the same scheme as hpsdr_p1.c's I/Q queue: the producer
+ * writes only head, the consumer writes only tail, and neither ever blocks.
  *
- * RX (device -> host, decoded audio for WSJT-X to decode): producer is
- * uac_push_audio_rx() (sound.c's SCHED_FIFO audio thread), consumer is
- * uac_writer_thread() (drains it into the gadget's playback PCM).
+ * RX (device -> host): producer uac_push_audio_rx() on sound.c's audio
+ * thread; consumer uac_writer_thread(), into the gadget's playback PCM.
  *
- * TX (host -> device, WSJT-X's own generated tone): producer is
- * uac_reader_thread() (reads the gadget's capture PCM), consumer is
- * uac_pull_audio_tx() (sound.c's audio thread, for RADIO_MODE_DIGITAL).
+ * TX (host -> device): producer uac_reader_thread(), from the gadget's
+ * capture PCM; consumer uac_pull_audio_tx() on sound.c's audio thread
+ * (RADIO_MODE_DIGITAL).
  * --------------------------------------------------------------------- */
 #define UAC_QUEUE_CAP                                                                             \
   8192 // power of two; ~170ms at 48kHz -
@@ -264,8 +220,8 @@ static int uac_gadget_create(void) {
     // or a prior clean uac_gadget_destroy()) - nothing to unbind.
   }
 
-  // USB IDs: use the HermesLite vendor/product pair to stay compatible with
-  // SDR apps that enumerate by USB ID, while the product string distinguishes us.
+  // USB IDs carried over from the original I/Q version. Changing them
+  // (like the serial number below) makes hosts see a brand-new device.
   uac_write_attr(UAC_GADGET_ROOT "/idVendor", "0x04B4");  // Cypress / generic
   uac_write_attr(UAC_GADGET_ROOT "/idProduct", "0x0008"); // generic audio
   uac_write_attr(UAC_GADGET_ROOT "/bcdUSB", "0x0200");    // USB 2.0
@@ -278,30 +234,13 @@ static int uac_gadget_create(void) {
   uac_write_attr(path, "sBitx");
   snprintf(path, sizeof(path), "%s/strings/0x409/product", UAC_GADGET_ROOT);
   uac_write_attr(path, "sBitx Audio");
-  // Serial number: a FIXED value on purpose, so a host sees one stable
-  // device identity across replugs rather than minting a fresh device
-  // instance (and, on Windows, a fresh COM port number for the ACM
-  // function) every time the cable is touched.
-  //
-  // The cost of that stability is that a host also caches per-device
-  // state against this identity, and keeps using it even after the
-  // gadget's own descriptors change underneath. Windows in particular
-  // caches an audio endpoint's supported/default PCM format keyed on
-  // VID/PID/serial - so after step 11's 2-channel -> 1-channel change,
-  // a Windows box that had already enumerated the stereo version can go
-  // on believing this device is stereo, and refuse every direct (non-
-  // Sound-Mapper) open with a format it no longer supports. Unplugging
-  // and replugging does NOT clear that, precisely because the serial
-  // hasn't changed.
-  //
-  // Bumped 0000001 -> 0000002 to force exactly one clean break: a host
-  // that has cached the old stereo descriptors sees an entirely new
-  // device and builds its endpoint state fresh from the current
-  // descriptors. This is a deliberate one-time bump, not a value to
-  // randomize per run - a serial that changed every start would leave a
-  // trail of ghost device instances and hand FLRig a different COM port
-  // number on every restart. Bump it again (0000003, ...) only if some
-  // future descriptor change needs the same clean break.
+  // Serial number: fixed on purpose, so the host sees one stable device
+  // across replugs (and Windows keeps the same COM port). The cost: hosts
+  // cache per-device state against it - Windows caches the audio format -
+  // so a descriptor change (like stereo -> mono) needs a one-time bump to
+  // make hosts re-enumerate cleanly. Never randomize it per run: that
+  // leaves ghost devices behind and moves the COM port on every start.
+  // (ARCHITECTURE.md §10 step 11.)
   snprintf(path, sizeof(path), "%s/strings/0x409/serialnumber", UAC_GADGET_ROOT);
   uac_write_attr(path, "0000002");
 
@@ -312,49 +251,26 @@ static int uac_gadget_create(void) {
     return -1;
   }
 
-  // Capture (host reads decoded audio from us): 1 ch (mono), 16-bit,
-  // 48 kHz - genuinely single-channel, matching the convention every
-  // real ham-radio digital-mode audio interface (SignaLink, RigBlaster,
-  // and similar) already uses, both directions. An earlier revision
-  // duplicated the mono sample onto 2 channels "for compatibility with
-  // host-side apps/drivers that assume a stereo audio interface" - that
-  // hedge was never actually needed (WSJT-X and Windows' own audio stack
-  // treat a mono UAC2 device as the ordinary case, not an edge case) and
-  // cost real code: uac_writer_thread()'s packing had to write every
-  // sample twice, and uac_reader_thread() had to average two channels
-  // back into one on the way in, inventing an ambiguity (true stereo vs.
-  // duplicated-mono from the host) that a single real channel doesn't
-  // have. Removed once WSJT-X bring-up on real hardware stalled and this
-  // was identified as unnecessary complexity worth shedding.
+  // Capture (the host reads RX audio from us): mono, 16-bit, 48kHz. Mono
+  // both ways, like SignaLink/RigBlaster-style digital-mode interfaces.
   snprintf(path, sizeof(path), "%s/functions/uac2.0/c_srate", UAC_GADGET_ROOT);
   uac_write_attr(path, "48000");
   snprintf(path, sizeof(path), "%s/functions/uac2.0/c_ssize", UAC_GADGET_ROOT);
-  uac_write_attr(path, "2"); // 2 bytes = 16-bit PCM (was 3/24-bit for I/Q)
+  uac_write_attr(path, "2"); // 2 bytes = 16-bit PCM
   snprintf(path, sizeof(path), "%s/functions/uac2.0/c_chmask", UAC_GADGET_ROOT);
-  uac_write_attr(path, "1"); // bitmask: ch0 only (mono) - was "3" (L+R)
+  uac_write_attr(path, "1"); // bitmask: ch0 only (mono)
 
-  // Playback (host -> device): WSJT-X's own generated TX tone for
-  // RADIO_MODE_DIGITAL - genuinely used now, unlike the I/Q version's
-  // declared-but-unused pair (see usb_gadget.h). Mono, same reasoning
-  // as the capture side above.
+  // Playback (host -> device): WSJT-X's TX audio for RADIO_MODE_DIGITAL.
   snprintf(path, sizeof(path), "%s/functions/uac2.0/p_srate", UAC_GADGET_ROOT);
   uac_write_attr(path, "48000");
   snprintf(path, sizeof(path), "%s/functions/uac2.0/p_ssize", UAC_GADGET_ROOT);
   uac_write_attr(path, "2");
   snprintf(path, sizeof(path), "%s/functions/uac2.0/p_chmask", UAC_GADGET_ROOT);
-  uac_write_attr(path, "1"); // was "3" (L+R)
+  uac_write_attr(path, "1"); // mono
 
-  // --- ACM (CDC-ACM) function: Kenwood TS-480-subset CAT control ---
-  // See the CAT section near the bottom of this file and
-  // docs/04_remote_control_and_iq_output.md. Unlike
-  // uac2.0 above, the kernel's f_acm function has essentially no
-  // configurable attributes to set here (just a read-only port_num) -
-  // creating the directory is the whole job. Binding this gives us
-  // /dev/ttyGS0 on this side; Windows 10/11 auto-binds its inbox
-  // usbser.sys driver on the host side with no custom INF, since this
-  // presents as a standard bInterfaceClass=0x02/bInterfaceSubClass=0x02
-  // CDC-ACM interface - same "just works" story UAC2 already gets for
-  // audio class devices.
+  // --- ACM (CDC-ACM) function: Kenwood CAT (see the CAT section below).
+  // f_acm has no attributes to set; creating the directory is the whole
+  // job. It gives /dev/ttyGS0 here, and Windows binds its inbox usbser.sys.
   snprintf(path, sizeof(path), "%s/functions/acm.usb0", UAC_GADGET_ROOT);
   if (uac_mkdir(path) < 0 && errno != EEXIST) {
     fprintf(stderr, "uac: cannot create acm function: %s\n", strerror(errno));
@@ -387,7 +303,7 @@ static int uac_gadget_create(void) {
   char udc_name[256] = {0}; // sized to match dirent.d_name's worst case
   if (uac_find_udc(udc_name, sizeof(udc_name)) < 0) {
     fprintf(stderr, "uac: no UDC found — USB gadget not available\n");
-    // Not a hard failure: minibitx continues over HPSDR/UDP without UAC
+    // Not a hard failure: maxibitx carries on without the gadget
     return -1;
   }
   snprintf(path, sizeof(path), "%s/UDC", UAC_GADGET_ROOT);
@@ -448,17 +364,9 @@ static void uac_gadget_destroy(void) {
  * UAC2 gadget ALSA PCM setup
  * --------------------------------------------------------------------- */
 
-// Open and configure the UAC2 gadget's own ALSA PCM for write (playback
-// side, device -> host). Once bound to a UDC, the kernel's UAC2 function
-// driver registers its OWN independent ALSA card, always id "UAC2Gadget"
-// in /proc/asound/cards - its device-0 playback PCM is what's actually
-// wired to the real USB isochronous endpoint the host reads (as ITS
-// capture/microphone input). An earlier version wrote to a separate
-// snd-aloop "Loopback" card instead, on the mistaken assumption UAC2 reads
-// its capture side from that automatically - it doesn't, so nothing ever
-// reached the USB link; see docs/dsp_design_notes/usb_gadget_OS_setup.md
-// §11 for that bench story.
-// Returns 0 on success, -1 on ALSA error.
+// Opens the UAC2Gadget card's playback PCM (device -> host): what's
+// written here is the host's microphone input. Returns 0 on success, -1 on
+// ALSA error.
 static int uac_alsa_open(void) {
   int card_idx = -1;
   if (uac_find_card_by_id("UAC2Gadget", &card_idx) < 0) {
@@ -516,15 +424,9 @@ static int uac_alsa_open(void) {
   return 0;
 }
 
-// Open and configure the UAC2 gadget's own ALSA PCM for read (capture
-// side, host -> device) - the SAME card uac_alsa_open() above opens, same
-// device 0, just the other of its two independent PCM substream
-// directions (see usb_gadget.h's "one card, two substream directions"
-// note). What's read here is what the host SENT (WSJT-X's own generated
-// TX tone, as ITS playback/speaker output). Best-effort: a failure here is
-// logged by the caller and does not prevent the RX/playback direction
-// (uac_alsa_open() above) from working.
-// Returns 0 on success, -1 on ALSA error.
+// Opens the same card's capture PCM (host -> device): what's read here is
+// what the host plays (WSJT-X's TX audio). Best-effort - the caller only
+// logs a failure. Returns 0 on success, -1 on ALSA error.
 static int uac_alsa_open_capture(void) {
   int card_idx = -1;
   if (uac_find_card_by_id("UAC2Gadget", &card_idx) < 0) {
@@ -577,16 +479,10 @@ static int uac_alsa_open_capture(void) {
 }
 
 /* ---------------------------------------------------------------------
- * Writer thread — owns uac_pcm_handle exclusively; the only thing that
- * ever calls snd_pcm_writei() on it. uac_push_audio_rx() (called from
- * sound.c's real-time audio thread) only ever touches the RX lock-free
- * queue above and never blocks; this thread is the sole consumer,
- * waiting for a full period's worth of samples and writing them to the
- * gadget's PCM, so a blocked or absent USB host can only cost USB audio
- * quality, never the radio's own real hardware timing. Ported from an
- * earlier design that wrote inline from the audio thread and
- * reintroduced sound.c's xrun flood whenever no host was draining the
- * gadget - see docs/dsp_design_notes/usb_gadget_OS_setup.md §7 for that bench story.
+ * Writer thread - the only caller of snd_pcm_writei() on uac_pcm_handle,
+ * and the RX queue's only consumer. Waits for a full period, then writes
+ * it. A slow or absent host stalls only this thread, never the radio's
+ * real-time audio (usb_gadget_OS_setup.md §7).
  * --------------------------------------------------------------------- */
 static void *uac_writer_thread(void *arg) {
   (void)arg;
@@ -722,17 +618,10 @@ static void *uac_writer_thread(void *arg) {
 }
 
 /* ---------------------------------------------------------------------
- * Reader thread — owns uac_pcm_capture_handle exclusively; the only
- * thing that ever calls snd_pcm_readi() on it. Mirrors
- * uac_writer_thread() above in reverse: it's the sole producer into the
- * TX lock-free queue (uac_pull_audio_tx(), called from sound.c's
- * real-time audio thread, is the sole consumer and never blocks), so a
- * blocked or absent USB host (WSJT-X not running, or not yet sending TX
- * audio) can only cost this thread's own pacing, never the radio's real
- * hardware timing. Same backoff/retry/transition-logging pattern as the
- * writer thread, for the same reason (docs/dsp_design_notes/
- * usb_gadget_OS_setup.md §11) - just watching for a host that starts
- * SENDING instead of one that starts DRAINING.
+ * Reader thread - the only caller of snd_pcm_readi() on
+ * uac_pcm_capture_handle, and the TX queue's only producer. The mirror of
+ * the writer thread, with the same backoff and transition logging
+ * (usb_gadget_OS_setup.md §11), watching for a host that starts sending.
  * --------------------------------------------------------------------- */
 static void *uac_reader_thread(void *arg) {
   (void)arg;
@@ -810,14 +699,8 @@ static void *uac_reader_thread(void *arg) {
       host_was_sending = 1;
     }
 
-    // Unpack S16_LE mono frames, normalized to roughly [-1, +1] - a
-    // fixed, unambiguous conversion (see usb_gadget.h's
-    // uac_pull_audio_tx() comment for why this needs no separate
-    // compile-time scale the way UAC_RX_AUDIO_SCALE does). One real
-    // channel now (c_chmask/p_chmask above), not two averaged together -
-    // removes the earlier "does the host send true stereo or duplicate
-    // one channel" ambiguity entirely, since there's only one channel to
-    // read.
+    // Unpack S16_LE mono to about [-1, +1] - a fixed conversion, so no
+    // scale constant is needed on this side.
     for (snd_pcm_sframes_t s = 0; s < got; s++) {
       uint8_t *slot = uac_pcm_capture_buf + s * UAC_FRAME_BYTES;
       int16_t sample = (int16_t)(slot[0] | (slot[1] << 8));
@@ -838,10 +721,9 @@ static void *uac_reader_thread(void *arg) {
 
 int uac_init(void) {
   if (uac_gadget_create() < 0) {
-    // uac_gadget_create already printed the reason. Note: it may
-    // still have left a gadget directory that needs cleanup - it
-    // sets uac_gadget_up itself now (as soon as it creates one),
-    // precisely so a failed bind here doesn't skip that cleanup.
+    // uac_gadget_create() already logged why. It sets uac_gadget_up as
+    // soon as a gadget directory exists, so uac_stop() still cleans up
+    // after a failed bind.
     return -1;
   }
 
@@ -864,11 +746,7 @@ int uac_init(void) {
 
   uac_active = 1;
 
-  // Capture (TX/inbound) direction is best-effort, same spirit as the
-  // rest of this file: a failure here does not unwind the RX/playback
-  // side already brought up above, and WSJT-X's decoded audio keeps
-  // flowing either way - only TX audio into RADIO_MODE_DIGITAL won't
-  // arrive until this succeeds (see usb_gadget.h's uac_init() comment).
+  // Capture (TX) is best-effort: a failure here doesn't undo the RX side.
   if (uac_alsa_open_capture() == 0) {
     uac_reader_running = 1;
     if (pthread_create(&uac_reader_tid, NULL, uac_reader_thread, NULL) != 0) {
@@ -962,18 +840,11 @@ void uac_stop(void) {
 int uac_is_active(void) { return uac_active; }
 
 /* =======================================================================
- * Kenwood TS-480-subset CAT control, over this same gadget's CDC-ACM
- * function acm.usb0 (created/bound in uac_gadget_create() above; see
- * usb_gadget.h for why this is folded into the same file rather than a
- * separate translation unit). See docs/04_remote_control_and_iq_output.md
- * for the command set and why TS-480, and docs/dsp_design_notes/usb_gadget_OS_setup.md
- * §13 for the bench-test checklist. Best-effort like the rest of this
- * file: cat_init() failing is not fatal.
- *
- * Unlike hamlib.c's TCP server, no accept()/one-thread-per-client model
- * is needed - a USB gadget serial function is inherently one logical
- * connection at a time, so this is a single persistent reader thread
- * that opens the device once and re-opens it if it ever drops.
+ * Kenwood TS-480-subset CAT over the gadget's CDC-ACM function
+ * (acm.usb0). Command set and rationale:
+ * docs/04_remote_control_and_iq_output.md; bench checklist:
+ * usb_gadget_OS_setup.md §13. A gadget serial port is one connection, so
+ * this is one persistent reader thread that reopens the tty if it drops.
  * ======================================================================= */
 
 #define CAT_TTY_PATH "/dev/ttyGS0"
@@ -984,34 +855,14 @@ static volatile int cat_running = 0;
 static int cat_fd = -1;
 static pthread_t cat_thread_tid;
 
-// Mode itself is real now - radio_get_mode()/radio_set_mode() (radio.h)
-// are the single owner this surface and hamlib.c's rigctld M/m now both
-// agree on - see radio.h's enum radio_mode comment.
+// Mode <-> Kenwood MD digit: 1/2/3 = LSB/USB/CW, the standard TS-480
+// convention.
 //
-// mode_to_kenwood_digit()/kenwood_digit_to_mode() below translate
-// between that enum and the single-digit Kenwood MD codes this CAT
-// surface actually sends/parses. 1/2/3 (LSB/USB/CW) are the standard
-// Kenwood convention every TS-480-alike (QMX included) agrees on.
-//
-// RADIO_MODE_DIGITAL reports as '2' (USB), and that is deliberate.
-// An earlier revision sent '9' as a guess at "some data mode", flagged
-// in this comment as unconfirmed. It is now confirmed WRONG, by two
-// independent sources that agree: QRP Labs' own QMX CAT Programming
-// Manual documents digit 9 as "FSK Reverse", and Hamlib's default
-// kenwood_mode_table (kenwood.c - ts480.c defines no table of its own,
-// so the default is what WSJT-X gets) maps 9 to RTTY-REVERSE. That
-// table has no DATA/PKT digit at all in the 1-9 range a TS-480 IF
-// response can even express, so there is no honest digit to send: a
-// real TS-480 has no data mode. Sending '9' made WSJT-X display the rig
-// as RTTY-R.
-//
-// '2' is the truthful answer instead - FT8 and friends ARE upper
-// sideband, and "run the rig in USB and let the digital-mode app own
-// the audio" is exactly how a TS-480 is operated for data. The cost is
-// that DIGITAL is not reachable or distinguishable over CAT, only
-// selectable locally; see the MD set handler for the guard that keeps a
-// host's own "MD2" from silently dropping us out of DIGITAL (and with
-// it, the uac_pull_audio_tx() TX path) back into mic-sourced USB.
+// DIGITAL reports as '2' (USB), deliberately. A TS-480 has no data-mode
+// digit ('9' is FSK-Reverse in both the QMX CAT manual and Hamlib's
+// kenwood_mode_table), and FT8 is USB anyway. So DIGITAL can't be selected
+// over CAT, only locally; the MD set handler keeps a host's read-back
+// "MD2" from knocking us out of DIGITAL (ARCHITECTURE.md §10 step 12).
 static const struct { enum radio_mode mode; char digit; } mode_digits[] = {
   { RADIO_MODE_LSB,     '1' },
   { RADIO_MODE_USB,     '2' },
@@ -1086,10 +937,9 @@ static void cat_handle_command(char *cmd) {
     return;
   }
 
-  // --- AC: antenna tuner control, part of FLRig's standard status
-  // poll - minibitx has no tuner to report on, so silently ignored
-  // rather than logged every poll forever. See docs/04's
-  // "Kenwood-CAT emulation over USB". ---
+  // --- AC: antenna tuner, part of FLRig's status poll. There's no tuner,
+  // so it's ignored without logging (docs/04's "Kenwood-CAT emulation over
+  // USB"). ---
   if (len >= 2 && cmd[0] == 'A' && cmd[1] == 'C') {
     return;
   }
@@ -1116,9 +966,7 @@ static void cat_handle_command(char *cmd) {
     return;
   }
 
-  // --- FB: VFO B. minibitx has one VFO - mirror FA on get, accept and
-  // ignore on set, same "nothing else to switch to" stance Hamlib's V/
-  // chk_vfo already takes. ---
+  // --- FB: VFO B. One VFO: mirror FA on a get, accept and ignore a set. ---
   if (len >= 2 && cmd[0] == 'F' && cmd[1] == 'B') {
     if (len == 2) {
       static char last[16] = "";
@@ -1134,15 +982,9 @@ static void cat_handle_command(char *cmd) {
     return;
   }
 
-  // --- RT: RIT on/off - bare "RT;" is a get (replies "RT0;"/"RT1;"),
-  // "RT0;"/"RT1;" is a set. Maps straight onto radio_set_rit_enabled()/
-  // radio_rit_enabled() (radio.h) - the value itself (radio_get_rit())
-  // is untouched either way, exactly like a real rig's RIT ON/OFF
-  // button leaves whatever's dialed into the RIT knob alone. See
-  // docs/04_remote_control_and_iq_output.md for why this needed a real
-  // enable bit in radio.c rather than reusing rigctld's offset-only
-  // model (hamlib.c's j/J, which has no separate on/off concept at
-  // all - 0 Hz IS off there). ---
+  // --- RT: RIT on/off. Bare "RT" gets; "RT0"/"RT1" sets. Maps to
+  // radio_set_rit_enabled()/radio_rit_enabled(); the stored offset is
+  // untouched, like a rig's RIT ON/OFF button. ---
   if (len >= 2 && cmd[0] == 'R' && cmd[1] == 'T') {
     if (len == 2) {
       static char last[8] = "";
@@ -1171,15 +1013,10 @@ static void cat_handle_command(char *cmd) {
     return;
   }
 
-  // --- RU / RD: step RIT up/down by a fixed CAT_RIT_STEP_HZ per call,
-  // clamped to +/-RIT_MAX_HZ. Real Kenwood rigs accept an optional
-  // digit-count suffix ("RU005;") selecting how many of the rig's own
-  // configured step sizes to move - accepted here but ignored rather
-  // than guessed at, since minibitx has no configured step size to
-  // multiply and this hasn't been checked against a real rig's exact
-  // convention. Implicitly (re-)enables RIT via radio_set_rit(), same
-  // as turning a real RIT knob does regardless of the ON/OFF button's
-  // last state. ---
+  // --- RU / RD: step RIT by CAT_RIT_STEP_HZ, clamped to +/-RIT_MAX_HZ.
+  // Kenwood's optional step-count suffix ("RU005") is accepted but ignored
+  // (unverified against a real rig). Enables RIT, like turning a real RIT
+  // knob. ---
 #define CAT_RIT_STEP_HZ 10
   if (len >= 2 && cmd[0] == 'R' && (cmd[1] == 'U' || cmd[1] == 'D')) {
     int delta = (cmd[1] == 'U') ? CAT_RIT_STEP_HZ : -CAT_RIT_STEP_HZ;
@@ -1235,7 +1072,7 @@ static void cat_handle_command(char *cmd) {
     return;
   }
 
-  // --- MD: mode - real now, see mode_to_kenwood_digit()'s comment above. ---
+  // --- MD: mode - see mode_digits[] above. ---
   if (len >= 2 && cmd[0] == 'M' && cmd[1] == 'D') {
     if (len == 2) {
       static char last[8] = "";
@@ -1272,19 +1109,12 @@ static void cat_handle_command(char *cmd) {
     return;
   }
 
-  // --- IF: combined status string - get only. The field layout is no
-  // longer a guess: it is the classic 38-byte Kenwood IF response, and
-  // Hamlib (which is what WSJT-X drives its rig control through) parses
-  // it by FIXED character offsets and rejects a wrong-length reply
-  // outright. Hamlib's kenwood.c defaults `if_len` to 37 for any backend
-  // that doesn't override it - ts480.c doesn't - where if_len counts the
-  // reply INCLUDING the leading "IF" but EXCLUDING the ';' terminator.
-  // So the wire reply must be exactly 38 bytes: "IF" + 35 payload + ';'.
-  // A length mismatch is a hard -RIG_EPROTO after the port's retries,
-  // not something Hamlib shrugs off.
+  // --- IF: combined status, get only. Hamlib (WSJT-X's rig control) parses
+  // it by fixed offsets and rejects a wrong length: kenwood.c's default
+  // if_len of 37 (ts480.c doesn't override it) counts "IF" but not ';', so
+  // the wire reply must be exactly 38 bytes - "IF" + 35 payload + ';'.
   //
-  // Layout, as 0-indexed offsets into the reply (';' stripped), which is
-  // exactly how Hamlib indexes it:
+  // Offsets (';' stripped), as Hamlib indexes them:
   //    [0..1]   "IF"
   //    [2..12]  frequency, 11 digits
   //    [13..16] frequency step, 4 chars       (we send zeros)
@@ -1301,18 +1131,10 @@ static void cat_handle_command(char *cmd) {
   //    [31]     scan, [32] split, [33] tone, [34..35] tone number,
   //    [36]     reserved                      (all zero here)
   //
-  // This replaces an earlier best-effort reconstruction that was 38
-  // payload+IF chars (39 on the wire) and put RX/TX and mode one
-  // position late, because its RIT field was 5 chars instead of 6 and
-  // its tail was one digit too long. That made every Hamlib IF-based
-  // call - get_ptt, get_vfo, get_split_vfo - fail with -RIG_EPROTO,
-  // which is what WSJT-X surfaces as a "Rig Control Error". rig_open()
-  // itself had always succeeded, since Hamlib's kenwood_open() only
-  // hard-fails if `ID;` goes unanswered (ours answers ID020;) - which is
-  // why CAT looked healthy from FLRig, whose parser is far more
-  // forgiving, while WSJT-X refused to connect.
-  //
-  // RIT_MAX_HZ is 9999, so the signed 6-char field can never overflow.
+  // A wrong layout fails every Hamlib IF-based call, which WSJT-X shows as
+  // "Rig Control Error", while FLRig's looser parser still works
+  // (ARCHITECTURE.md §10 step 12). RIT_MAX_HZ is 9999, so the signed
+  // 6-char field can't overflow.
   if (len == 2 && strncmp(cmd, "IF", 2) == 0) {
     static char last[48] = "";
     char buf[48], log_line[96];
@@ -1331,20 +1153,10 @@ static void cat_handle_command(char *cmd) {
     return;
   }
 
-  // --- AG: AF (volume) gain. Kenwood convention: P1 is a 1-digit VFO
-  // selector (minibitx has one VFO, so it's accepted but ignored either
-  // way), P2 is a 3-digit level, 000-255. Bare "AG" or "AG0" (no level
-  // digits) is a get; "AG0nnn" is a set - this is the exact same volume
-  // rigctld's "l"/"L AF" (hamlib.c) already exposes, just reached over
-  // the Kenwood-CAT wire format instead of rigctld's own - both paths
-  // end up calling rx_audio_set_volume()/rx_audio_get_volume(), so a
-  // change made through one is immediately visible through the other.
-  // FLRig's own volume slider sends a continuous stream of "AG0nnn;"
-  // sets while it's being dragged, one per tick, not just on release -
-  // matched here by just applying each one directly (rx_audio_set_volume()
-  // is cheap, and rigctld's panel-side "only send on release" throttling
-  // was about that panel's own poll-thread traffic, not a real
-  // requirement here).
+  // --- AG: AF (volume) gain. P1 is a VFO digit (ignored - one VFO), P2 a
+  // 3-digit level, 000-255. "AG"/"AG0" gets; "AG0nnn" sets. The same
+  // volume as rigctld's l/L AF (rx_audio_set_volume()). FLRig sends a set
+  // on every slider tick; each one is simply applied. ---
   if (len >= 2 && cmd[0] == 'A' && cmd[1] == 'G') {
     if (len <= 3) {
       // Get - "AG" or "AG0" (a lone VFO digit, no level yet).
@@ -1414,16 +1226,9 @@ static void cat_handle_command(char *cmd) {
     return;
   }
 
-  // Unknown command - Kenwood radios generally stay silent on anything
-  // they don't recognize (no Hamlib-style "unknown command" reply
-  // convention exists here), so match that rather than invent one.
-  // Logging is still throttled to repeat-suppression (not full
-  // silence, unlike AC above) since an unrecognized command here is
-  // more likely a genuine gap worth noticing than AC's known-benign
-  // poll - but a client stuck retrying the very same unrecognized
-  // command every cycle (as FLRig already does for AC, and might for
-  // some other command not yet seen) shouldn't get a fresh line every
-  // single time either.
+  // Unknown command: Kenwood rigs stay silent, so we do too. Logged, but
+  // only when it differs from the last unrecognized one, so a client
+  // retrying the same command every poll doesn't flood the console.
   {
     static char last_unrecognized[CAT_LINE_MAX] = "";
     if (strncmp(last_unrecognized, cmd, sizeof(last_unrecognized)) != 0) {
@@ -1433,13 +1238,9 @@ static void cat_handle_command(char *cmd) {
   }
 }
 
-// Puts the ACM tty into raw mode: no line discipline, no echo, one byte
-// read at a time (VMIN=1/VTIME=0). Without this, the kernel's tty layer
-// applies ordinary canonical-mode line editing/echo to what's actually a
-// binary-ish, semicolon-terminated protocol with no real newlines -
-// harmless-looking in a first read, but silently wrong, the same class of
-// "looks fine, isn't" bug as this file's 0-byte-vs-1-byte UDC unbind write
-// earlier in this project.
+// Puts the ACM tty in raw mode (no line discipline or echo; VMIN=1,
+// VTIME=0). Canonical mode would silently mangle a ';'-terminated
+// protocol that has no newlines.
 static void cat_set_raw(int fd) {
   struct termios tio;
   if (tcgetattr(fd, &tio) < 0)
