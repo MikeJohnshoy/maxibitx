@@ -131,13 +131,13 @@ int main(int argc, char **argv) {
     printf("init: I/Q telemetry stream listening on UDP %d\n", IQ_STREAM_PORT);
   }
 
-  // Bring up the USB Audio Class (UAC2) IQ gadget if the hardware/kernel
+  // Bring up the USB Audio Class (UAC2) gadget if the hardware/kernel
   // support it (uses rpi4's USB-C device-mode controller and libcomposite). Not a
   // hard failure if it's unavailable - maxiBitx keeps running with
   // HPSDR/UDP or iq_streamer either way. uac_init() reports its own success ("init: USB
-  // IQ gadget bound to UDC...").
+  // gadget bound to UDC...").
   if (uac_init() < 0) {
-    printf("init: USB IQ gadget unavailable, continuing without it\n");
+    printf("init: USB gadget unavailable, continuing without it\n");
   }
  
   // Bring up the Kenwood TS-480-subset CAT control surface (the CAT
