@@ -878,9 +878,9 @@ the debugging trail this caused.
   [`rx_uac_out_digital_mode_bandwidth.md`](rx_uac_out_digital_mode_bandwidth.md)
   §10 has the details and the fix: `rx_audio_set_demod()`, one input
   conjugation per mode under `RX_IQ_SPECTRUM_INVERTED`, and no BFO for
-  USB/LSB. CW is deliberately unchanged, and still keeps positive
-  baseband - effectively CW-reverse. That's still a one-line decision
-  away from flipping, but now a deliberate one.
+  USB/LSB. CW was left keeping positive baseband at first -
+  effectively CW-reverse - and later switched to the upper side, same
+  conjugation as USB (same note, §10, "CW's own sideband").
 - **`AGC_TARGET_AMPLITUDE`/`AGC_ATTACK_MS`/`AGC_RELEASE_MS`** are
   reasonable-looking starting points, not yet tuned against extended
   listening — particularly whether 300ms release feels right between
