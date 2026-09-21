@@ -50,7 +50,8 @@ python3 tools/rigctl_panel.py
 
 Enter the Pi's hostname or IP and the rigctld port (4532 by default),
 click Connect. The panel remembers the last host/port used
-(`~/.minibitx_panel.json`) so subsequent launches don't need retyping
+(`~/.maxibitx_panel.json`; if that doesn't exist yet it reads the older
+`~/.minibitx_panel.json`) so subsequent launches don't need retyping
 them. Frequency and volume both poll once a second while connected, so
 the panel stays current even if something else (another rigctld client,
 FLRig's CAT, an HPSDR app's MOX) changes state in the meantime - except
