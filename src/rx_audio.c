@@ -456,13 +456,48 @@ static double narrow_filter_apply(struct narrow_filter_state *f, double x) {
 #define AGC_MAX_GAIN 8.0e11
 
 static struct vfo bfo;                 // CW_PITCH_HZ mixing oscillator
-// 0.0-1.0 - see rx_audio_set_volume(). Startup default only (any CAT/USB
-// `AG` client or tools/rigctl_panel.py's own slider can still set this to
-// whatever it wants at runtime) - was 0.5 (50%), which real-hardware
-// listening found uncomfortably loud on this radio; 0.03 (3%) is where
-// the operator actually runs it for comfortable copy, so that's now
-// where a fresh process starts instead of requiring a manual turn-down
-// every time.
+// RX_VOLUME_MAX: the linear gain that 100% on the volume control maps to.
+// Was implicitly 1.0 (percent/100). On real hardware that left only the
+// bottom few percent usable: 3% was comfortable copy, and the operator
+// judged ~20% of the old scale as the loudest anyone would want through
+// the local speaker (2026-09-21). So the whole 0-100% range now spans
+// 0..0.20 - the same audio at every setting within the new range, just
+// spread across the full slider instead of its first few percent.
+// Retune this one constant if a different speaker/amp wants a
+// different ceiling. Affects only out[] (the local speaker/headphones);
+// uac_out (WSJT-X) is tapped before rx_volume and is unaffected.
+#define RX_VOLUME_MAX 0.20
+
+// RX_VOLUME_RANGE_DB: log (audio) taper span. The control's 1-100%
+// maps evenly in dB onto -RX_VOLUME_RANGE_DB..0dB relative to
+// RX_VOLUME_MAX, so every 1% step is the same 0.5dB loudness change
+// anywhere on the slider - the way a real audio-taper volume pot feels,
+// instead of the linear taper's coarse bottom end (where 1%->2% was
+// +6dB) and near-useless top half (100%->50% only -6dB). 0% is a true
+// mute, not -50dB. 50dB covers the whole comfortable range with room to
+// spare: the quietest the operator has actually used (old-scale 1%,
+// 0.01 linear) lands at 48%.
+#define RX_VOLUME_RANGE_DB 50.0
+
+// Startup volume in the control's own 0-100 units. 67% on the log taper
+// is RX_VOLUME_MAX * 10^(-16.5/20) = 0.030 linear - the old 3% default,
+// which real-hardware listening had settled on as comfortable copy - so a
+// fresh process sounds the same as before.
+#define RX_VOLUME_DEFAULT_PERCENT 67
+
+static double volume_percent_to_gain(int percent) {
+    if (percent <= 0)
+        return 0.0;
+    double db = ((double)percent - 100.0) / 100.0 * RX_VOLUME_RANGE_DB;
+    return RX_VOLUME_MAX * pow(10.0, db / 20.0);
+}
+
+// Kept as an integer percent (the unit every caller uses), with the
+// gain derived from it, so get_volume() always reads back exactly what
+// set_volume() was given - no rounding drift through the taper. The
+// initializer is a placeholder; rx_audio_init() computes the real value
+// (pow() isn't a constant expression).
+static int rx_volume_percent = RX_VOLUME_DEFAULT_PERCENT;
 static double rx_volume = 0.03;
 
 // 1 (default) = stage 3 shapes the output, matching every design note
@@ -552,6 +587,8 @@ static double onepole_alpha_from_ms(double time_ms) {
 }
 
 void rx_audio_init(void) {
+    rx_volume = volume_percent_to_gain(rx_volume_percent);
+
     // BFO sign is a starting guess, not bench-verified - if a station
     // parked exactly at dial center sounds wrong (e.g. tuning direction
     // feels backwards), flip this to -CW_PITCH_HZ and recheck.
@@ -589,13 +626,12 @@ void rx_audio_init(void) {
 void rx_audio_set_volume(int percent) {
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
-    rx_volume = (double)percent / 100.0;
+    rx_volume_percent = percent;
+    rx_volume = volume_percent_to_gain(percent);
 }
 
 int rx_audio_get_volume(void) {
-    // Round rather than truncate, so get_volume() after set_volume(x)
-    // reads back exactly x instead of drifting down by rounding error.
-    return (int)(rx_volume * 100.0 + 0.5);
+    return rx_volume_percent;
 }
 
 void rx_audio_set_narrow_filter(int enable) {
