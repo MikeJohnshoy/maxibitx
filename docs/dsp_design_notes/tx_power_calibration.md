@@ -70,8 +70,7 @@ For each of the 9 `[tx_band]` entries:
 
 1. Tune to that band's test frequency (§3 table).
 2. Key down, hold a couple of seconds, and read the **steady** wattmeter
-   value (not the initial turn-on kick - see the attack-transient note
-   in `sound.c`'s comments).
+   value, not the initial turn-on kick.
 3. Bisect that band's `scale` value in `hw_settings.ini` up or down
    until the steady reading is ~5.0W. Record the final `scale`.
 4. Move to the next band.
