@@ -468,7 +468,8 @@ static void xrun_note(struct xrun_tracker *t, const char *label) {
             "simply isn't keeping up with real time. If the startup log "
             "showed \"failed to set audio thread to SCHED_FIFO\", that is "
             "almost certainly why - grant real-time scheduling, e.g. "
-            "'sudo setcap cap_sys_nice+ep ./minibitx', run as root, or "
+            "'sudo setcap cap_sys_nice,cap_dac_override+ep ./maxibitx' "
+            "(what 'make' runs), run as root, or "
             "raise the rtprio limit for this user via "
             "/etc/security/limits.d. Backing off and continuing to retry "
             "rather than spinning at full rate.\n",
@@ -677,7 +678,7 @@ static void *audio_loop(void *arg) {
   int32_t mic_buf[MAX_FRAMES];
   int32_t spk_buf[MAX_FRAMES];
   int32_t tx_buf[MAX_FRAMES];
-  int32_t play_buf[MAX_FRAMES * CHANNELS]; // CW sidetone -> WM8731 DAC
+  int32_t play_buf[MAX_FRAMES * CHANNELS]; // WM8731 DAC: L local audio, R exciter
 
   static struct xrun_tracker capture_xrun = {0};
   static struct xrun_tracker playback_xrun = {0};
@@ -856,8 +857,8 @@ static void *audio_loop(void *arg) {
         // too (docs/08_troubleshooting_and_bringup.md).
         xrun_note(&playback_xrun, "playback");
         if (xrun_recover(pcm_playback, (int)wframes) < 0) {
-          fprintf(stderr, "sound: playback recovery failed - disabling CW "
-                          "sidetone/TX audio output (restart minibitx to "
+          fprintf(stderr, "sound: playback recovery failed - disabling local "
+                          "audio and TX output (restart maxibitx to "
                           "retry)\n");
           snd_pcm_close(pcm_playback);
           pcm_playback = NULL;
@@ -889,7 +890,7 @@ int sound_thread_start(const char *device_name) {
   // without local audio or TX.
   pcm_playback = open_pcm(dev, SND_PCM_STREAM_PLAYBACK);
   if (!pcm_playback) {
-    printf("sound: playback unavailable, CW sidetone output disabled\n");
+    printf("sound: playback unavailable - no local audio or TX\n");
   }
 
   // Create the TX pipeline before priming playback below - see there.
