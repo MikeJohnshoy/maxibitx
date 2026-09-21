@@ -183,18 +183,56 @@ ALSA mixer controls — no direct I2C register access from minibitx itself
 writes on minibitx's behalf):
 
 ```c
-sound_mixer("hw:0", "Input Mux", 0);
-sound_mixer("hw:0", "Line", RX_LINE_INPUT_ON);           // on/off switch, not a gain
-sound_mixer("hw:0", "Capture", RX_CAPTURE_GAIN_PERCENT); // the real analog gain, 70% of max
-sound_mixer("hw:0", "Mic", 0);
-sound_mixer("hw:0", "Master", 0); // Mute local speaker
+sound_mixer("hw:0", "Input Mux", 0);                       // 'Line In'
+sound_mixer("hw:0", "Line", RX_LINE_INPUT_ON);            // on/off switch, not a gain
+sound_mixer("hw:0", "Capture", RX_CAPTURE_GAIN_PERCENT);  // the real analog gain, 70%
+sound_mixer("hw:0", "Mic", MIC_CAPTURE_GAIN_PERCENT);     // 50% - possibly inert, below
+sound_set_local_monitor(LOCAL_SPEAKER_GAIN_PERCENT);      // 'Master' LEFT = local speaker, 100%
+sound_mixer_channel("hw:0", "Master", SND_MIXER_SCHN_FRONT_RIGHT, 0); // 'Master' RIGHT = exciter, muted
+sound_mixer("hw:0", "Output Mixer HiFi", 1);
+sound_mixer("hw:0", "Output Mixer Line Bypass", 0);
+sound_mixer("hw:0", "Output Mixer Mic Sidetone", 0);
 ```
 
-(`'Line'` looked like a gain control at first glance but bench-checking
-`amixer -c 0 sget 'Line'` shows it's a plain on/off switch; the real
-analog gain ahead of the ADC is the separate `'Capture'` control - see
-[`dsp_design_notes/rx_gain_and_level_calibration.md`](dsp_design_notes/rx_gain_and_level_calibration.md)
-§3 for the full story.)
+A few things about this codec that were learned the hard way:
+
+- **`'Line'` is a switch, `'Capture'` is the gain.** `'Line'` looked like
+  a gain control at first glance, but `amixer -c 0 sget 'Line'` shows a
+  plain on/off switch (`cswitch` only). The real analog gain ahead of the
+  ADC is the separate `'Capture'` control - see
+  [`dsp_design_notes/rx_gain_and_level_calibration.md`](dsp_design_notes/rx_gain_and_level_calibration.md)
+  §3 for the full story.
+- **`sound_mixer()` must set every capability an element has.** It used
+  to be an else-if chain (switch, *or* volume, *or* enum). An ALSA simple
+  element can have a mute switch and a volume register under one name -
+  `'Master'` does - so only its switch was ever toggled, and its volume
+  stayed wherever the codec's power-on reset left it, whatever percent
+  was asked for. Now each capability is set independently, and a missing
+  element name is logged rather than silently ignored
+  (`sound_mixer_dump()` prints what an element really supports).
+- **`'Master'` LEFT and RIGHT go to different places.** LEFT drives the
+  local speaker/headphone amp; RIGHT drives the mainboard's diode mixer,
+  i.e. the TX exciter feed. They used to share one value, so every TX/RX
+  transition clobbered whichever purpose wasn't active. Now LEFT is set
+  once at startup and RIGHT is raised only during TX
+  (`sound_set_tx_drive()`, `radio.c`'s `TX_MASTER_VOL`) - see
+  [`dsp_design_notes/rx_audio_demod_design.md`](dsp_design_notes/rx_audio_demod_design.md)
+  §9.
+- **LEFT runs at 100%.** `LOCAL_SPEAKER_GAIN_PERCENT` started at 70 and
+  was raised to 100 after an on-air report (2026-09) that "100%" volume
+  was still too quiet. Running this analog stage wide open costs nothing:
+  the digital headroom lives upstream in `rx_audio.c` (its AGC target
+  sits at ~25% of the int32 clamp). Listening volume is `rx_audio.c`'s
+  digital `rx_volume`, which was itself later rescaled (`RX_VOLUME_MAX`)
+  once 100% here made it too loud.
+- **The mic comes in on `'Capture'` RIGHT, probably not via `'Mic'`.**
+  `'Input Mux'` is fixed to `'Line'`, so the physical mic most likely
+  reaches the ADC on Line-In RIGHT, and `'Mic'` (the codec's own mic
+  preamp path) may do nothing on this board - unconfirmed; check with
+  `amixer -c 0 sget 'Mic'`. That's why the TX capture mute
+  (`sound_set_rx_capture()`) touches `'Capture'` LEFT only: muting both
+  channels silenced USB/LSB TX audio on the first on-air SSB test
+  (`ARCHITECTURE.md` §10 step 8).
 
 Once the mixer is configured, `sound_thread_start("hw:0,0")` opens the
 ALSA capture (and playback) PCM devices at the fixed 96 kHz sample rate
