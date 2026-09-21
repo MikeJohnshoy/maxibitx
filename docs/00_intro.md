@@ -1,25 +1,29 @@
 # 00 — maxibitx introduction
 
-**Bootstrap note:** maxibitx starts from
+**Origin:** maxibitx started from
 [MikeJohnshoy/minibitx](https://github.com/MikeJohnshoy/minibitx)'s
-architecture, carried over unchanged as a step-1 skeleton (only
-`src/maxibitx.c`'s filename and the built binary's name have changed).
-Everything in this doc set still describes minibitx's actual, current
-behavior. What maxibitx is meant to become — a real all-mode (SSB+CW)
-TX pipeline, unified with the RX-side CW monitor's filtering, on top of
-this same control/hardware layer — is design rationale and a build
-order, not yet code: see
-[`ARCHITECTURE.md`](ARCHITECTURE.md).
+architecture, carried over as a step-1 skeleton. It has since grown an
+all-mode (CW/SSB/DIGITAL) TX pipeline and an onboard CW/USB/LSB
+demodulator on top of that same control/hardware layer. The design
+rationale and build order for that work, step by step, is
+[`ARCHITECTURE.md`](ARCHITECTURE.md); these docs describe the code as
+it is now.
 
 ## What this is
 
-minibitx runs on the Raspberry Pi inside an sbitx radio, in place of the
-`sbitx` software that shipped with it. It brings the hardware up, exposes
-a rigctld-compatible control port, and streams baseband I/Q out over
-HPSDR Protocol 1 (UDP) and/or a USB Audio Class 2 gadget. An external SDR
-application — SDR Console, Quisk, WSJT-X's rig-control layer, etc. — does
-everything downstream of that: FFT display and waterfall, demodulation of
-whatever mode is in use, filtering, and audio routing.
+maxibitx runs on the Raspberry Pi inside an sbitx radio, in place of the
+`sbitx` software that shipped with it. It brings the hardware up and
+then serves three kinds of client:
+
+- SDR applications (SparkSDR and other HPSDR Protocol 1 apps), which
+  receive baseband I/Q over UDP and do their own display,
+  demodulation and filtering.
+- Digital-mode and logging software such as WSJT-X, which sees the
+  radio as a USB sound card plus a USB serial port (Kenwood CAT)
+  through the Pi's USB gadget.
+- Remote control: a rigctld-compatible TCP port, used by
+  `tools/rigctl_panel.py` (a small desktop control panel with a
+  spectrum display) and Hamlib clients.
 
 The sBitx code base grew to support multiple operating modes with a powerful
 user interface. My goal was to strip out everything but what was needed to make the
@@ -28,40 +32,38 @@ to the growing collection of high quality SDR applications.
 
 ## What this is not
 
-minibitx has no waterfall. Mode *state* is real as of `ARCHITECTURE.md`
-step 3 — `radio_get_mode()`/`radio_set_mode()` (`radio.c`) is the one
-place `m`/`M` (rigctld) and `MD` (Kenwood CAT) both read/write, instead
-of each keeping its own independently-cosmetic copy — but mode still
-doesn't *do* anything: nothing downstream reads it yet (that's steps
-4/5). It also has essentially no onboard demodulation for the SDR-facing
-path: an
-external SDR application is still expected to do everything downstream
-of baseband I/Q. The one exception is a single, fixed-mode local CW
-audio monitor (`rx_audio.c`) that lets the box be used as a standalone
-CW receiver with no external app running at all — see
+maxibitx has no waterfall and no user interface of its own; the
+control panel and external apps provide those. The I/Q it streams is
+not demodulated — an SDR app does that. Its one onboard demodulator,
+`rx_audio.c`, produces CW, USB or LSB audio (DIGITAL demodulates as
+USB) for the box's own speaker/headphone output and for the USB audio
+gadget — see
 [`02_rx_processing_pipeline.md`](02_rx_processing_pipeline.md) and
 [`dsp_design_notes/rx_audio_demod_design.md`](dsp_design_notes/rx_audio_demod_design.md).
-There is also no dependency on the original sbitx codebase at runtime;
-minibitx was built by extracting the minimum set of functions from sbitx
-needed to let an external SDR app drive the hardware, and runs
-stand-alone.
-
-(maxibitx changes the TX-pipeline part of this section once
-[`ARCHITECTURE.md`](ARCHITECTURE.md)'s remaining steps are implemented
-— CW/SSB TX sharing one pipeline, and mode actually selecting something.
-Not yet done; this section otherwise still describes the inherited
-behavior, mode state above being the one exception so far.)
+Mode is one value owned by `radio.c` (`radio_get_mode()`/
+`radio_set_mode()`), shared by every control surface, and it selects
+both that demodulator and the TX path. There is no dependency on the
+original sbitx codebase at runtime; minibitx was built by extracting
+the minimum set of functions from sbitx needed to let an external SDR
+app drive the hardware, and maxibitx runs stand-alone the same way.
 
 ## Status
 
-Receive works: antenna to baseband I/Q, streamed over HPSDR and/or USB
-audio, remotely controlled by HPSDR Protocol 1 or tunable via rigctld.
-An onboard CW audio monitor (`rx_audio.c`) also lets the box's own
-speaker/headphone output be used directly, with no external SDR app
-required, for CW.
+Receive works: antenna to baseband I/Q, streamed over HPSDR Protocol 1
+and to the control panel's spectrum display, tunable via HPSDR,
+rigctld or Kenwood CAT. The onboard demodulator lets the box's own
+speaker/headphone output be used with no external app running. FT8
+over the USB audio gadget has been checked on air and decodes on par
+with SparkSDR on the same I/Q. USB/LSB voice reception hasn't been
+tested on air yet.
 
-Transmit:  a simple CW waveform (with Blackman-Harris shaping) controlled
-from a straight key on the sbitx key input.
+Transmit: CW from a straight key on the sbitx key input, with
+Blackman-Harris shaping, runs through the shared FFT TX pipeline
+(`tx_pipeline.c`) and has been checked on air — on frequency, image
+suppression as predicted, and a flat ~5 W across the nine bands.
+USB/LSB from the mic and DIGITAL from the USB audio gadget use the same
+pipeline; both are code-complete but not yet tested on air, and voice
+power/ALC calibration is still to do (`ARCHITECTURE.md` §10).
 
 ## How the rest of these docs are organized
 
@@ -72,13 +74,16 @@ code:
   bringing up the GPIO lines, the si5351 oscillator, the I2C bus, and the
   WM8731 audio codec before any signal processing can happen.
 - [`02_rx_processing_pipeline.md`](02_rx_processing_pipeline.md) — the
-  receive signal chain itself, antenna to baseband I/Q, plus the local
-  CW audio monitor that taps the same I/Q for standalone listening.
+  receive signal chain itself, antenna to baseband I/Q, plus the onboard
+  CW/USB/LSB demodulator that taps the same I/Q for the local speaker
+  and the USB audio gadget.
 - [`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md) — the
-  transmit side: what exists, what's planned.
+  transmit side's analog chain, and the original direct-to-DAC CW
+  scheme `tx_pipeline.c` replaced (the current mechanism is
+  `ARCHITECTURE.md` §10 steps 4–5).
 - [`04_remote_control_and_iq_output.md`](04_remote_control_and_iq_output.md)
-  — how external software tunes/keys the radio and receives the I/Q it
-  produces.
+  — how external software tunes/keys the radio and receives the I/Q
+  and audio it produces.
 - [`05_process_and_threading_model.md`](05_process_and_threading_model.md)
   — how `main()` brings all of the above up, and the thread structure
   that keeps it running.
@@ -86,8 +91,8 @@ code:
   rationale and build order: why this is a fresh repo rather than a
   minibitx branch, the shared FFT TX/RX pipeline decision, and what's
   still open.
-- [`dsp_design_notes/`](dsp_design_notes/) — standalone design write-ups
-  for DSP work that's been analyzed but not yet wired into the code.
+- [`dsp_design_notes/`](dsp_design_notes/) — standalone design write-ups,
+  measurements and debugging history for the DSP code.
 - [`07_build_and_deployment.md`](07_build_and_deployment.md) — building
   maxibitx and the kernel/OS pieces it depends on.
 - [`08_troubleshooting_and_bringup.md`](08_troubleshooting_and_bringup.md)
@@ -95,6 +100,6 @@ code:
 - `10_`–`12_` — guides for using maxibitx with specific kinds of external
   software (digital modes, general-coverage receive, a CW transceiver).
 
-Documents in the `0x` range describe how the inherited code works
-internally; documents numbered `10` and up describe how to use it;
-`ARCHITECTURE.md` describes where the project is headed.
+Documents in the `0x` range describe how the code works internally;
+documents numbered `10` and up describe how to use it;
+`ARCHITECTURE.md` records the design decisions and build order.
