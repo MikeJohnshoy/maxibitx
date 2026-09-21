@@ -42,14 +42,14 @@ through `gpio.c`'s wrapper around the Linux GPIO character-device API
 (`/dev/gpiochip0`), and `CW_KEY` as an input with its pull-up enabled:
 
 ```c
-line_tx_line  = gpio_request_output(TX_LINE,  0, "minibitx-tx_line");
-line_tx_power = gpio_request_output(TX_POWER, 0, "minibitx-tx_power");
-line_ext_ptt  = gpio_request_output(EXT_PTT,  0, "minibitx-ext_ptt");
-line_lpf_a    = gpio_request_output(LPF_A,    0, "minibitx-lpf_a");
-line_lpf_b    = gpio_request_output(LPF_B,    0, "minibitx-lpf_b");
-line_lpf_c    = gpio_request_output(LPF_C,    0, "minibitx-lpf_c");
-line_lpf_d    = gpio_request_output(LPF_D,    0, "minibitx-lpf_d");
-line_cw_key   = gpio_request_input(CW_KEY, 1, "minibitx-cw_key");
+line_tx_line  = gpio_request_output(TX_LINE,  0, "maxibitx-tx_line");
+line_tx_power = gpio_request_output(TX_POWER, 0, "maxibitx-tx_power");
+line_ext_ptt  = gpio_request_output(EXT_PTT,  0, "maxibitx-ext_ptt");
+line_lpf_a    = gpio_request_output(LPF_A,    0, "maxibitx-lpf_a");
+line_lpf_b    = gpio_request_output(LPF_B,    0, "maxibitx-lpf_b");
+line_lpf_c    = gpio_request_output(LPF_C,    0, "maxibitx-lpf_c");
+line_lpf_d    = gpio_request_output(LPF_D,    0, "maxibitx-lpf_d");
+line_cw_key   = gpio_request_input(CW_KEY, 1, "maxibitx-cw_key");
 ```
 
 Unlike the old wiringPi-based version, there's no separate "set the pin
