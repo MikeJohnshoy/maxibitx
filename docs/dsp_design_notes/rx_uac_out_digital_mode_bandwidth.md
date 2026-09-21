@@ -1,16 +1,17 @@
 # RX Audio Bandwidth Reaching WSJT-X (`uac_out`) vs. a Raw-I/Q Path
 
-Status: **implemented (§8) - on-air confirmation still outstanding.**
-§§1-6 below were written before the operator confirmed the narrow
-(stage 3) filter was already off during the original SparkSDR-vs-
-usb_gadget comparison, which ruled out this note's original leading
-hypothesis and prompted asking directly whether stage 1 could be
-redesigned to "work for everything." That question led to §7/§8's real
-finding instead: stage 1's shape was never the problem, but the
-`uac_out`→16-bit-PCM level chain was clipping - fixed in
-`usb_gadget.c`'s `UAC_RX_AUDIO_SCALE` (§8). Code-complete and
-bench-verified; not yet re-tested against the original on-air
-SparkSDR comparison.
+Status: **implemented (§8, §10) - on-air confirmation still
+outstanding.** Read §10 first: it holds the actual root cause, found
+from a simultaneous on-air A/B against SparkSDR, and it **corrects**
+two conclusions earlier sections reached. `rx_audio.c` was a CW-only
+demodulator in every mode, and because maxibitx's raw I/Q is spectrally
+inverted, it was receiving the *lower* sideband with a +700Hz pitch
+offset whenever WSJT-X was connected - real FT8 above dial only leaked
+through stage 1's stopband. Fixed with a mode-aware demod (§10). §7's
+claim that stage 1 "already works for everything" and §8's claim that
+clipping was "the real bug" / the dominant cause were both wrong: §8's
+clipping was real and its fix stands, but it was a secondary issue.
+§§1-9 are kept as written, as the record of how this was chased.
 
 ## 1. Why this note exists
 
@@ -370,3 +371,150 @@ itself.
   instead parked mid-band, some real traffic would legitimately need
   the currently-rejected sideband, and stage 1 genuinely would need
   reconsidering rather than being cleared.
+
+## 10. The actual root cause: a CW demod receiving the wrong sideband
+
+**What finally isolated it.** The operator ran both paths off the same
+maxibitx at the same moment on 20m (dial 14.074.000, `DIGITAL`, narrow
+filter off, 2026-09-21): SparkSDR consuming I/Q over `hpsdr_p1.c` into
+its own WSJT-X, and a second WSJT-X on the UAC2 gadget's audio.
+SparkSDR decoded ~30 stations every interval; the audio WSJT-X decoded
+one or two, all at 122-253Hz of audio, with SNRs that disagreed wildly
+with SparkSDR's for the same stations. Its waterfall had activity
+crammed into ~0-1500Hz, while SparkSDR showed the traffic where it
+belongs, ~200-2000Hz above dial. Both consumers are fed the *identical*
+`i_samples`/`q_samples` from `sound.c` - so the RF front end, ADC,
+mixing and I/Q were all proven good, and the fault had to be entirely
+inside `rx_audio.c`.
+
+**The two defects.** `rx_audio.c` was designed as a local CW monitor
+and never became mode-aware on the RX side:
+
+- Stage 2 always mixed stage 1's output up by `CW_PITCH_HZ` (700Hz).
+  Every station reached WSJT-X 700Hz higher than `RF - dial`, the
+  relationship WSJT-X (and any SSB app) assumes.
+- Stage 1 always keeps *positive* baseband frequencies (§4's sweep,
+  which fed an idealized `i=cos, q=+sin` tone). But maxibitx's raw
+  baseband I/Q is spectrally inverted: a station `+d` Hz above dial
+  arrives at `-d`. `tools/rigctl_panel.py` had documented this all
+  along and conjugates its spectrum for exactly this reason. The
+  derivation: `sound.c` multiplies the real ~24kHz IF by
+  `e^{+j2pi*RX_IF_FREQ_HZ*t}` (`vfo_read_iq()` returns I=cos, Q=+sin),
+  mapping IF frequency `f` to baseband `24000 - f`; the analog chain's
+  two high-side conversions (clk2 = dial + `xtal_filter_center`, clk1 =
+  `xtal_filter_center + RX_IF_FREQ_HZ`) put the IF at `24000 + d`, so
+  baseband = `-d`. So "positive baseband" was the band *below* dial -
+  the lower sideband.
+
+**What that predicts, and why it matches everything seen.** Re-running
+§3's harness with the hardware's inverted orientation (`i=cos, q=-sin`
+for a station at `+d`), `DIGITAL` mode, pre-fix code:
+
+| station vs. dial | audio Hz | level | |
+|---:|---:|---:|---|
+| -1500 (below) | 2200 | 0.0dB | full strength, **mirrored** |
+| -200 (below) | 900 | -0.1dB | full strength, mirrored |
+| +200 (above) | 500 | -10.4dB | mirrored |
+| +800 (above) | 100 | -75.1dB | folded around 700Hz |
+| +1000 (above) | 300 | -44.5dB | upright, buried |
+| +1500 (above) | 800 | -41.2dB | upright, buried |
+| +2000 (above) | 1300 | -42.4dB | upright, buried |
+
+Mirrored FT8 cannot decode (its tone order and Costas sync arrays run
+backwards). The real traffic, above dial, only reaches WSJT-X 40-75dB
+down through stage 1's stopband, folded into roughly 0-1800Hz - the
+compressed low-frequency waterfall and low-audio-frequency decodes
+seen at 14.074. The stopband's own ripple (-40 to -75dB, varying with
+frequency) is why SNRs disagreed so badly with SparkSDR's: each
+station's attenuation depended on exactly where it sat. The same model
+explains the earlier 40m observations too. Dial 7.077 put the 7.074-7.077
+FT8 cluster *below* dial - on the passed side, at full strength, but
+mirrored: a bright, busy waterfall with few decodes. Dial 7.074 put the
+traffic above dial, on the rejected side: nearly empty. Dial 7.071 put
+it 3-6kHz above dial, out past everything: nothing.
+
+**A reasoning error worth recording.** Before the SparkSDR A/B, a
+sideband inversion was proposed and then wrongly dismissed. The test
+offered to check it - retune to 7.071, "the mirror image of 7.077" -
+was misdesigned: under the inversion hypothesis, the passed side is
+*below* dial, so moving the dial down to 7.071 could never have brought
+the traffic back. The null result at 7.071 was consistent with the
+inversion all along, not evidence against it. The lesson generalizes:
+before running a discriminating test, write down what *each*
+hypothesis predicts for it, not only the one being tested.
+
+**The fix.** `rx_audio.c` now has a demodulator selector,
+`rx_audio_set_demod()` (`RX_DEMOD_CW`/`USB`/`LSB`, `rx_audio.h`),
+driven from `radio.c`'s `radio_set_mode()` - the one place every mode
+change (rigctld `M`, Kenwood `MD`, the control panel) already funnels
+through, so `rx_audio.c` itself still has no `radio.h` dependency.
+`DIGITAL` demodulates as USB, matching the TX side's
+`TX_PIPELINE_KEEP_UPPER`. For USB/LSB, sideband selection is a single
+conjugation of the input before stage 1 (stage 1 always keeps positive
+baseband, so the choice is just whether to flip the input into it),
+governed by one named constant, `RX_IQ_SPECTRUM_INVERTED` (1), and
+stage 2 takes the real part directly with no BFO offset. The
+correction lives in `rx_audio.c`, not in `sound.c`'s mixer, on
+purpose: fixing the inversion at the source would silently flip every
+other I/Q consumer too, including SparkSDR over `hpsdr_p1.c`, which
+works as-is. **CW is untouched:** it is never conjugated and still
+mixes to `CW_PITCH_HZ`, and a 200-block run (narrow filter on, then
+off; two tones plus noise) produces a bit-identical hash of both
+`out[]` and `uac_out` against the previous build.
+
+Re-measured, same inverted-hardware model, `DIGITAL`/USB, narrow
+filter off:
+
+| station vs. dial | audio Hz | level |
+|---:|---:|---:|
+| +100 | 100 | -0.2dB |
+| +300 | 300 | -0.7dB |
+| +800 | 800 | 0.0dB |
+| +1500 | 1500 | 0.0dB |
+| +2500 | 2500 | -1.7dB |
+| +3000 | 3000 | -1.7dB |
+| +3300 | 3300 | -19.5dB |
+| -300 (below) | 300 | -19.5dB |
+| -800 (below) | 800 | -75.1dB |
+| -1500 (below) | 1500 | -41.2dB |
+
+Every station above dial now lands at exactly `RF - dial` Hz of audio,
+upright, flat within 2dB from 100 to 3000Hz - WSJT-X's whole FT8 window
+- with the lower sideband 40-75dB down. `LSB` is the exact mirror. Full
+rebuild clean under `-Wall -Wextra`; `test-rx-audio`,
+`test-fft-filter`, `test-rx-filter`, `test-upsample48k` and
+`test-tx-pipeline` all pass unchanged.
+
+**Side effects on `USB`/`LSB` voice.** Both modes received through the
+same CW demod before this - voice 700Hz too high, and the same
+sideband regardless of which mode was selected. They now get real SSB
+demodulation. Nobody has listened to it yet.
+
+**What's still open.**
+
+- **On-air confirmation.** The same simultaneous SparkSDR A/B, after
+  deploying this, is the test: WSJT-X on audio should now decode close
+  to what SparkSDR does, report the same audio frequency for each
+  station SparkSDR shows `f` Hz above dial, and report SNRs within a
+  few dB of SparkSDR's.
+- **`RX_IQ_SPECTRUM_INVERTED` is inferred, not directly measured.** The
+  evidence for it is strong: the analog-chain derivation, the control
+  panel's independently-documented conjugation, and a model that
+  reproduces every on-air observation. But the direct check is still
+  outstanding, and it takes about thirty seconds. In `DIGITAL`, watch a
+  steady signal in the audio WSJT-X waterfall and step the dial +100Hz.
+  It should move 100Hz *left*. If it moves right, flip the constant.
+- **Stage 3 in USB/LSB.** The narrow filter is still centered on
+  `CW_PITCH_HZ` in audio terms. In USB/LSB/`DIGITAL` it would pass only
+  a ~300Hz window around 700Hz of audio, not a CW signal at dial center.
+  Leave it off for those modes, as before. Making it mode-aware was
+  declined for now.
+- **TX frequency agreement.** With RX now honoring `audio = RF - dial`,
+  WSJT-X's TX tone at audio `f` needs to land at `dial + f` on air.
+  That's `tx_pipeline.c`'s job, unchanged here. Worth checking in the
+  FT8 TX test the operator has deliberately deferred.
+- **CW's own sideband.** CW still keeps positive baseband, which (given
+  the inversion) means a station *below* dial is heard at a higher
+  pitch - effectively CW-reverse. It's unchanged here, since CW wasn't
+  part of this problem and on-air CW copy is already confirmed. Worth a
+  deliberate decision some day, not a silent change.
