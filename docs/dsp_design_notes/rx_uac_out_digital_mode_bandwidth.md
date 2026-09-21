@@ -529,8 +529,35 @@ demodulation. Nobody has listened to it yet.
   WSJT-X's TX tone at audio `f` needs to land at `dial + f` on air.
   That's `tx_pipeline.c`'s job, unchanged here. Worth checking in the
   FT8 TX test the operator has deliberately deferred.
-- **CW's own sideband.** CW still keeps positive baseband, which (given
-  the inversion) means a station *below* dial is heard at a higher
-  pitch - effectively CW-reverse. It's unchanged here, since CW wasn't
-  part of this problem and on-air CW copy is already confirmed. Worth a
-  deliberate decision some day, not a silent change.
+- **CW's own sideband - since changed to upper.** As first shipped,
+  CW kept positive baseband, which (given the inversion) meant a
+  station *below* dial was heard at a higher pitch - effectively
+  CW-reverse. It went unnoticed because a station on the dial is heard
+  at 700Hz either way and TX is on the dial, so ordinary QSOs worked.
+  But CAT (`MD3`) and rigctld (`CW`) report plain CW, which other
+  software reads as the upper side - a CW decoder listening to the
+  gadget audio would click-to-tune in the wrong direction. The
+  operator chose to make CW keep the upper side, with CW-reverse to
+  come later as its own mode. The change is one line in
+  `rx_audio_process()`: CW now uses USB's conjugation
+  (`RX_IQ_SPECTRUM_INVERTED`); its BFO and everything after stage 1
+  are unchanged. A future CW-reverse mode is CW's BFO with LSB's
+  conjugation. Bench sweep, inverted-hardware model, narrow filter
+  off, `uac_out` level relative to a station on the dial:
+
+  | Station vs. dial | Before: pitch, level | After: pitch, level |
+  |---|---|---|
+  | -1500 Hz | 2200 Hz, +2 dB | rejected, -40 dB |
+  | -800 Hz | 1500 Hz, +2 dB | rejected, -73 dB |
+  | -400 Hz | 1100 Hz, 0 dB | rejected, -39 dB |
+  | -200 Hz | 900 Hz, +2 dB | 500 Hz, -9 dB |
+  | 0 | 700 Hz, 0 dB | 700 Hz, 0 dB |
+  | +200 Hz | 500 Hz, -9 dB | 900 Hz, +2 dB |
+  | +400 Hz | rejected, -39 dB | 1100 Hz, 0 dB |
+  | +800 Hz | rejected, -73 dB | 1500 Hz, +2 dB |
+  | +1500 Hz | rejected, -40 dB | 2200 Hz, +2 dB |
+
+  The two columns are exact mirror images, as they should be: only
+  which side stage 1 keeps changed. `test-rx-audio` (a tone on the
+  dial) is unaffected. Still to check on air: in CW, stepping the dial
+  up should now *lower* a station's pitch.
