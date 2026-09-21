@@ -21,7 +21,11 @@ enum rx_narrow_filter_impl {
 // Call once at startup, after vfo_init_phase_table().
 void rx_audio_init(void);
 
-// 0-100. Scales the demodulated audio before it reaches the codec.
+// 0-100. Scales the demodulated audio before it reaches the codec - the
+// local speaker/headphones only (uac_out/WSJT-X is unaffected). 100%
+// maps to rx_audio.c's RX_VOLUME_MAX, not unity gain; see that constant.
+// Log (audio) taper: each 1% is 0.5dB (RX_VOLUME_RANGE_DB over the
+// range), and 0% is a true mute.
 void rx_audio_set_volume(int percent);
 
 // Current volume, 0-100, in the same units rx_audio_set_volume() takes -
