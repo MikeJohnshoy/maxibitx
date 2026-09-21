@@ -17,6 +17,7 @@
 #include "radio.h"    // freq_hdr, in_tx, tuning, PTT, RIT, mode
 #include "rx_audio.h"
 #include "sound.h"    // sound_set_mic_tx_gain()/sound_get_mic_tx_gain() - l/L MICGAIN below
+#include "hw_settings.h" // tx_band_scales[] - dump_state TX ranges
 
 static int listen_fd = -1;
 static volatile int running = 0;
@@ -344,16 +345,31 @@ static int handle_line(int fd, char *line)
         // 0x40000008; has_set_level is AF only (an S-meter can't be set).
         // has_get_func/set_func stay 0: NARROW/FFTFILT aren't RIG_FUNC bits.
         //
-        // The TX range list is empty - left from before maxibitx could
-        // transmit, even though t/T keys PTT. tools/rigctl_panel.py ignores it;
-        // untested with a stock Hamlib client.
+        // Mode masks carry the modes m/M actually handle: CW (0x2), USB
+        // (0x4), LSB (0x8) and PKTUSB (0x800, DIGITAL) = 0x80e. RX covers
+        // 0-30MHz. TX ranges are the [tx_band] entries from hw_settings.ini,
+        // or 1.8-30MHz if none were loaded; power is advertised as a flat 5W
+        // (docs/dsp_design_notes/tx_power_calibration.md). This is
+        // advertisement only - nothing refuses PTT outside these ranges.
         send_line(fd, "0\n");                        // protocol version
         send_line(fd, "1\n");                        // rig model (1 = RIG_MODEL_DUMMY)
         send_line(fd, "2\n");                         // ITU region (best-effort default)
-        send_line(fd, "0 30000000 0x1ff -1 -1 0x1 0x0\n"); // RX range: 0-30MHz, all modes, RX-only, VFO A
+        send_line(fd, "0 30000000 0x80e -1 -1 0x1 0x0\n"); // RX range: 0-30MHz, RX-only, VFO A
         send_line(fd, "0 0 0 0 0 0 0\n");             // RX range list terminator
-        send_line(fd, "0 0 0 0 0 0 0\n");             // empty TX range list
-        send_line(fd, "0x1ff 1\n");                   // one tuning step: 1 Hz, all modes
+        {
+            char buf[80];
+            if (tx_band_scale_count > 0) {
+                for (int i = 0; i < tx_band_scale_count; i++) {
+                    snprintf(buf, sizeof(buf), "%d %d 0x80e 5000 5000 0x1 0x0\n",
+                             tx_band_scales[i].f_start, tx_band_scales[i].f_stop);
+                    send_line(fd, buf);                // TX range: one [tx_band], 5W, VFO A
+                }
+            } else {
+                send_line(fd, "1800000 30000000 0x80e 5000 5000 0x1 0x0\n"); // TX range: HF fallback
+            }
+        }
+        send_line(fd, "0 0 0 0 0 0 0\n");             // TX range list terminator
+        send_line(fd, "0x80e 1\n");                   // one tuning step: 1 Hz, all modes
         send_line(fd, "0 0\n");                       // tuning step list terminator
         send_line(fd, "0 0\n");                       // empty filter list
         {
