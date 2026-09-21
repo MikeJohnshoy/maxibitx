@@ -1,7 +1,9 @@
 # RX Audio Bandwidth Reaching WSJT-X (`uac_out`) vs. a Raw-I/Q Path
 
-Status: **implemented (§8, §10) - on-air confirmation still
-outstanding.** Read §10 first: it holds the actual root cause, found
+Status: **implemented and on-air confirmed (§10, 2026-09-21)** - the
+inversion constant's sign was checked directly, and WSJT-X on the
+gadget's audio now shows many more signals. A full decode-count A/B
+against SparkSDR hasn't been recorded yet. Read §10 first: it holds the actual root cause, found
 from a simultaneous on-air A/B against SparkSDR, and it **corrects**
 two conclusions earlier sections reached. `rx_audio.c` was a CW-only
 demodulator in every mode, and because maxibitx's raw I/Q is spectrally
@@ -492,18 +494,19 @@ demodulation. Nobody has listened to it yet.
 
 **What's still open.**
 
-- **On-air confirmation.** The same simultaneous SparkSDR A/B, after
+- **On-air confirmation - first result in (2026-09-21).** After
+  deploying this, the operator reports WSJT-X on the gadget's audio
+  "now seeing many more signals." Still worth recording: the full
+  simultaneous SparkSDR A/B, after
   deploying this, is the test: WSJT-X on audio should now decode close
   to what SparkSDR does, report the same audio frequency for each
   station SparkSDR shows `f` Hz above dial, and report SNRs within a
   few dB of SparkSDR's.
-- **`RX_IQ_SPECTRUM_INVERTED` is inferred, not directly measured.** The
-  evidence for it is strong: the analog-chain derivation, the control
-  panel's independently-documented conjugation, and a model that
-  reproduces every on-air observation. But the direct check is still
-  outstanding, and it takes about thirty seconds. In `DIGITAL`, watch a
-  steady signal in the audio WSJT-X waterfall and step the dial +100Hz.
-  It should move 100Hz *left*. If it moves right, flip the constant.
+- **`RX_IQ_SPECTRUM_INVERTED` = 1 - confirmed on air (2026-09-21).**
+  In `DIGITAL`, stepping the dial +100Hz moved signals in the audio
+  WSJT-X waterfall to the *left*, which is the correct USB behavior.
+  That's a direct measurement, not just the model: the constant is
+  right for this board.
 - **Stage 3 in USB/LSB.** The narrow filter is still centered on
   `CW_PITCH_HZ` in audio terms. In USB/LSB/`DIGITAL` it would pass only
   a ~300Hz window around 700Hz of audio, not a CW signal at dial center.
