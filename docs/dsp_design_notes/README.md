@@ -101,3 +101,25 @@ already used in `antialias_filter_design.md`.
   multi-subscriber fan-out, subscriber timeout, the Python client's FFT
   decode/scaling) against synthetic test tones over localhost; not yet
   confirmed over a real LAN or against real RF.
+- [`rx_uac_out_digital_mode_bandwidth.md`](rx_uac_out_digital_mode_bandwidth.md)
+  — chases an on-air report that SparkSDR on `hpsdr_p1` I/Q decodes ~10x
+  more FT8 than WSJT-X on the UAC2 gadget's audio (`rx_audio.c`'s
+  `uac_out` tap). The root cause came from a simultaneous A/B, with
+  both consumers fed the identical I/Q: `rx_audio.c` was a CW-only demod
+  in every mode, adding a 700Hz pitch offset and - because maxibitx's
+  raw I/Q is spectrally inverted - receiving the *lower* sideband.
+  FT8 above dial only leaked through stage 1's -40..-75dB stopband,
+  folded around 700Hz, while FT8 below dial arrived mirrored and
+  undecodable. Along the way: passband sweeps with the narrow filter on
+  and off, and a real but secondary clipping bug (zero headroom in
+  `UAC_RX_AUDIO_SCALE`, now 15dB). The note keeps, and explicitly
+  corrects, the earlier conclusions that stage 1 was fine and clipping
+  was dominant, along with a misdesigned test that briefly got the
+  right hypothesis dismissed. Status: **implemented** - a mode-aware
+  demod (`rx_audio_set_demod()`, `DIGITAL` → USB, no BFO offset,
+  sideband chosen by one input conjugation), CW bit-identical to
+  before. **On-air confirmed (2026-09-21):** the inversion constant's
+  sign was checked directly (+100Hz dial step moves signals left), and
+  a simultaneous A/B against SparkSDR now matches it (~40 decodes
+  each in one 20m interval, SNRs typically within 1dB) - the ~10x
+  deficit is closed.
