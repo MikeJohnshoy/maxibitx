@@ -750,6 +750,17 @@ class Panel(tk.Tk):
         # this hasn't been observed in practice - flagged rather than
         # silently assumed away.)
         name = reply.split("\n")[0].strip()
+        # hamlib.c's mode_to_name() reports RADIO_MODE_DIGITAL as
+        # "PKTUSB" - the real Hamlib name, kept on the wire for any
+        # genuine Hamlib client that might query over this surface -
+        # never as this panel's own friendlier "DIGITAL" label. Map it
+        # back here so the radio button actually reflects DIGITAL once
+        # selected, instead of never matching anything in the tuple
+        # below and silently freezing on whatever mode was last
+        # displayed. (The other half of this fix, accepting "DIGITAL" as
+        # an alias on the way in, is hamlib.c's name_to_mode().)
+        if name == "PKTUSB":
+            name = "DIGITAL"
         if name not in ("CW", "USB", "LSB", "DIGITAL"):
             return
         self._syncing_mode = True
