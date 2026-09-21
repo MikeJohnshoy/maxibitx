@@ -84,6 +84,33 @@ void rx_audio_set_narrow_filter_impl(int use_fft);
 // reasoning as rx_audio_get_narrow_filter().
 int rx_audio_get_narrow_filter_impl(void);
 
+// Which demodulator stage 2 applies. Until this existed, rx_audio.c was
+// a CW monitor only, in every mode: stage 1 always kept positive-
+// baseband content and stage 2 always mixed it up by CW_PITCH_HZ. Two
+// consequences for USB/LSB/DIGITAL, found by an on-air A/B against
+// SparkSDR fed the identical I/Q (docs/dsp_design_notes/
+// rx_uac_out_digital_mode_bandwidth.md §10): every audio frequency was
+// 700Hz too high, and - because maxibitx's raw baseband I/Q is
+// spectrally inverted (see rx_audio.c's RX_IQ_SPECTRUM_INVERTED) -
+// "positive baseband" was the band BELOW dial, i.e. LSB. FT8 above dial
+// only leaked through stage 1's -40..-75dB stopband, folded around
+// 700Hz. CW keeps exactly its original behavior; USB/LSB select the
+// correct sideband for the real hardware orientation and demodulate
+// with no BFO offset, so audio frequency == |RF - dial|, the convention
+// WSJT-X and every other SSB-based app assume.
+enum rx_demod {
+    RX_DEMOD_CW = 0,   // original behavior, unchanged
+    RX_DEMOD_USB,      // also used for DIGITAL (FT8 etc. are USB by convention)
+    RX_DEMOD_LSB,
+};
+
+// Called by radio.c's radio_set_mode() - the one place every mode change
+// (rigctld M, Kenwood MD, the control panel) already funnels through -
+// so rx_audio.c itself stays free of any radio.h dependency (its test
+// harnesses link without radio.c).
+void rx_audio_set_demod(enum rx_demod d);
+enum rx_demod rx_audio_get_demod(void);
+
 // Demodulates one block's worth of already-mixed baseband I/Q (the same
 // i_samples[]/q_samples[] sound.c's sound_process() already computes for
 // hpsdr_send_iq()) into n real PCM samples ready for the codec's local
