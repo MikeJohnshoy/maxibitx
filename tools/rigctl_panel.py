@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-rigctl_panel.py - a small standalone control panel for minibitx.
+rigctl_panel.py - a small standalone control panel for maxibitx.
 
 Talks the same plain-text rigctld protocol WSJT-X/Thetis/etc. already use
-against minibitx's hamlib.c server (default TCP 4532 - see
-docs/04_remote_control_and_iq_output.md) - nothing here is minibitx-specific
+against maxibitx's hamlib.c server (default TCP 4532 - see
+docs/04_remote_control_and_iq_output.md) - nothing here is maxibitx-specific
 beyond the two commands it actually exercises:
 
     f  / F <hz>            get / set frequency (F also clears RIT, below)
@@ -42,7 +42,7 @@ filter analysis and rx_audio_demod_design.md's AGC-placement work were
 both reasoning about, now actually visible.
 
 Meant to run on a laptop, or on the Pi's own desktop if it has one - this
-is a *client*, completely separate from the minibitx binary itself. Point
+is a *client*, completely separate from the maxibitx binary itself. Point
 it at the Pi's hostname/IP and the rigctld port and it just needs a TCP
 route to it - same as any other rigctld client (WSJT-X, Thetis, rigctl) -
 plus, for the spectrum, a UDP route to the same host's port 4536 (most
@@ -78,7 +78,10 @@ except ImportError:
           file=sys.stderr)
     sys.exit(1)
 
-CONFIG_PATH = os.path.expanduser("~/.minibitx_panel.json")
+CONFIG_PATH = os.path.expanduser("~/.maxibitx_panel.json")
+# Read if CONFIG_PATH doesn't exist yet, so the saved host/port carries
+# over from the file name this panel used before the project rename.
+OLD_CONFIG_PATH = os.path.expanduser("~/.minibitx_panel.json")
 DEFAULT_PORT = 4532
 POLL_INTERVAL_S = 1.0
 SOCKET_TIMEOUT_S = 2.0
@@ -131,11 +134,13 @@ def s_unit_label(db):
 
 
 def load_config():
-    try:
-        with open(CONFIG_PATH, "r") as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
+    for path in (CONFIG_PATH, OLD_CONFIG_PATH):
+        try:
+            with open(path, "r") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            continue
+    return {}
 
 
 def save_config(cfg):
@@ -148,7 +153,7 @@ def save_config(cfg):
 
 
 class RigctlClient:
-    """One TCP connection to minibitx's rigctld server.
+    """One TCP connection to maxibitx's rigctld server.
 
     rigctld is a plain line-request/line-reply protocol with no request
     IDs, so two commands must never be in flight on the same socket at
@@ -217,10 +222,10 @@ class SpectrumClient:
     subscriber that goes quiet for 5s, so this just re-sends a bare
     datagram every SUBSCRIBE_INTERVAL_S to stay subscribed), its own
     receive thread. If that UDP port isn't reachable (firewalled, or an
-    older minibitx build without iq_stream.c), the spectrum panel just
+    older maxibitx build without iq_stream.c), the spectrum panel just
     never gets data - the frequency/volume controls over rigctld keep
     working regardless, since the two connections don't know about each
-    other any more than iq_stream.c and hamlib.c do on the minibitx side.
+    other any more than iq_stream.c and hamlib.c do on the maxibitx side.
 
     dB calibration: iq_stream.c scales samples so a full-scale baseband
     tone reads close to int16 full-scale (32767 - see iq_stream.c's file
@@ -325,7 +330,7 @@ class SpectrumClient:
 class Panel(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("minibitx control panel")
+        self.title("maxibitx control panel")
         self.resizable(False, False)
 
         self.client = RigctlClient()
@@ -543,15 +548,15 @@ class Panel(tk.Tk):
         try:
             port = int(self.port_var.get().strip())
         except ValueError:
-            messagebox.showerror("minibitx panel", "Port must be a number.")
+            messagebox.showerror("maxibitx panel", "Port must be a number.")
             return
         if not host:
-            messagebox.showerror("minibitx panel", "Enter the Pi's hostname or IP address.")
+            messagebox.showerror("maxibitx panel", "Enter the Pi's hostname or IP address.")
             return
         try:
             self.client.connect(host, port)
         except OSError as e:
-            messagebox.showerror("minibitx panel", f"Couldn't connect to {host}:{port}\n{e}")
+            messagebox.showerror("maxibitx panel", f"Couldn't connect to {host}:{port}\n{e}")
             return
 
         save_config({"host": host, "port": port})
@@ -787,7 +792,7 @@ class Panel(tk.Tk):
         try:
             hz = int(self.freq_entry_var.get().strip())
         except ValueError:
-            messagebox.showerror("minibitx panel", "Frequency must be a whole number of Hz.")
+            messagebox.showerror("maxibitx panel", "Frequency must be a whole number of Hz.")
             return
         threading.Thread(target=lambda: self.client.query(f"F {hz}"), daemon=True).start()
 
@@ -808,7 +813,7 @@ class Panel(tk.Tk):
         try:
             hz = int(self.rit_entry_var.get().strip())
         except ValueError:
-            messagebox.showerror("minibitx panel", "RIT must be a whole number of Hz.")
+            messagebox.showerror("maxibitx panel", "RIT must be a whole number of Hz.")
             return
         hz = max(-RIT_MAX_HZ, min(RIT_MAX_HZ, hz))
         self.rit_entry_var.set(str(hz))
@@ -906,7 +911,7 @@ class Panel(tk.Tk):
         if db is None:
             self.spectrum_status_var.set(
                 f"waiting for I/Q telemetry on UDP {IQ_STREAM_PORT} "
-                "(older minibitx builds without iq_stream.c won't send any)")
+                "(older maxibitx builds without iq_stream.c won't send any)")
         else:
             # db spans the full native +-48kHz (fftshifted, bin 0 = -48kHz,
             # bin FFT_SIZE/2 = dial center) - crop to the middle +-15kHz for
