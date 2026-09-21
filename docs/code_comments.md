@@ -1,7 +1,15 @@
 # Code comments vs. docs
 
-Status: adopted 2026-09-21. First applied to `src/rx_audio.c`: 477
-comment lines cut to 148, with byte-identical machine code.
+Status: adopted 2026-09-21. Applied so far, each with byte-identical
+machine code across the whole build:
+
+| file | comment lines before -> after |
+|---|---|
+| `src/rx_audio.c` | 477 -> 148 |
+| `src/sound.c` | 504 -> 230 |
+| `src/sound.h` | 45 -> 32 |
+| `src/radio.c` | 125 -> 57 |
+| `src/radio.h` | 88 -> 42 |
 
 This project records its engineering history carefully, and that record
 is worth keeping. But source comments are read by someone trying to
