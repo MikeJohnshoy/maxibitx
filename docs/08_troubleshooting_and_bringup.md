@@ -59,7 +59,10 @@ different fixes:
   too, forever, at the full ~93Hz loop rate. `xrun_note()`'s flood
   tracker rate-limits the logging, prints a one-time hint pointing at
   the real cause (grant `CAP_SYS_NICE`, e.g. `sudo setcap
-  cap_sys_nice+ep ./minibitx`, or raise the rtprio limit), and adds a
+  cap_sys_nice,cap_dac_override+ep ./maxibitx` - the same capability set
+  the Makefile grants, since `setcap` replaces rather than adds, and
+  dropping `cap_dac_override` would break `usb_gadget.c`'s configfs
+  setup - or raise the rtprio limit), and adds a
   short breather so the retry loop doesn't itself worsen the CPU
   contention causing it.
 
