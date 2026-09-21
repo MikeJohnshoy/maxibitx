@@ -1,137 +1,32 @@
 // rx_audio.c
 //
-// Turns the receiver's own baseband I/Q into an audible CW tone, played
-// out minibitx's local audio output - the same WM8731 codec cw.c already
-// uses for the TX sidetone (see sound.c's audio_loop()).
+// Demodulates the receiver's baseband I/Q into audio for two consumers:
+// the local speaker/headphones (out[], via the WM8731 codec cw.c's
+// sidetone also uses) and the USB audio gadget (uac_out, see rx_audio.h).
 //
-// This intentionally lives inside minibitx, not the separate mb-radio
-// panel app: minibitx already owns the WM8731 codec exclusively, and
-// already has this block's I/Q sitting in sound.c's audio thread before
-// it's even packaged for the network - this is a second consumer of
-// data that's already flowing, not a new capture path a second process
-// would have to duplicate (and then fight minibitx for the same
-// physical audio device).
+// Signal chain, per sample except where noted:
 //
-// v3 architecture - four independent stages, each with one job:
+//   1. Wide complex bandpass (ssb_filter_apply): keeps 0..~3000Hz of
+//      positive baseband, rejects negative. Sideband selection for
+//      USB/LSB happens by conjugating the input first - see
+//      rx_audio_process().
+//   2. Demod: CW mixes up to CW_PITCH_HZ; USB/LSB take the real part
+//      directly, so audio Hz == |RF - dial|.
+//   3. Optional narrow selectivity, ~300Hz around CW_PITCH_HZ: the fixed
+//      elliptic IIR (default) or rx_filter.c's FFT filter. Both always
+//      run, so switching or un-bypassing never clicks.
+//   4. AGC, then rx_volume for out[] only.
 //
-//   1. A WIDE complex (Hilbert-style) bandpass filter that keeps one
-//      side of dial center and rejects the other. This is the only
-//      stage that needs to be complex/asymmetric, and it's deliberately
-//      wide (SSB_FILTER_FPASS_HZ/FSTOP_HZ below) rather than narrow -
-//      see "Why wide, not narrow" below.
-//   2. Mix the filtered I/Q up to CW_PITCH_HZ (cw.h) and keep only the
-//      real part - same product-detector math as always,
-//      Re[(I+jQ)*(cos+jsin)] = I*cos - Q*sin.
-//   3. A NARROW real bandpass centered on CW_PITCH_HZ, doing the actual
-//      "single signal" selectivity - an 8-pole elliptic (Cauer) IIR, a
-//      fixed design (not runtime-adjustable; see "Why elliptic, and why
-//      fixed" below), chosen to approach a classic CW crystal filter's
-//      shape factor rather than the gentler resonator-cascade shape v3
-//      shipped with initially. docs/ARCHITECTURE.md build order step 6/7:
-//      a second implementation of this same stage now exists too -
-//      rx_filter.c, the shared FFT overlap-save engine tx_pipeline.c
-//      uses, with pitch/width as live parameters instead of this fixed
-//      design. Both run continuously; rx_audio_set_narrow_filter_impl()
-//      (rx_audio.h) picks which one's output actually reaches stage 4 -
-//      elliptic stays the default until an on-air comparison says
-//      otherwise (§10 step 7).
-//   4. An AGC (envelope-following automatic gain control) that
-//      normalizes toward a fixed target output level - see
-//      AGC_TARGET_AMPLITUDE below for why a fixed multiplier alone
-//      can't work, and "Why the AGC samples the raw input, not stage 2
-//      or stage 3" below for where it measures its envelope from and
-//      why that matters.
+// The AGC measures the RAW input magnitude, not any stage's output: its
+// envelope has to be frequency-independent, or the gain undoes the very
+// selectivity stages 1 and 3 provide. The consequence, by design: a
+// strong signal anywhere in the captured band lowers the gain for
+// everything ("AGC desense"), as with a real front-end AGC.
 //
-// Why wide, not narrow (the v2 -> v3 change):
-// v2 used ONE complex filter to do both jobs at once - its passband
-// edge was both "how much of the audio range survives" and "how sharp
-// the image rejection transition is". That's the wrong thing to
-// conflate: on-air testing (2026-09) showed signals getting soft well
-// before the edge of the nominal passband, because the filter's own
-// equiripple roll-off was eating into what should have been a clean,
-// flat "wanted" region. The fix, and the more conventional approach for
-// a phasing-method receiver: let the complex filter do ONLY image
-// rejection, across a passband wide enough to comfortably not matter
-// (SSB_FILTER_FPASS_HZ, 1500 Hz - wide enough for a future SSB monitor
-// too, not just today's CW use), and do the actual narrow "single
-// signal" selectivity in a completely separate, much cheaper stage
-// AFTER demodulation (stage 3), where the signal is already real and
-// single-sided so an ordinary symmetric filter is perfectly fine - no
-// more mirror-image ambiguity to worry about by that point. Widening
-// stage 1's passband costs nothing extra: FIR tap count is set by the
-// TRANSITION width, not by where the passband edge sits (Harris'
-// estimate, `N ~= (Fs/transition_Hz)*(Astop_dB/22)`, has no Fpass term
-// at all) - see docs/dsp_design_notes/rx_audio_demod_design.md SS7 for
-// the numbers that confirmed this before any code changed.
-//
-// Why elliptic, and why fixed (the first v3 -> current stage-3 change):
-// v3 originally built stage 3 from 4 identical, synchronously-tuned
-// biquad resonator sections - cheap and easy to retune live, but its
-// skirt stayed fundamentally gentle (a resonator cascade only ever rolls
-// off, it never develops the equiripple "wall" a crystal ladder filter
-// has), and its shape didn't get meaningfully sharper by adding more
-// identical sections. An elliptic (Cauer) design gets there instead: for
-// the SAME 8-pole cost, equiripple passband + zeros placed right at the
-// band edges buys a ~1.9:1 shape factor (-60dB bandwidth : -6dB
-// bandwidth) - in the same range as a real CW crystal filter, and far
-// steeper than the resonator cascade ever reached. See
-// docs/dsp_design_notes/rx_audio_demod_design.md SS8 for the measured
-// comparison (the resonator cascade and elliptic's shapes side by side).
-// The cost is that elliptic coefficients aren't a simple trig formula
-// like the old RBJ biquad's - computing them needs solving elliptic
-// integrals, not something to redo from an audio callback - so this
-// stage is now a fixed design (SSB_FIR_TAPS-style precomputed
-// coefficients, not runtime-tunable the way v3's first cut was).
-//
-// Why the AGC samples the raw input, not stage 2 or stage 3 (found
-// on-air, 2026-09 - two iterations to get here):
-//
-// Attempt 1 (v3 as first shipped): the AGC tracked |narrowed| - stage
-// 3's OWN output - so rx_audio_debug_agc_envelope() would be a clean
-// window into the narrow filter's real selectivity (see its doc comment
-// in rx_audio.h history), immune to the AGC's own gain undoing what the
-// filter just did. Sound reasoning for the debug reading, wrong for what
-// reached the operator's ears: tuning across a CW signal, the elliptic's
-// sharp ~300Hz skirt turned out to be barely noticeable - not because it
-// wasn't working (close to 99dB rejection in the two-signal-3kHz-apart
-// test, SS8.6), but because gain = AGC_TARGET_AMPLITUDE / agc_env,
-// applied to that same narrowed signal, is a closed loop that can't help
-// but erase that signal's own amplitude variation.
-//
-// Attempt 2: moved agc_env to sample |audio| (stage 2's output - post-
-// BFO-mix, before stage 3's filter). This fixed the reported problem for
-// a single tuned signal (stage 1 barely changes across a small tuning
-// range, so the makeup gain stayed put and stage 3's real attenuation
-// finally reached the codec) - but it introduced a new one: stage 1's
-// OWN image-rejection asymmetry now fed into agc_env too, and right
-// where a mirror-image tone's folded pitch (see "the real-audio folding
-// effect" - SS8.4 in the design doc) lands close to stage 3's passband,
-// the AGC's makeup gain rose to compensate for stage 1 having already
-// suppressed that image - amplifying an already-mostly-rejected folding
-// artifact back up toward full loudness, worse than doing nothing.
-//
-// Current fix: agc_env tracks sqrt(i^2+q^2) of the RAW input samples -
-// before stage 1 does anything. For a single complex baseband tone this
-// magnitude is frequency-independent (a unit-amplitude tone has the same
-// magnitude whether it's the wanted signal or its mirror image, on
-// either side of dial center, at any offset) - so unlike attempt 2, it
-// carries none of stage 1's own frequency-selective asymmetry into the
-// AGC's gain. In effect the AGC now measures true "how much RF/audio
-// energy is in the whole captured band right now" - the most literal
-// reading of "why an AGC exists at all" (real band noise/signal levels
-// bench-measured 2025-09 swung across nearly three orders of magnitude,
-// see the comment above AGC_TARGET_AMPLITUDE) - and every later stage's
-// own frequency-dependent shaping (stage 1's image rejection, stage 3's
-// narrow selectivity, and the real-audio folding interaction between
-// them) survives into the final output completely undiluted by gain,
-// because gain no longer depends on which specific frequency produced
-// that raw energy. One side effect, expected and not a bug, same as
-// attempt 2's: a second, unrelated signal anywhere in the whole captured
-// band now pulls agc_env up and the wanted signal's makeup gain down
-// along with it - "AGC desense", the same behavior a real front-end
-// AGC has. rx_audio_debug_agc_envelope() no longer isolates any single
-// stage's shape as a result - see its doc comment in rx_audio.h for what
-// it's still useful for, and how test_rx_audio.c adapted.
+// Design rationale, measurements and the history of how each stage got
+// here: docs/dsp_design_notes/rx_audio_demod_design.md (stages 1-4, AGC)
+// and rx_uac_out_digital_mode_bandwidth.md §10 (USB/LSB demod, I/Q
+// inversion).
 
 #include "rx_audio.h"
 #include "cw.h"
@@ -144,26 +39,17 @@
 
 #define SSB_FIR_TAPS 327
 
-// Stage 1: wide image-reject complex bandpass. Real symmetric lowpass
-// prototype designed via scipy.signal.remez(SSB_FIR_TAPS,
-// [0, 1500, 1900, 48000], [1, 0], weight=[1, 10], fs=96000) - passband
-// edge 1500Hz, stopband edge 1900Hz, ~1.7dB passband ripple, -40dB
-// worst-case stopband - then modulated by exp(j*2*pi*1500*m/Fs), m
-// referenced to the filter's own center tap, to shift its response from
-// symmetric [-1500,+1500] to one-sided [0, +3000] Hz. Coefficients
-// pre-reversed at generation time (ssb_hr[i] == hr[N-1-i], same for
-// ssb_hi) so the loop in ssb_filter_apply() below reproduces the
-// textbook y[n] = sum_k h[k]*x[n-k] convolution - see
-// docs/dsp_design_notes/rx_audio_demod_design.md SS7 for the full
-// derivation, the reversal subtlety, and the numeric verification this
-// table was checked against before being pasted in here.
-//
-// Passes baseband content from 0 up to +3000Hz above dial center (the
-// "wanted" side, comfortably wide - see file header); rejects content
-// below dial center, with rejection improving from a few dB right at
-// zero beat (a fundamental limit shared by any filter - nothing can
-// separate +0Hz from -0Hz) out to -40dB by roughly 1500-2000Hz. Stage 3
-// below is what actually shapes single-signal selectivity now.
+// Stage 1: wide image-reject complex bandpass. A real lowpass prototype,
+//   scipy.signal.remez(SSB_FIR_TAPS, [0, 1500, 1900, 48000], [1, 0],
+//                      weight=[1, 10], fs=96000)
+// (~1.7dB ripple, -40dB stopband), modulated by exp(j*2*pi*1500*m/Fs), m
+// counted from the center tap, so it passes 0..+3000Hz of baseband and
+// rejects negative frequencies. Rejection is only a few dB right at 0Hz
+// (nothing can separate +0 from -0), ~-10dB at -200Hz, and -40..-75dB
+// from about -400Hz outward. Stored pre-reversed (ssb_hr[i] ==
+// hr[N-1-i], same for ssb_hi) so ssb_filter_apply()'s loop computes
+// y[n] = sum h[k]*x[n-k]. Derivation and verification:
+// rx_audio_demod_design.md §7.
 static const double ssb_hr[SSB_FIR_TAPS] = {
      0.00472215, -0.00002114, -0.00003969, -0.00006961, -0.00011114,
     -0.00016150, -0.00021969, -0.00028154, -0.00034457, -0.00040409,
@@ -310,22 +196,14 @@ struct ssb_filter_state {
 
 static struct ssb_filter_state ssb_state;
 
-// Complex convolution: (i_in + j*q_in) rail history against the complex
-// filter (ssb_hr + j*ssb_hi). Re/Im expand to the standard 4-multiply
-// complex-times-complex, done here as two real convolutions each reused
-// across both output rails:
+// Complex convolution of the (I + jQ) history with (ssb_hr + j*ssb_hi):
 //   i_out = sum(hr*hist_i) - sum(hi*hist_q)
 //   q_out = sum(hr*hist_q) + sum(hi*hist_i)
-//
-// Double-length history buffer, same trick antialias.c uses: every
-// sample is written at two mirrored positions so a TAPS-long read never
-// needs to wrap, keeping the loop branch-free for gcc's -O3 to
-// autovectorize. Not hand-folded into half-length loops despite hr/hi's
-// even/odd symmetry (see the file header derivation) - same tradeoff
-// antialias.c already made: a mirrored-index access pattern is harder
-// to autovectorize than this straight sequential loop, and at this tap
-// count (~1300 multiply-adds/sample, ~125M/sec at 96kHz) the unfolded
-// version is nowhere near a real constraint on a Pi 4.
+// Each sample is written twice (pos and pos+TAPS) so a TAPS-long read
+// never wraps and the loop stays branch-free for -O3 autovectorization,
+// same trick as antialias.c. Deliberately not folded to exploit hr/hi's
+// symmetry: mirrored indexing vectorizes worse, and ~125M MAC/s is no
+// load for a Pi 4.
 static void ssb_filter_apply(struct ssb_filter_state *f, double i_in, double q_in,
                               double *i_out, double *q_out) {
     f->hist_i[f->pos] = i_in;
@@ -348,43 +226,16 @@ static void ssb_filter_apply(struct ssb_filter_state *f, double i_in, double q_i
     *q_out = acc_im;
 }
 
-// Stage 3: narrow real bandpass, post-demodulation - an 8-pole elliptic
-// (Cauer) IIR, cascaded as 4 direct-form-II biquad sections. By this
-// point in the chain the signal is already real, single-sided audio
-// (stage 1 already resolved the image-reject question), so there is no
-// symmetry concern left to design around.
-//
-// This replaced v3's original narrow filter - 4 IDENTICAL,
-// synchronously-tuned RBJ resonator sections, runtime-adjustable via a
-// simple trig formula (Q = f0/bandwidth_hz). That was cheap and easy to
-// retune live, but a resonator cascade's skirt stays fundamentally
-// gentle no matter how many sections get added - it rolls off, but never
-// develops a real equiripple "wall". An elliptic design spends the same
-// 8 poles very differently: equiripple ripple in the passband, and
-// transmission zeros placed right at the band edges, buying a ~1.9:1
-// shape factor (-60dB bandwidth : -6dB bandwidth) - in the range of a
-// real CW crystal filter, and well past what the resonator cascade ever
-// reached. See docs/dsp_design_notes/rx_audio_demod_design.md §8 for the
-// measured comparison (the two shapes plotted side by side) and the
-// group-delay/ring-time cost that comes with it (small: ~2.6ms group
-// delay at CW_PITCH_HZ vs ~1.9ms for the old cascade, well under a CW
-// element's duration at any real keying speed).
-//
-// The cost that DOES matter: elliptic coefficients aren't a simple trig
-// formula the way the old RBJ biquad's were - computing them means
-// solving elliptic integrals (scipy.signal.ellip did this once, offline,
-// not something to redo from an audio callback). So this stage is now a
-// FIXED design, like stage 1's FIR coefficients below - not
-// runtime-tunable the way v3's first cut was (rx_audio_set_filter_bw()
-// existed for exactly one v3 revision and is gone again).
-//
-// Design point: order=4 (8 poles total), 0.5dB passband ripple, 50dB
-// stopband, centered on CW_PITCH_HZ with a ~300Hz -3dB width -
-// scipy.signal.ellip(4, 0.5, 50, [(700-150)/48000, (700+150)/48000],
-// btype='bandpass', output='sos') at Fs=96000. Each row below is one
-// second-order section as {b0, b1, b2, a1, a2} - scipy's sos convention
-// already normalizes a0 to 1.0 per section (confirmed to ~1e-16 before
-// trusting it here), matching how biquad_apply() below is written.
+// Stage 3: narrow real bandpass - an 8-pole elliptic (Cauer) IIR, as 4
+// direct-form biquad sections. ~300Hz -3dB wide at CW_PITCH_HZ, ~1.9:1
+// shape factor (CW crystal-filter territory), ~2.6ms group delay at
+// center. A fixed design, not runtime-tunable, because elliptic
+// coefficients need offline design:
+//   scipy.signal.ellip(4, 0.5, 50, [(700-150)/48000, (700+150)/48000],
+//                      btype='bandpass', output='sos')    # Fs = 96000
+// Rows are {b0, b1, b2, a1, a2} with a0 == 1 (scipy's sos convention).
+// Changing CW_PITCH_HZ means regenerating this table. Why elliptic
+// rather than a resonator cascade: rx_audio_demod_design.md §8.
 struct biquad_state {
     double b0, b1, b2, a1, a2;   // coefficients
     double x1, x2, y1, y2;       // history
@@ -421,68 +272,32 @@ static double narrow_filter_apply(struct narrow_filter_state *f, double x) {
     return y;
 }
 
-// v1 shipped with a fixed peak-PCM-amplitude multiplier here (the same
-// role as sound.c's SIDETONE_PEAK_AMPLITUDE), calibrated only against a
-// synthetic, unit-amplitude test carrier (test_rx_audio.c). Bench data
-// off a real antenna (FT8 band noise/signals on 40m, 2025-09) showed the
-// actual post-mix signal sitting around 0.0015-0.0085 of that synthetic
-// 1.0 reference - a fixed multiplier tuned for one of those scales is
-// either silent on the other or clips on anything stronger, and real
-// band conditions swing far wider than either bench sample. An AGC
-// (automatic gain control) is the standard fix, and what every real
-// receiver does for this same reason - it normalizes toward a target
-// output level regardless of how strong the incoming signal actually is,
-// rather than assuming one fixed relationship between input and output
-// amplitude.
+// Stage 4: AGC. Band levels swing over orders of magnitude, so no fixed
+// gain works (rx_audio_demod_design.md §5).
 //
-// Target output amplitude the AGC rides toward, once its envelope
-// estimate has settled - comfortably below the +-2e9 clamp so real
-// peaks (louder than the envelope's own smoothed average) still fit
-// without clipping.
+// Level the AGC rides the envelope toward - well below the +-2e9 output
+// clamp, so peaks above the smoothed envelope still fit. usb_gadget.c's
+// UAC_RX_AUDIO_SCALE is defined relative to this; change them together.
 #define AGC_TARGET_AMPLITUDE 500000000.0
 
-// Fast attack (catch a loud transient - a strong signal keying up -
-// before it clips) and slow release (ride the overall band-noise/signal
-// level rather than pumping between a CW dit and the gap after it).
-// Untested starting points - expect to retune by ear once there's a
-// real signal to judge by.
+// Fast attack so a strong signal keying up doesn't clip; slow release so
+// gain rides the band level rather than pumping between CW elements.
 #define AGC_ATTACK_MS    5.0
 #define AGC_RELEASE_MS 300.0
 
-// Ceiling on the gain the AGC can apply - without this, near-total
-// silence (envelope estimate near 0) would drive gain toward infinity
-// and turn the noise floor into full-scale hiss the moment the band
-// goes quiet.
+// Caps the gain on a near-silent input, so a quiet band doesn't turn into
+// full-scale hiss.
 #define AGC_MAX_GAIN 8.0e11
 
 static struct vfo bfo;                 // CW_PITCH_HZ mixing oscillator
-// RX_VOLUME_MAX: the linear gain that 100% on the volume control maps to.
-// Was implicitly 1.0 (percent/100). On real hardware that left only the
-// bottom few percent usable: 3% was comfortable copy, and the operator
-// judged ~20% of the old scale as the loudest anyone would want through
-// the local speaker (2026-09-21). So the whole 0-100% range now spans
-// 0..0.20 - the same audio at every setting within the new range, just
-// spread across the full slider instead of its first few percent.
-// Retune this one constant if a different speaker/amp wants a
-// different ceiling. Affects only out[] (the local speaker/headphones);
-// uac_out (WSJT-X) is tapped before rx_volume and is unaffected.
+// Local speaker volume, 0-100%, log (audio) taper: 1..100% maps evenly
+// onto -RX_VOLUME_RANGE_DB..0dB relative to RX_VOLUME_MAX, so every 1% is
+// 0.5dB; 0% is a true mute. RX_VOLUME_MAX is the loudest the local
+// speaker needs on this hardware. The default, 67%, is 0.03 linear -
+// comfortable copy. Affects out[] only; uac_out is tapped before
+// rx_volume.
 #define RX_VOLUME_MAX 0.20
-
-// RX_VOLUME_RANGE_DB: log (audio) taper span. The control's 1-100%
-// maps evenly in dB onto -RX_VOLUME_RANGE_DB..0dB relative to
-// RX_VOLUME_MAX, so every 1% step is the same 0.5dB loudness change
-// anywhere on the slider - the way a real audio-taper volume pot feels,
-// instead of the linear taper's coarse bottom end (where 1%->2% was
-// +6dB) and near-useless top half (100%->50% only -6dB). 0% is a true
-// mute, not -50dB. 50dB covers the whole comfortable range with room to
-// spare: the quietest the operator has actually used (old-scale 1%,
-// 0.01 linear) lands at 48%.
 #define RX_VOLUME_RANGE_DB 50.0
-
-// Startup volume in the control's own 0-100 units. 67% on the log taper
-// is RX_VOLUME_MAX * 10^(-16.5/20) = 0.030 linear - the old 3% default,
-// which real-hardware listening had settled on as comfortable copy - so a
-// fresh process sounds the same as before.
 #define RX_VOLUME_DEFAULT_PERCENT 67
 
 static double volume_percent_to_gain(int percent) {
@@ -492,89 +307,48 @@ static double volume_percent_to_gain(int percent) {
     return RX_VOLUME_MAX * pow(10.0, db / 20.0);
 }
 
-// Kept as an integer percent (the unit every caller uses), with the
-// gain derived from it, so get_volume() always reads back exactly what
-// set_volume() was given - no rounding drift through the taper. The
-// initializer is a placeholder; rx_audio_init() computes the real value
-// (pow() isn't a constant expression).
+// Stored as the caller's integer percent so get_volume() reads back
+// exactly what was set. rx_volume is derived from it, including in
+// rx_audio_init(), since pow() can't appear in a static initializer.
 static int rx_volume_percent = RX_VOLUME_DEFAULT_PERCENT;
 static double rx_volume = 0.03;
 
-// 1 (default) = stage 3 shapes the output, matching every design note
-// above; 0 = stage 3 is bypassed (audio from stage 2 reaches the AGC
-// directly). See rx_audio_set_narrow_filter().
+// 1 = stage 3 applied (default), 0 = bypassed. See rx_audio_set_narrow_filter().
 static int narrow_filter_enabled = 1;
 
-// Which stage-3 implementation narrow_filter_enabled's "on" state uses -
-// see rx_audio_set_narrow_filter_impl() (rx_audio.h) and
-// docs/ARCHITECTURE.md §10 step 7. Elliptic stays the default: the FFT
-// filter is bench-proven (step 6) but not yet verified on air, and this
-// selector exists specifically to make that on-air A/B comparison
-// possible without a rebuild, not to switch the default.
+// Which stage 3 implementation runs when enabled. Elliptic is the
+// default; the FFT filter is there for on-air A/B comparison
+// (ARCHITECTURE.md §10 step 7).
 static enum rx_narrow_filter_impl narrow_filter_impl = RX_NARROW_FILTER_ELLIPTIC;
 
-// RX_IQ_SPECTRUM_INVERTED: maxibitx's raw baseband I/Q (sound.c's
-// i_samples/q_samples, shared unchanged by hpsdr_p1.c, iq_stream.c and
-// this file) carries one real spectral inversion - a station +d Hz above
-// dial arrives at baseband -d. sound.c mixes the real ~24kHz IF by
-// e^{+j*2pi*RX_IF_FREQ_HZ*t} (vfo_read_iq() returns I=cos, Q=+sin), which
-// maps IF frequency f to baseband 24000-f; the analog chain's two
-// high-side conversions (clk2 = dial + xtal_filter_center, clk1 =
-// xtal_filter_center + RX_IF_FREQ_HZ) put the IF at 24000+d, so baseband
-// = -d. tools/rigctl_panel.py's spectrum already conjugates for exactly
-// this reason (its own comment), and an on-air A/B on 2026-09-21 matched
-// this model on every observation (docs/dsp_design_notes/
-// rx_uac_out_digital_mode_bandwidth.md §10). Corrected here, per demod
-// mode, rather than in sound.c's mixer: fixing it at the source would
-// silently flip every other I/Q consumer too, including SparkSDR over
-// hpsdr_p1.c, which is confirmed working as-is. If a board's analog
-// chain ever turns out to differ, this one constant is the switch.
-// Confirmed on air 2026-09-21: in DIGITAL, stepping the dial +100Hz
-// moves signals LEFT in WSJT-X's waterfall - correct USB sense with
-// this set to 1.
+// maxibitx's raw baseband I/Q is spectrally inverted: a station +d Hz
+// above dial arrives at baseband -d. (sound.c mixes the ~24kHz IF by
+// e^{+j*2pi*RX_IF_FREQ_HZ*t}, mapping IF f to 24000-f, and the analog
+// chain puts the IF at 24000+d.) USB/LSB compensate by conjugating the
+// input - see rx_audio_process(). Deliberately not corrected in sound.c:
+// that would flip every other I/Q consumer too, and hpsdr_p1.c (e.g.
+// SparkSDR) works as-is. Checked on air: in USB, a +100Hz dial step
+// moves signals left in WSJT-X. Set to 0 for a board whose analog chain
+// isn't inverted. Derivation: rx_uac_out_digital_mode_bandwidth.md §10.
 #define RX_IQ_SPECTRUM_INVERTED 1
 
-// Current demodulator - see rx_audio_set_demod() (rx_audio.h). CW is the
-// default, matching radio.c's own RADIO_MODE_CW default at startup.
+// Current demodulator, set via rx_audio_set_demod() from radio_set_mode().
+// CW matches radio.c's startup mode.
 static enum rx_demod demod = RX_DEMOD_CW;
 
-// The shared FFT stage-3 filter (src/rx_filter.c) - one persistent
-// instance, created in rx_audio_init(), same "real FFTW plans, must not
-// be rebuilt per block" reasoning as sound.c's cw_tx_pipeline. Runs every
-// block regardless of narrow_filter_impl's current value (see
-// rx_audio_process()) so its overlap-save history stays warm and
-// switching to it mid-signal doesn't thump - same idea as the elliptic
-// filter's own "always run it" comment above, just extended to a second
-// implementation. Unlike cw_tx_pipeline, there's no matching free() call
-// anywhere (rx_audio.c has no deinit/shutdown path at all - same as
-// cw_init() - so this is reclaimed by the OS at process exit, not a new
-// gap this module introduces).
+// Stage 3's FFT implementation (rx_filter.c). One persistent instance,
+// since its FFTW plans are expensive to build. Never freed: this module
+// has no shutdown path, and the OS reclaims it at exit.
 static struct rx_filter *rx_fft_filter;
 
-// AGC envelope follower state - agc_env tracks a smoothed magnitude
-// estimate of the RAW input I/Q, before stage 1 even runs (see "Why the
-// AGC samples the raw input, not stage 2 or stage 3" in the file
-// header); the gain applied each sample is AGC_TARGET_AMPLITUDE /
-// agc_env, so as agc_env rises/falls the output rides back toward the
-// target instead of tracking the raw input amplitude directly - and
-// because agc_env is frequency-independent (a single tone's raw
-// magnitude doesn't depend on its frequency or which side of dial center
-// it's on), every later stage's own frequency-dependent shaping survives
-// into the final output completely undiluted by this gain.
+// AGC envelope: smoothed magnitude of the RAW input I/Q (see file
+// header). gain = AGC_TARGET_AMPLITUDE / agc_env.
 static double agc_env = 0.0;
 static double agc_attack_alpha, agc_release_alpha;
 
-// Meter envelope follower state - a second, independent tracker from
-// agc_env above, sharing its attack/release alphas but not its input or
-// its job. See "Two envelopes, two jobs" above rx_audio_get_strength_db()
-// for the full reasoning; in short, agc_env has to stay wideband for the
-// AGC's own gain math to be correct, but that makes it a poor S-meter
-// (equally loud for a signal at dial center and one 10kHz away - see
-// rx_gain_and_level_calibration.md §9's discussion of why). meter_env
-// tracks |narrowed| instead - post-stage-1-image-rejection,
-// post-stage-3-selectivity-or-bypass, pre-AGC-gain - so it reads what's
-// actually reaching the speaker, not "how much energy is anywhere in the
-// whole captured band."
+// S-meter envelope: smoothed |stage 3 output| (or its bypass), i.e. what
+// actually reaches the speaker. Read-only - it never feeds the gain.
+// See rx_audio_get_strength_db().
 static double meter_env = 0.0;
 
 // Time-constant (not cutoff-frequency) one-pole coefficient, for the
@@ -589,9 +363,10 @@ static double onepole_alpha_from_ms(double time_ms) {
 void rx_audio_init(void) {
     rx_volume = volume_percent_to_gain(rx_volume_percent);
 
-    // BFO sign is a starting guess, not bench-verified - if a station
-    // parked exactly at dial center sounds wrong (e.g. tuning direction
-    // feels backwards), flip this to -CW_PITCH_HZ and recheck.
+    // CW BFO at +CW_PITCH_HZ: a station at dial center is heard at
+    // CW_PITCH_HZ. Which side of dial CW keeps is set by stage 1 and the I/Q
+    // inversion - currently the band below dial, effectively CW-reverse
+    // (rx_uac_out_digital_mode_bandwidth.md §10, "CW's own sideband").
     vfo_start(&bfo, CW_PITCH_HZ, 0);
 
     for (int i = 0; i < 2 * SSB_FIR_TAPS; i++) {
@@ -615,11 +390,7 @@ void rx_audio_init(void) {
     agc_env = 0.0;
     meter_env = 0.0;
 
-    // Pitch matches bfo's own fixed CW_PITCH_HZ above (stage 2 always
-    // mixes there today - neither is independently live-adjustable yet);
-    // width is rx_filter.h's own bench-derived default, the same
-    // starting comparison point step 6's harness measured against the
-    // elliptic filter's own ~300Hz design point.
+    // Same center as the BFO, at rx_filter.h's default width.
     rx_fft_filter = rx_filter_new((float)CW_PITCH_HZ, RX_FILTER_DEFAULT_WIDTH_HZ);
 }
 
@@ -651,10 +422,8 @@ int rx_audio_get_narrow_filter_impl(void) {
 }
 
 void rx_audio_set_demod(enum rx_demod d) {
-    // Plain store, like the other setters here - no filter history reset.
-    // A mode change leaves at most one stage-1 FIR length (~3.4ms) of
-    // mixed-sideband history in flight, far below anything audible or
-    // anything a 15-second FT8 decode window would notice.
+    // No filter reset: a mode change leaves at most one stage-1 length
+    // (~3.4ms) of the previous sideband in flight.
     demod = d;
 }
 
@@ -670,64 +439,20 @@ double rx_audio_debug_meter_envelope(void) {
     return meter_env;
 }
 
-// --- Signal strength (rigctld "l STRENGTH", hamlib.c) ---
+// --- Signal strength (rigctld "l STRENGTH") ---
 //
-// Two envelopes, two jobs:
+// Reads meter_env, not agc_env: agc_env is wideband by design (see the
+// file header), so it would read the same for a signal at dial center or
+// 10kHz away. meter_env tracks what's actually audible.
 //
-// agc_env (above) has to stay wideband - sampled before stage 1 even
-// runs, frequency-independent by construction - because that's what
-// makes the AGC's own makeup gain correct (see "Why the AGC samples the
-// raw input" in the file header: a narrower tap there created a closed
-// loop that erased the very selectivity it was supposed to reveal). But
-// that same property makes it a poor S-meter: it reads the same whether
-// the tone is at dial center or 10kHz away, well outside anything
-// audible - real energy anywhere across the whole ~35kHz-wide crystal-
-// filter passband, not "how strong is what I'm listening to." First
-// shipped, this function read agc_env directly - see
-// docs/dsp_design_notes/rx_gain_and_level_calibration.md §9 for that
-// version and the design discussion that replaced it.
-//
-// meter_env is the fix: a second, independent envelope follower (same
-// file, same attack/release alphas, its own state) that tracks |narrowed|
-// instead - stage 3's own output, or its bypass, whichever the operator
-// is actually hearing (see rx_audio_process()'s stage 4 comment). It's a
-// pure observer, never fed back into any gain, so there's no closed-loop
-// risk in tapping something this far downstream - that problem was
-// specific to using a narrow tap for the AGC's OWN gain, not to reading
-// one for display. The result: a tone outside stage 1's one-sided
-// passband, or outside stage 3's ~300Hz skirt when the narrow filter is
-// on, now reads visibly lower here, matching what's actually audible -
-// see test_rx_audio.c's Case B for the regression check.
-//
-// It still lives in the same "fraction of full scale, no dB/dBm
-// attached" space as sound.c's rf and agc_env both did - see
-// docs/dsp_design_notes/rx_gain_and_level_calibration.md's Caveat 1:
-// nothing downstream of the ADC ties a sample value to a real RF
-// quantity without a deliberate signal-generator calibration step, and
-// that step hasn't been done here.
-//
-// RX_STRENGTH_S9_DBFS is therefore still a placeholder, not a
-// calibration - carried over unchanged from the agc_env version rather
-// than re-derived, on the reasoning that stage 1/stage 3 are close to
-// unity gain in-band (a remez equiripple design normalized near 0dB
-// passband gain), so an in-passband signal's narrowed amplitude should
-// sit in roughly the same ballpark as agc_env's used to for the same
-// signal - but that's a reasonable starting guess, not something
-// verified against real hardware, and worth rechecking against §6's bench
-// data (or new data of its own) once this is on the air. Real calibration
-// still means injecting a known level (the conventional -73dBm = S9
-// reference) from a signal generator into the antenna port and reading
-// back meter_env at that point, per that doc's §2 procedure - and per
-// that same doc's caveats, checking it holds at more than one band before
-// trusting it, since RX_CAPTURE_GAIN_PERCENT's flatness across HF is
-// itself unverified.
+// Units are dBFS, relative only. RX_STRENGTH_S9_DBFS is a placeholder,
+// not a calibration: calibrating needs a known signal (-73dBm = S9)
+// injected at the antenna port. See rx_gain_and_level_calibration.md §2
+// and §9.
 #define RX_STRENGTH_S9_DBFS -40.0
 
-// Clamp range for the reported number, in dB relative to RX_STRENGTH_S9_DBFS -
-// S0 (-54dB, the bottom of the conventional 6dB/S-unit S0-S9 scale) up to
-// a generous S9+60dB ceiling. Only clamps what's reported; meter_env,
-// agc_env, and the AGC itself keep working across their own full range
-// regardless.
+// Reported range, dB relative to S9: S0 (-54) up to S9+60. Clamps the
+// report only, not the envelope or the AGC.
 #define RX_STRENGTH_MIN_DB (-54)
 #define RX_STRENGTH_MAX_DB   60
 
@@ -741,23 +466,14 @@ int rx_audio_get_strength_db(void) {
     return (int)(rel >= 0.0 ? rel + 0.5 : rel - 0.5);  // round half away from zero
 }
 
-// Largest n this function is ever called with - matches sound.c's
-// MAX_FRAMES (sound_process()'s own clamp before calling here). Sized so
-// the per-block buffering rx_filter.c's stage-3 option needs below never
-// overruns regardless of what n turns out to be, same reasoning as every
-// other per-block buffer in this tree (e.g. sound.c's sidetone_buf).
+// Largest block rx_audio_process() handles - matches sound.c's MAX_FRAMES.
 #define RX_AUDIO_MAX_BLOCK 4096
 
 void rx_audio_process(const double *i_samples, const double *q_samples,
                        int n, int32_t *out, double *uac_out) {
-    // Stage 2's output and both stage-3 candidates, buffered across this
-    // whole call - needed because rx_filter.c's FFT filter is block-based
-    // (one call per RX_FILTER_BLOCK_LEN new samples), unlike stage 1/2/
-    // the elliptic filter/stage 4, which are all per-sample recursive.
-    // Splitting this into two passes (fill these buffers, then pick a
-    // source per sample below) is what lets both stage-3 implementations
-    // run exactly once per sample/block regardless of which one
-    // narrow_filter_impl currently selects.
+    // Two passes. Stages 1-2 and the elliptic filter run per sample into
+    // these buffers; the block-based FFT filter then runs once over
+    // audio_buf; then stage 3 selection and stage 4 run per sample.
     static float audio_buf[RX_AUDIO_MAX_BLOCK];
     static float elliptic_buf[RX_AUDIO_MAX_BLOCK];
     static float fft_buf[RX_AUDIO_MAX_BLOCK];
@@ -766,13 +482,10 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
     if (n > RX_AUDIO_MAX_BLOCK)
         n = RX_AUDIO_MAX_BLOCK;
 
-    // Sideband selection for USB/LSB (rx_audio_set_demod()). Stage 1 only
-    // ever keeps positive-baseband content (0..~3000Hz), so choosing a
-    // sideband is choosing whether to conjugate the input first. With the
-    // raw I/Q inverted (RX_IQ_SPECTRUM_INVERTED), USB content (above
-    // dial) sits at negative baseband and needs conjugating to land in
-    // stage 1's passband; LSB content (below dial) is already positive.
-    // CW is deliberately left exactly as it always was (never conjugated).
+    // Sideband selection. Stage 1 keeps positive baseband, so choosing a
+    // sideband means choosing whether to conjugate the input first. With the
+    // I/Q inverted, USB (above dial) sits at negative baseband and needs it;
+    // LSB doesn't. CW is never conjugated.
     int conjugate = 0;
     if (demod == RX_DEMOD_USB)
         conjugate = RX_IQ_SPECTRUM_INVERTED;
@@ -780,19 +493,16 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
         conjugate = !RX_IQ_SPECTRUM_INVERTED;
 
     for (int k = 0; k < n; k++) {
-        // Stage 1: wide complex bandpass - image rejection only, see the
-        // file header for why this replaced v2's single combined filter.
+        // Stage 1: image-reject bandpass.
         double fi, fq;
         double q_in = conjugate ? -q_samples[k] : q_samples[k];
         ssb_filter_apply(&ssb_state, i_samples[k], q_in, &fi, &fq);
 
-        // Stage 2: mix up to CW_PITCH_HZ and keep only the real part.
-        // Re[(fi + j*fq) * (cos + j*sin)] = fi*cos - fq*sin.
-        // The BFO is always advanced (keeping its phase continuous across
-        // mode changes) but only applied for CW. USB/LSB take the real
-        // part directly - no pitch offset - so a station |d| Hz from dial
-        // comes out at |d| Hz of audio, the SSB convention WSJT-X assumes
-        // when it computes RF = dial + audio.
+        // Stage 2: demod. CW mixes up to CW_PITCH_HZ:
+        //   Re[(fi + j*fq)(cos + j*sin)] = fi*cos - fq*sin
+        // USB/LSB take the real part directly, so audio Hz == |RF - dial|,
+        // which is what WSJT-X assumes. The BFO advances every sample
+        // regardless, keeping its phase continuous across mode changes.
         int bfo_cos, bfo_sin;
         vfo_read_iq(&bfo, &bfo_cos, &bfo_sin);
         double audio;
@@ -805,28 +515,14 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
         }
         audio_buf[k] = (float)audio;
 
-        // Stage 3 (elliptic): narrow real bandpass, the original
-        // single-signal selectivity. Always run, even when bypassed or
-        // when the FFT implementation is selected below, so its history
-        // stays warm and there's no settling-time thump the moment the
-        // operator switches back to it mid-signal - same reasoning as
-        // ever, just no longer the only stage-3 candidate.
+        // Stage 3, elliptic - always run, so its state is warm if selected.
         elliptic_buf[k] = (float)narrow_filter_apply(&narrow_filter, audio);
     }
 
-    // Stage 3 (FFT, docs/ARCHITECTURE.md step 6/7): block-based, so it
-    // runs once per call rather than per sample - and, like the elliptic
-    // filter above, unconditionally (regardless of narrow_filter_impl),
-    // so ITS overlap-save history stays warm too and switching TO it
-    // mid-signal doesn't thump either. Only valid when this call supplies
-    // exactly RX_FILTER_BLOCK_LEN new samples (matches sound.c's
-    // PERIOD_FRAMES by design, same as tx_pipeline.c's identical
-    // requirement) - feeding it anything else would corrupt its
-    // persistent overlap-save history alignment for every call after
-    // this one, so an off-size call just skips it for this one block
-    // (falling back to the elliptic output below, not silence - unlike
-    // sound.c's TX-side guard, an RX audio dropout has no compensating
-    // upside here) rather than risk that.
+    // Stage 3, FFT - block-based, and also always run. rx_filter needs
+    // exactly RX_FILTER_BLOCK_LEN samples (sound.c's PERIOD_FRAMES); any
+    // other size would misalign its overlap-save history, so that block is
+    // skipped and the elliptic output used instead.
     if (n == RX_FILTER_BLOCK_LEN) {
         rx_filter_process_block(rx_fft_filter, audio_buf, fft_buf);
         have_fft = 1;
@@ -853,19 +549,8 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
         else
             narrowed = elliptic_buf[k];
 
-        // Stage 4: AGC - track a smoothed envelope of the RAW input
-        // magnitude sqrt(i^2+q^2) - before even stage 1 runs - see "Why
-        // the AGC samples the raw input, not stage 2 or stage 3" above
-        // (fast attack so a strong signal keying up doesn't clip
-        // before the envelope catches up, slow release so gain doesn't
-        // pump on every CW dit/dah gap), then scale so the envelope
-        // itself sits at AGC_TARGET_AMPLITUDE regardless of how large or
-        // small the raw input actually is - see the constants above for
-        // why a fixed multiplier alone can't work here. The resulting
-        // gain is applied to narrowed (stage 3's output) below, not to
-        // the raw input or to audio - so stage 3's own selectivity still
-        // shapes the final loudness; only the makeup gain's reference
-        // point moved.
+        // Stage 4: AGC on the raw input magnitude (see file header) - fast
+        // attack, slow release - applied to stage 3's output.
         double mag = sqrt(i_samples[k] * i_samples[k] + q_samples[k] * q_samples[k]);
         double alpha = (mag > agc_env) ? agc_attack_alpha : agc_release_alpha;
         agc_env += alpha * (mag - agc_env);
@@ -873,28 +558,12 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
         double gain = AGC_TARGET_AMPLITUDE / (agc_env > 1e-9 ? agc_env : 1e-9);
         if (gain > AGC_MAX_GAIN) gain = AGC_MAX_GAIN;
 
-        // Meter envelope - a SECOND, independent follower, same shape as
-        // the AGC's own above (same attack/release alphas - no new time
-        // constants to tune yet) but tapping |narrowed| instead of the
-        // raw input's complex magnitude. See "Two envelopes, two jobs"
-        // above rx_audio_get_strength_db() for why this can't just reuse
-        // agc_env, and why tapping narrowed specifically (not audio, not
-        // filtered) is what makes it track "what's actually reaching the
-        // speaker" through both stage 1's image rejection and stage 3's
-        // selectivity/bypass state. Purely a read-only observer - it
-        // never feeds back into gain, so none of the closed-loop problems
-        // that ruled out an early-narrower AGC tap (see the file header)
-        // apply here.
+        // S-meter envelope - see meter_env.
         double meter_mag = fabs(narrowed);
         double meter_alpha = (meter_mag > meter_env) ? agc_attack_alpha : agc_release_alpha;
         meter_env += meter_alpha * (meter_mag - meter_env);
 
-        // uac_out: the same post-AGC signal, BEFORE rx_volume - see
-        // rx_audio.h's comment on this parameter for why a second,
-        // volume-independent tap exists at all. Written before out[]
-        // below purely for readability (this is the earlier stage in the
-        // signal path); order doesn't matter since neither write reads
-        // the other.
+        // Post-AGC, pre-volume - see rx_audio.h.
         if (uac_out)
             uac_out[k] = narrowed * gain;
 
