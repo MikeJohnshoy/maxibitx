@@ -791,6 +791,37 @@ for keying an external accessory's PTT, not this input line.)
    not confirmed against a real WSJT-X rigctld session or a QMX packet
    capture — low-stakes for now since nothing reads `RADIO_MODE_DIGITAL`
    yet either.
+   - **Follow-up: `tools/rigctl_panel.py` could never actually select
+     `DIGITAL` at all.** While troubleshooting the FT8 decode-count
+     investigation above (step 9's follow-up), clicking `DIGITAL` in the
+     panel's mode selector appeared to instantly "snap back" to `USB`.
+     Root cause: `hamlib.c`'s `name_to_mode()` only ever recognized this
+     step's own `PKTUSB` (the real Hamlib name for `RADIO_MODE_DIGITAL`,
+     chosen for compatibility with genuine Hamlib clients) - the panel
+     sends `"M DIGITAL 2400"` by name (its own friendlier convention,
+     predating this cross-check), which `name_to_mode()` had never
+     recognized, so `set_mode` rejected it with `RPRT -1` and
+     `radio_set_mode()` was never even called. The very next poll's `m`
+     query then correctly reported whatever mode was already active
+     (typically `USB`) - not a display glitch, the mode change had
+     genuinely never happened, every single time `DIGITAL` was clicked.
+     **Fixed on both ends of the mismatch:** `name_to_mode()` now also
+     accepts `"DIGITAL"` as an alias for `RADIO_MODE_DIGITAL` (alongside
+     `"PKTUSB"`, unchanged); `mode_to_name()` still reports `"PKTUSB"` on
+     the way out (kept for real Hamlib-client compatibility, same
+     reasoning as when this step chose it), so `rigctl_panel.py`'s own
+     `apply_mode()` now maps a `"PKTUSB"` reply back to displaying
+     `"DIGITAL"` - the half of the fix that makes the radio button
+     actually hold once selected, instead of matching nothing in its own
+     name list and freezing on whatever was last shown. Verified with an
+     isolated test replicating both functions' exact logic (case
+     sensitivity, the unchanged CW/USB/LSB/PKTUSB paths, and a full
+     click→set_mode→poll→display round trip matching the real sequence)
+     plus the panel's own patched `apply_mode()` logic in Python -
+     real end-to-end verification needs the actual gadget/rigctld
+     running, not available in this environment. Full rebuild clean
+     under `-Wall -Wextra`; every existing DSP test harness still
+     passes unchanged (none of this touches `rx_audio.c`).
 4. **Done, bench-only.** Wrote a new, parallel shared TX pipeline module
    (`src/tx_pipeline.c`/`.h`) implementing §5's plan for CW's own slice
    of it: `fft_filter.c`'s passband filter (300-3000Hz, beta 5 — the
@@ -1938,6 +1969,79 @@ for keying an external accessory's PTT, not this input line.)
      below, unchanged from before this step - a level problem here is a
      different, still-open question from whether the audio arrives at
      all).
+   - **Follow-up: on-air report of ~10x fewer FT8 decodes than a raw-I/Q
+     path - chased to a real bug and fixed.** With audio and rig control
+     both confirmed (steps 11/12), the operator compared this gadget's
+     WSJT-X decode count directly against SparkSDR consuming raw I/Q
+     over `hpsdr_p1` (`04_remote_control_and_iq_output.md`) into its own
+     copy of WSJT-X: SparkSDR's path sees roughly 10x more FT8 signals.
+     Chased on the bench in
+     [`rx_uac_out_digital_mode_bandwidth.md`](dsp_design_notes/rx_uac_out_digital_mode_bandwidth.md).
+     A first pass measured `uac_out`'s actual passband by sweeping a
+     synthetic complex tone across dial offsets (feeding
+     `rx_audio_process()` the same way `rx_audio_test.c` does), and
+     pointed at stage 3's narrow filter defaulting ON (nothing ties
+     `narrow_filter_enabled` to `radio_get_mode() ==
+     RADIO_MODE_DIGITAL`) as the leading suspect - squeezing `uac_out`
+     to ~200Hz instead of FT8's ~2.7kHz. The operator then confirmed
+     both filters were already off during the original comparison,
+     ruling that out, and asked directly whether stage 1 could use one
+     design for both CW and digital modes. It already can - CW's own
+     selectivity lives in stage 3, not stage 1, so there's no real
+     conflict, and the bench sweep's own OFF-state numbers already
+     showed stage 1 passing a clean ~3kHz one-sided band, close to what
+     FT8 needs. Chasing that question down instead surfaced the real
+     bug: `usb_gadget.c`'s `UAC_RX_AUDIO_SCALE` mapped `rx_audio.c`'s
+     `AGC_TARGET_AMPLITUDE` directly onto 16-bit PCM full scale with
+     zero headroom - so with stage 3 off (required for FT8), a single
+     lone steady tone alone already clipped 27% of the time, worsening
+     with more simultaneous tones present (measured to +6.4dB over the
+     old full-scale reference at 60 tones) - real FT8 band conditions,
+     and a far better-quantified explanation for a 10x deficit than any
+     filter shape, since clipping sprays intermodulation splatter across
+     the whole sub-band and degrades every decode on the band at once,
+     not just ones outside some passband. **Fixed:** `UAC_RX_AUDIO_SCALE`
+     now carries a 15dB headroom margin (`UAC_RX_AUDIO_HEADROOM`),
+     isolated entirely to `usb_gadget.c` - `rx_audio.c`'s AGC and local
+     CW listening (`out[]`) are untouched. Re-measured: the single-tone
+     27% clip rate and the 20-tone 1.86% clip rate both drop to 0.00%,
+     with 8.6dB of margin still spare at 60 simultaneous tones. Full
+     rebuild clean under `-Wall -Wextra`; every existing DSP test
+     harness (`test-rx-audio`, `test-fft-filter`, `test-rx-filter`,
+     `test-upsample48k`, `test-tx-pipeline`) still passes unchanged -
+     none link `usb_gadget.c`, so this confirms the DSP chain itself
+     wasn't touched. Code-complete; on-air re-confirmation of the
+     original SparkSDR comparison is still outstanding - see the linked
+     note's §9 for what's still open.
+   - **Follow-up: the actual root cause - a CW-only demod receiving the
+     wrong sideband. Fixed.** The clipping fix above was real but not
+     the main problem. A simultaneous on-air A/B (20m, 14.074.000,
+     `DIGITAL`) had SparkSDR on `hpsdr_p1.c` I/Q decoding ~30 stations
+     per interval while WSJT-X on this gadget's audio decoded one or
+     two - both fed the *identical* `sound.c` I/Q, which put the fault
+     squarely inside `rx_audio.c`. `rx_audio.c` was a CW monitor in
+     every mode: stage 2 always added a 700Hz `CW_PITCH_HZ` offset, and
+     stage 1 always kept positive baseband - which, because maxibitx's
+     raw I/Q is spectrally inverted (a station `+d` above dial arrives
+     at `-d`; `tools/rigctl_panel.py` had documented and corrected this
+     for its own display all along), meant the *lower* sideband. Real
+     FT8 above dial only leaked through stage 1's -40..-75dB stopband,
+     folded around 700Hz; FT8 below dial arrived mirrored and
+     undecodable. **Fixed:** `rx_audio_set_demod()` (`RX_DEMOD_CW`/
+     `USB`/`LSB`), driven from `radio_set_mode()`, with `DIGITAL` →
+     USB. USB/LSB pick their sideband with one input conjugation
+     (`RX_IQ_SPECTRUM_INVERTED`) and demodulate with no BFO offset, so
+     audio == `|RF - dial|`. CW is bit-identical to before. The
+     correction is deliberately not in `sound.c`, which would also flip
+     SparkSDR's working I/Q. **On-air confirmed (2026-09-21):** a +100Hz
+     dial step moves signals left in the audio WSJT-X waterfall (correct
+     USB sense, so the constant is right), and WSJT-X on the gadget's
+     audio decodes on par with SparkSDR in a simultaneous A/B (~40 each
+     in one 20m interval, SNRs typically within 1dB - was ~30 vs. 1-2
+     before). The original ~10x deficit is closed. Full record, including a misdesigned test that
+     briefly got this hypothesis wrongly dismissed:
+     [`rx_uac_out_digital_mode_bandwidth.md`](dsp_design_notes/rx_uac_out_digital_mode_bandwidth.md)
+     §10.
 
 10. Power/ALC calibration for voice, per §9.
 
@@ -2130,3 +2234,39 @@ for keying an external accessory's PTT, not this input line.)
       whether WSJT-X's split operation works, since Hamlib reaches split
       through `FR`/`FT`/`SP`, none of which this surface implements yet -
       split should be left off in WSJT-X until it does.
+    - **Follow-up: on-air confirmed, but not the way this step
+      expected.** WSJT-X's rig control kept failing even after the `IF`
+      fix above, with the same symptom on both sides: WSJT-X's own CAT
+      Settings refused to save, and FLRig's frequency changes never
+      reached WSJT-X. The cause was not this surface at all - WSJT-X's
+      own Hamlib rig type had been pointed directly at the same COM port
+      FLRig already held open, and a serial port is exclusive-access on
+      Windows. Neither app fails loudly when this happens; both just
+      look uncommunicative. The fix was entirely on the Windows/app side:
+      point WSJT-X's Rig dropdown at its dedicated `Flrig` entry (an
+      XML-RPC relay to FLRig, not a second serial connection) instead of
+      at a Kenwood/Hamlib serial type, so only FLRig ever opens the port.
+      Once reconfigured that way, frequency control and audio both work
+      end to end on real Windows 11 + WSJT-X hardware - the first
+      complete on-air confirmation of this gadget's whole `DIGITAL`-mode
+      bridge (step 9's audio, step 11's mono conversion, and this step's
+      `IF` fix, all three exercised together for the first time).
+      **Follow-up, on-air confirmed: WSJT-X's own rig control also works
+      pointed directly at this gadget's serial Kenwood CAT, with FLRig
+      entirely out of the loop.** So the `IF` fix above was the whole
+      story for direct CAT after all - the FLRig-relay workaround was
+      necessary only because of the unrelated port-contention bug
+      immediately above, not because WSJT-X's own Hamlib client needed
+      anything different from what FLRig gets. Two independent Hamlib
+      clients (FLRig, WSJT-X) now both drive this surface correctly.
+      **Still not confirmed:** `hamlib.c`'s separate rigctld surface (TCP
+      4532) has not been tried as WSJT-X's `NET rigctl` rig type at all -
+      untested either with or without FLRig in the picture, since direct
+      serial CAT already covers the need. See
+      `10_external_digital_modes_wsjtx.md` for the operator-facing setup
+      steps and the two other things confirmed on the same bench pass
+      (the gadget enumerates as "Microphone (Source/Sink)"/"Speakers
+      (Source/Sink)", never as "sBitx Audio," by name; and it advertises
+      exactly one audio format with no alternates, which is why opening
+      it by name can fail even when Windows' generic Sound Mapper path
+      to the same device works fine).
