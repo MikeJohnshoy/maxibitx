@@ -1,5 +1,14 @@
 // sound.c
-// Minimal ALSA full-duplex driver for minibitx.
+// ALSA full-duplex audio thread and WM8731 codec control for maxibitx.
+//
+// Per ~10.7ms block (PERIOD_FRAMES at 96kHz):
+//   capture:  L = RX IF from the crystal filter, R = mic
+//   RX:       mix to I/Q, antialias, hand the I/Q to hpsdr_p1.c and
+//             iq_stream.c, demodulate via rx_audio.c -> local speaker, and
+//             (decimated to 48kHz) -> the USB audio gadget
+//   TX:       CW tone, mic, or WSJT-X audio -> tx_pipeline.c -> exciter
+//   playback: L = local speaker (RX audio, or TX sidetone/monitor),
+//             R = exciter feed
 
 #include "antialias.h"
 #include "cw.h"
@@ -31,66 +40,36 @@
 #define PERIOD_FRAMES 1024 /* frames per period (matches old cfg) */
 #define MAX_FRAMES 4096
 
-// WM8731 "Line" input path is a plain on/off switch, not a gain control
-// (bench-confirmed: `amixer -c 0 sget 'Line'` shows `Capabilities:
-// cswitch` only) - kept as a named constant so it reads as a deliberate
-// boolean rather than a stray literal. RX_CAPTURE_GAIN_PERCENT below is
-// the real analog gain stage.
+// WM8731 'Line' is an on/off switch, not a gain (`amixer -c 0 sget
+// 'Line'` shows cswitch only). The real analog gain is
+// RX_CAPTURE_GAIN_PERCENT.
 #define RX_LINE_INPUT_ON 1
 
-// WM8731 'Capture' - the real analog gain stage ahead of the ADC (no RF
-// preamp anywhere in this RX chain). sound_mixer() maps this ALSA
-// percent (0-100) onto the control's real 0-31 raw range
-// (`percent * 31 / 100`). 70 (raw step 21, ~-3.0dB) is a bench-derived
-// choice, not yet a final calibration - see
-// docs/dsp_design_notes/rx_gain_and_level_calibration.md for the data
-// behind it, and rx_clip_check() below for the ongoing safety net if
-// some future signal ever proves it too hot.
+// WM8731 'Capture': the only analog gain ahead of the ADC (there's no RF
+// preamp). sound_mixer() maps percent onto the 0-31 raw range; 70 is step
+// 21, ~-3.0dB. Bench-derived, not a final calibration - see
+// docs/dsp_design_notes/rx_gain_and_level_calibration.md. rx_clip_check()
+// warns if it turns out too hot.
 #define RX_CAPTURE_GAIN_PERCENT 70
 
-// WM8731 'Mic' - the capture gain ahead of the R channel's mic input
-// (mic_buf, audio_loop() below), needed now that USB/LSB TX actually
-// reads it (see the cw_tx_active() branch below and MIC_TX_INPUT_SCALE
-// above) - previously left at 0 (muted) since nothing consumed it.
-// Picked as a plain starting midpoint, the same way RX_CAPTURE_GAIN_PERCENT
-// started at a bench guess before real-hardware listening refined it;
-// unlike "Line" above, 'Mic' hasn't been bench-confirmed yet to even be
-// a real gain control rather than a switch (see RX_LINE_INPUT_ON's
-// comment for that exact gotcha on a different control) - worth an
-// `amixer -c 0 sget 'Mic'` check before trusting this number.
+// WM8731 'Mic' gain for the R (mic) capture channel. A starting midpoint,
+// not calibrated - and possibly inert on this board: 'Input Mux' is fixed
+// to 'Line', so the mic most likely reaches the ADC on Line-In RIGHT,
+// making 'Capture' the real mic level control (see
+// sound_set_rx_capture()). Check with `amixer -c 0 sget 'Mic'`.
 #define MIC_CAPTURE_GAIN_PERCENT 50
 
-// WM8731 'Master' is a stereo control with independent L/R volume
-// registers (confirmed both from the sbitx hardware docs and from
-// sound_mixer_dump()'s readback) - and L/R genuinely go to two different
-// physical destinations here, not two speakers of the same signal:
-//   L (FRONT_LEFT):  local speaker/headphone audio amp - cw.c's TX
-//                     sidetone and rx_audio.c's RX demod.
-//   R (FRONT_RIGHT): the mainboard's diode mixer, which upconverts the
-//                     DSP's low-IF TX carrier for the actual RF chain -
-//                     see TX_MASTER_VOL below.
-// There is no reason these should ever have shared one gain value, which
-// is exactly the bug the old shared, single-value "Master" control had:
-// every TX/RX transition clobbered whichever of these two purposes
-// wasn't currently active. LOCAL_SPEAKER_GAIN_PERCENT only ever governs
-// the L channel now, set once at startup (see setup_audio_codec()) and
-// never touched again - not muted/restored around TX like the R channel
-// legitimately needs to be (see sound_set_tx_drive() and radio.c's
-// TX_MASTER_VOL), and NOT touched by rx_audio.c's rx_volume/the CAT `AG`
-// command either - that's a separate, purely digital multiplier applied
-// long before this analog stage (see rx_audio.c's rx_volume), so "100%"
-// on that control has never meant "as loud as this codec output can go".
-//
-// Raised from the original 70 to 100 (2026-09, on-air report: "100%
-// volume" still too quiet) - safe to run wide open here because it's
-// pure analog output gain sitting downstream of rx_audio.c's own
-// digital headroom (AGC_TARGET_AMPLITUDE rides at only ~25% of the
-// int32 clamp specifically so peaks don't clip - see rx_audio.c) -
-// removing attenuation at this stage doesn't touch that margin at all.
-// If 100 still isn't loud enough on real hardware, the next lever is
-// rx_audio.c's AGC_TARGET_AMPLITUDE itself (raising it trades away some
-// of that peak headroom, so it needs on-air listening for clipping, not
-// just a bench check).
+// WM8731 'Master' has independent L/R volumes, and here they feed
+// different things:
+//   L (FRONT_LEFT):  the local speaker/headphone amp - RX audio, and the
+//                    TX sidetone/monitor
+//   R (FRONT_RIGHT): the mainboard's diode mixer, i.e. the TX exciter feed
+// so the two are never set together. L is set once at startup, to this
+// value, and never touched again. R is 0 except during TX
+// (sound_set_tx_drive(), radio.c's TX_MASTER_VOL). Listening volume is
+// rx_audio.c's digital rx_volume (see RX_VOLUME_MAX), upstream of this
+// analog stage - which is why this runs wide open: it costs no digital
+// headroom.
 #define LOCAL_SPEAKER_GAIN_PERCENT 100
 
 /* ------------------------------------------------------------------ */
@@ -103,33 +82,20 @@
 #define TX_SAMPLE_HEADROOM (1000000000.0 / (TX_DRIVE * HW_DEFAULT_TX_SCALE))
 #define TX_SAMPLE_CLAMP 2000000000.0 // stay well inside int32 range
 #define TX_GAIN_CORRECTION 0.045
-// Fixed sidetone PCM peak (left channel only - never reaches the PA),
-// deliberately independent of TX_GAIN_CORRECTION - see
-// docs/03_tx_processing_pipeline.md for why that coupling used to bite.
+// Fixed sidetone PCM peak (left channel only - never reaches the PA).
+// Deliberately independent of TX_GAIN_CORRECTION; see
+// docs/03_tx_processing_pipeline.md.
 #define SIDETONE_PEAK_AMPLITUDE 10000000.0
 
-// Converts a raw S32_LE mic capture sample (mic_buf[i], full int32
-// range) into tx_pipeline.c's expected roughly-[-1,1] input range, for
-// USB/LSB TX (see the cw_tx_active() branch below) - the mic-audio
-// counterpart to cw.c's cw_get_sample(), which is already exactly
-// [-1,1] by construction since it's a synthetic tone. Unlike that
-// tone, real mic level depends on the physical mic, the analog gain
-// ahead of the ADC, and how hard the operator talks - this maps
-// full-scale straight to 1.0 as a fixed, purely mechanical unit
-// conversion, NOT itself a tunable gain (that's mic_tx_gain below,
-// same "keep the unit conversion and the operator-adjustable gain as
-// two separate things" split rx_audio.c's rx_volume/AGC already use).
+// Fixed unit conversion: a raw S32_LE mic sample (full int32 range) to
+// tx_pipeline.c's ~[-1,1] input, full scale = 1.0 - the mic counterpart to
+// cw_get_sample()'s [-1,1] tone. Not a gain; that's mic_tx_gain below.
 #define MIC_TX_INPUT_SCALE (1.0 / 2147483648.0)
 
-// mic_tx_gain: live multiplier on top of MIC_TX_INPUT_SCALE above -
-// see sound_set_mic_tx_gain()'s comment (sound.h) for why this is a
-// runtime control rather than another #define needing a rebuild per
-// trial. Plain double, no lock: written from rigctld's connection
-// thread (hamlib.c's L MICGAIN), read once per TX audio block from the
-// audio thread - the exact same "eventually consistent is fine for a
-// human-timescale control knob" convention rx_audio.c's rx_volume
-// already relies on (see its own comment), not a data race that
-// matters at these update rates.
+// Live mic gain on top of MIC_TX_INPUT_SCALE (see sound.h). A plain
+// double, no lock: written by rigctld's thread, read once per block by the
+// audio thread - fine for a human-speed control, same as rx_audio.c's
+// rx_volume.
 #define SOUND_MIC_TX_GAIN_MAX 64.0
 static double mic_tx_gain = 1.0;
 
@@ -151,20 +117,10 @@ static snd_pcm_t *pcm_playback = NULL;
 static pthread_t audio_thread;
 static volatile int g_running = 0;
 
-// The shared FFT TX pipeline (tx_pipeline.c) - one persistent instance,
-// created once at sound_thread_start() and freed at sound_thread_stop(),
-// same lifetime pattern as pcm_capture/pcm_playback above. Owns real
-// FFTW plans (FFTW_MEASURE - a real one-time setup cost, see
-// tx_pipeline.c/fft_filter.c's own comments on why), so it must not be
-// created/destroyed per TX burst. CW and USB/LSB now share this one
-// instance (docs/ARCHITECTURE.md build order step 8) - same passband
-// filter either way (tx_pipeline.c's filter_tune() call has no
-// sideband-dependent term), only the `i_sample` source (cw.c's tone,
-// real mic audio, or now WSJT-X's own generated tone via
-// usb_gadget.c's uac_pull_audio_tx()/upsample48k.c for
-// RADIO_MODE_DIGITAL) and the sideband-zero direction passed to
-// tx_pipeline_process_block() differ per audio_loop()'s TX branch
-// below.
+// The shared TX pipeline (tx_pipeline.c): one instance for the process
+// lifetime, since its FFTW plans are expensive to build. CW, USB/LSB and
+// DIGITAL all use it; only the input source and the sideband differ (see
+// audio_loop()).
 static struct tx_pipeline *cw_tx_pipeline = NULL;
 
 /* ------------------------------------------------------------------ */
@@ -186,10 +142,9 @@ void sound_mixer(char *card_name, char *element, int make_on) {
   snd_mixer_elem_t *elem = snd_mixer_find_selem(handle, sid);
 
   if (!elem) {
-    // Silent no-op used to hide a real class of bug: a misspelled or
-    // absent element name here means every call below is a no-op that
-    // *looks* like it succeeded - see sound_mixer_dump() below for a
-    // way to actually check what an element supports on a given board.
+    // Say so: a misspelled or absent element would otherwise turn every call
+    // below into a silent no-op. sound_mixer_dump() shows what an element
+    // actually supports.
     fprintf(stderr,
             "sound_mixer: '%s' not found on %s (check `amixer -c 0 scontrols`)\n",
             element, card_name);
@@ -197,16 +152,8 @@ void sound_mixer(char *card_name, char *element, int make_on) {
     return;
   }
 
-  // Independent ifs, not else-if: a single ALSA "simple" element can
-  // combine a mute switch AND a volume control - true of most
-  // headphone/speaker outputs (e.g. "Master" here), which pairs a
-  // "Playback Volume" register with a separate mute bit under one
-  // simple-mixer name. Treating switch and volume as mutually exclusive
-  // (the previous else-if chain) meant an element with both only ever
-  // got its switch toggled - the volume register was silently never
-  // touched, left wherever the codec's power-on reset put it, no matter
-  // what percent was asked for. Every capability the element actually
-  // has now gets set.
+  // Independent ifs, not else-if: one ALSA simple element can have both a
+  // switch and a volume (e.g. 'Master'), and each needs setting.
   if (snd_mixer_selem_has_playback_switch(elem))
     snd_mixer_selem_set_playback_switch_all(elem, make_on != 0);
   if (snd_mixer_selem_has_capture_switch(elem))
@@ -225,14 +172,11 @@ void sound_mixer(char *card_name, char *element, int make_on) {
   snd_mixer_close(handle);
 }
 
-// One-shot diagnostic dump of a mixer element's actual capabilities and
-// current value(s) - not part of the normal control-setting path above,
-// just a way to print ground truth about what a given ALSA element
-// really supports on this specific board/kernel, since a wrong name or
-// an unexpected capability combination otherwise fails (or half-
-// succeeds) silently. Called once after setup_audio_codec() below for
-// "Master" - safe to call anywhere else too, e.g. from a debugging
-// session, since it opens/closes its own mixer handle each time.
+// Diagnostic: prints an element's capabilities and current values - a way
+// to check what a control really supports on a given board, since a wrong
+// name or an unexpected capability otherwise fails silently. Not called
+// in normal operation; it opens its own mixer handle, so it's safe to call
+// from anywhere while debugging.
 void sound_mixer_dump(char *card_name, char *element) {
   snd_mixer_t *handle;
   snd_mixer_selem_id_t *sid;
@@ -279,14 +223,10 @@ void sound_mixer_dump(char *card_name, char *element) {
   snd_mixer_close(handle);
 }
 
-// Sets one stereo channel of a playback-volume element independently -
-// unlike sound_mixer()'s *_all() calls, which drive L and R together.
-// "Master" is the reason this exists: its L and R outputs feed two
-// completely different physical destinations (see LOCAL_SPEAKER_GAIN_
-// PERCENT's comment above), so they need independent gain, not a shared
-// one. Falls back to doing nothing (with a warning) if the element turns
-// out not to have a playback volume at all - see sound_mixer_dump() to
-// check that assumption on a given board.
+// Sets one channel of a playback-volume element (sound_mixer() sets both).
+// Needed for 'Master', whose L and R feed different things (see
+// LOCAL_SPEAKER_GAIN_PERCENT). Warns and does nothing if the element has
+// no playback volume.
 static void sound_mixer_channel(char *card_name, char *element,
                                  snd_mixer_selem_channel_id_t channel,
                                  int percent) {
@@ -323,16 +263,10 @@ static void sound_mixer_channel(char *card_name, char *element,
   snd_mixer_close(handle);
 }
 
-// Same per-channel idea as sound_mixer_channel() above, but for a
-// CAPTURE volume - needed now that "Capture" feeds two genuinely
-// different destinations depending on channel (rx_buf/L vs mic_buf/R -
-// see sound_set_rx_capture()'s comment below), the exact same reason
-// "Master" needed a playback-side per-channel split already. Logs (and
-// otherwise no-ops) if this element rejects an asymmetric per-channel
-// write - e.g. a single shared/ganged capture register that ALSA
-// exposes as stereo but doesn't actually let differ per channel - since
-// that would silently defeat the whole point of calling this instead of
-// sound_mixer()'s plain *_all() version.
+// The capture-side counterpart of sound_mixer_channel(), for 'Capture',
+// whose L (RX) and R (mic) channels must be set independently (see
+// sound_set_rx_capture()). Warns if the element rejects a per-channel
+// write, since a ganged register would defeat the point.
 static void sound_mixer_capture_channel(char *card_name, char *element,
                                           snd_mixer_selem_channel_id_t channel,
                                           int percent) {
@@ -382,32 +316,14 @@ static void sound_mixer_capture_channel(char *card_name, char *element,
 /* ------------------------------------------------------------------ */
 void setup_audio_codec(void) {
   sound_mixer("hw:0", "Input Mux",
-              0); // 'Line In' (bench-confirmed - see RX_CAPTURE_GAIN_PERCENT's comment above)
-  sound_mixer("hw:0", "Line", RX_LINE_INPUT_ON); // just un-mutes the line path - see comment above
-  sound_mixer("hw:0", "Capture", RX_CAPTURE_GAIN_PERCENT); // both channels' starting gain - see
-                                                            // sound_set_rx_capture()'s comment for
-                                                            // why only L gets touched from here on
-  sound_mixer("hw:0", "Mic", MIC_CAPTURE_GAIN_PERCENT); // mic input gain - see its comment above.
-                                                         // Genuinely unconfirmed whether this does
-                                                         // anything real on this board at all -
-                                                         // 'Input Mux' is locked to 'Line' (above),
-                                                         // and if that means the codec's OWN internal
-                                                         // mic preamp/mux path is never connected to
-                                                         // the ADC in the first place (common for a
-                                                         // single-mux codec input stage), this
-                                                         // control could be entirely inert - see
-                                                         // sound_set_rx_capture()'s comment for why
-                                                         // 'Capture' (not 'Mic') looks like the more
-                                                         // likely real point of control for mic level
-                                                         // on this specific board.
+              0); // 'Line In' (bench-confirmed)
+  sound_mixer("hw:0", "Line", RX_LINE_INPUT_ON); // un-mutes the line path (a switch)
+  sound_mixer("hw:0", "Capture", RX_CAPTURE_GAIN_PERCENT); // both channels; afterwards only
+                                                            // L changes (sound_set_rx_capture())
+  sound_mixer("hw:0", "Mic", MIC_CAPTURE_GAIN_PERCENT); // possibly inert - see its #define
 
-  // "Master" L/R are independent - see LOCAL_SPEAKER_GAIN_PERCENT's
-  // comment above. L (local speaker/headphone) is set once, here, for
-  // good - nothing in the TX path touches it again, though
-  // sound_set_local_monitor() below is there for a future real volume
-  // control. R (the exciter feed) starts muted; radio.c's
-  // radio_tx_apply() is the only thing that ever raises it, only for the
-  // duration of an actual TX burst - see sound_set_tx_drive() below.
+  // 'Master' L (local speaker) is set once, here. R (exciter feed) starts
+  // muted and is raised only during TX - see LOCAL_SPEAKER_GAIN_PERCENT.
   sound_set_local_monitor(LOCAL_SPEAKER_GAIN_PERCENT);
   sound_mixer_channel("hw:0", "Master", SND_MIXER_SCHN_FRONT_RIGHT, 0);
 
@@ -416,60 +332,30 @@ void setup_audio_codec(void) {
   sound_mixer("hw:0", "Output Mixer Mic Sidetone", 0);
 }
 
-// Mute/restore the WM8731 'Capture' gain around a TX burst - called
-// from radio.c's radio_tx_apply() on every TX/RX transition. See
-// docs/dsp_design_notes/rx_gain_and_level_calibration.md §8 for why
-// (protects the ADC from whatever bleeds into RX during TX) and the
-// exact ordering this depends on.
+// Mute/restore the RX side of 'Capture' around a TX burst. radio.c's
+// radio_tx_apply() mutes it before any TX RF exists and restores it once
+// the relay has settled, protecting the ADC from TX energy
+// (rx_gain_and_level_calibration.md §8).
 //
-// LEFT (RX/Line-in) channel only, as of docs/ARCHITECTURE.md build
-// order step 8's first real SSB test - deliberately NOT the whole
-// element any more. Before this, this function called plain
-// sound_mixer("hw:0", "Capture", ...), which uses *_all() and writes
-// the identical value to BOTH channels - harmless while "Capture" only
-// ever fed rx_buf/L, but step 8 made mic_buf/R a second, genuine
-// consumer of this exact same ALSA element (the board almost certainly
-// routes the physical microphone onto the codec's Line-In-RIGHT pin
-// rather than through the codec's own separate internal mic preamp -
-// 'Input Mux' being bench-confirmed locked to 'Line', not 'Mic', is
-// what points at this - see setup_audio_codec()'s 'Mic' comment).
-// Left unfixed, every single TX burst zeroed mic_buf's real analog
-// level the instant it started (radio_tx_apply() calls this before
-// PTT/the relay/either clock), silently defeating the entire USB/LSB
-// mic path no matter what MIC_TX_INPUT_SCALE or MIC_CAPTURE_GAIN_PERCENT
-// were set to - a real, first-on-air-test bug (ARCHITECTURE.md §10 step
-// 8's on-air follow-up), not a hypothetical. RIGHT (mic) is now left
-// alone through every TX/RX transition, in every mode - harmless for CW
-// (which never reads mic_buf), and exactly what USB/LSB need. Depends on
-// this ALSA element actually supporting independent per-channel capture
-// volume rather than a single shared/ganged register -
-// sound_mixer_capture_channel() logs a warning if a per-channel write is
-// rejected, which would mean this needs a different fix (e.g. skipping
-// the mute entirely in USB/LSB) instead.
+// LEFT channel only: the mic reaches the ADC on the RIGHT channel of this
+// same control, so muting both would silence USB/LSB TX audio
+// (ARCHITECTURE.md §10 step 8). Relies on 'Capture' accepting per-channel
+// writes; sound_mixer_capture_channel() warns if it doesn't.
 void sound_set_rx_capture(int enable) {
   sound_mixer_capture_channel("hw:0", "Capture", SND_MIXER_SCHN_FRONT_LEFT,
                                enable ? RX_CAPTURE_GAIN_PERCENT : 0);
 }
 
-// Sets "Master"'s LEFT channel only - the local speaker/headphone output
-// (see LOCAL_SPEAKER_GAIN_PERCENT's comment above). setup_audio_codec()
-// calls this once at startup and nothing else calls it today; exposed as
-// a real percent-taking function (not just an on/off enable) so a future
-// physical volume control has a natural place to plug in, without
-// needing to touch anything TX-related.
+// Sets 'Master' LEFT only - the local speaker (see
+// LOCAL_SPEAKER_GAIN_PERCENT). Called once at startup; public so a future
+// physical volume control can use it.
 void sound_set_local_monitor(int percent) {
   sound_mixer_channel("hw:0", "Master", SND_MIXER_SCHN_FRONT_LEFT, percent);
 }
 
-// Sets "Master"'s RIGHT channel only - the exciter feed (see
-// LOCAL_SPEAKER_GAIN_PERCENT's comment above for why this is the right
-// channel and not the whole control). Called from radio.c's
-// radio_tx_apply() with TX_MASTER_VOL while transmitting and 0 as the
-// relay drops. Deliberately leaves the LEFT channel (local speaker/
-// headphone - cw.c's sidetone, rx_audio.c's RX demod) completely alone;
-// unlike the old shared-"Master" design, there's no restore-after-TX
-// step needed here because nothing about TX ever touches it in the
-// first place.
+// Sets 'Master' RIGHT only - the exciter feed. radio_tx_apply() sets
+// TX_MASTER_VOL for TX and 0 as the relay drops. Never touches LEFT, so
+// there's nothing to restore after TX.
 void sound_set_tx_drive(int percent) {
   sound_mixer_channel("hw:0", "Master", SND_MIXER_SCHN_FRONT_RIGHT, percent);
 }
@@ -501,7 +387,7 @@ static snd_pcm_t *open_pcm(const char *dev, snd_pcm_stream_t dir) {
   snd_pcm_uframes_t period = PERIOD_FRAMES;
   snd_pcm_hw_params_set_period_size_near(pcm, hw, &period, 0);
 
-  /* 4 periods ~ 85 ms buffer - enough headroom for a Pi */
+  /* 4 periods = ~43ms of buffer */
   snd_pcm_uframes_t buffer = period * 4;
   snd_pcm_hw_params_set_buffer_size_near(pcm, hw, &buffer);
 
@@ -519,11 +405,10 @@ static snd_pcm_t *open_pcm(const char *dev, snd_pcm_stream_t dir) {
   return pcm;
 }
 
-/* Recover from an ALSA xrun/suspend. Returns 0 on success. Both call
- * sites must check this return value and stop retrying if it's still
- * negative - see docs/08_troubleshooting_and_bringup.md for the retry-
- * storm bug that taught us that, and why a plain prepare() isn't
- * always enough (the drop()+prepare() fallback below is for that). */
+/* Recover from an ALSA xrun/suspend. Returns 0 on success. Callers must
+ * stop retrying if it still fails (docs/08_troubleshooting_and_bringup.md).
+ * drop()+prepare() is the fallback for when prepare() alone isn't
+ * enough. */
 static int xrun_recover(snd_pcm_t *pcm, int err) {
   if (err == -EPIPE) { /* underrun / overrun */
     err = snd_pcm_prepare(pcm);
@@ -596,13 +481,9 @@ static void xrun_note(struct xrun_tracker *t, const char *label) {
 /* ------------------------------------------------------------------ */
 /*  IQ mixing                                                         */
 /* ------------------------------------------------------------------ */
-// Permanent, always-compiled clip guard on the raw ADC sample ("rf"
-// below, the one signal that reflects RX_CAPTURE_GAIN_PERCENT directly)
-// - successor to a temporary bench diagnostic, see
-// docs/dsp_design_notes/rx_gain_and_level_calibration.md §6-7 for that
-// history and why this checks only for the rising edge of a clip
-// (nothing periodic). One fabs() and one compare per sample - negligible
-// next to the mixing/FIR-filter arithmetic already done below.
+// Clip guard on the raw ADC sample - the one signal RX_CAPTURE_GAIN_PERCENT
+// acts on directly. Logs only the rising edge of a clip. Costs one fabs()
+// and one compare per sample. See rx_gain_and_level_calibration.md §7.
 static int rx_clipping = 0;
 
 static void rx_clip_check(double rf) {
@@ -622,23 +503,14 @@ static void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output
   static double i_samples[4096];
   static double q_samples[4096];
   static int vfo_ready = 0;
-  // filter I and Q with independent history per rail, same coefficients (antialias.c) -
-  // zero-initialized once, persists across calls (each call is one
-  // ~10.7ms block, not a fresh signal).
+  // Antialias filter state per rail (antialias.c), persistent across blocks.
   static struct antialias_state aa_i;
   static struct antialias_state aa_q;
-  // 96kHz->48kHz decimation for usb_gadget.c's UAC2 gadget only (see
-  // docs/dsp_design_notes/usb_uac_decimation_design.md) - now applied to
-  // rx_audio.c's real demodulated audio tap (uac_audio[] below), not raw
-  // I/Q (the gadget no longer carries I/Q at all - see usb_gadget.h).
-  // One rail, not two: real audio has no I/Q pairing to preserve.
-  // hpsdr_p1.c keeps getting native 96kHz IQ unchanged; only the USB
-  // path is decimated.
+  // 96kHz -> 48kHz decimation of the demodulated audio for the USB audio
+  // gadget (usb_uac_decimation_design.md). hpsdr_p1.c and iq_stream.c get
+  // the native 96kHz I/Q.
   static struct decim48k_state dec_audio;
-  // rx_audio_process()'s pre-rx_volume/post-AGC tap (rx_audio.h's
-  // uac_out parameter) - this block's audio at the native 96kHz rate,
-  // before decim48k_apply() below brings it down to what the gadget
-  // advertises.
+  // rx_audio_process()'s uac_out tap (post-AGC, pre-volume), still at 96kHz.
   static double uac_audio[4096];
 
   (void)input_mic;
@@ -661,42 +533,30 @@ static void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output
     double rf = (double)s / 2147483648.0;
     rx_clip_check(rf);
 
-    // mix to IQ
+    // Mix to I/Q. The result is spectrally inverted (a station +d Hz above
+    // dial lands at -d); consumers compensate - see rx_audio.c's
+    // RX_IQ_SPECTRUM_INVERTED.
     i_samples[n] = rf * ((double)lo_i / 1073741824.0);
     q_samples[n] = rf * ((double)lo_q / 1073741824.0);
 
-    // Anti-alias lowpass, applied to I and Q right after mixing (see
-    // docs/dsp_design_notes/antialias_filter_design.md). Helps clean up
-    // the self-image near the +-48kHz Nyquist edges, without touching the
-    // real signal content well within the crystal filter's passband.
+    // Antialias lowpass per rail (antialias_filter_design.md): removes the
+    // self-image near +-48kHz without touching the crystal filter passband.
     i_samples[n] = antialias_apply(&aa_i, i_samples[n]);
     q_samples[n] = antialias_apply(&aa_q, q_samples[n]);
   }
 
-  // hand the block's IQ to each consumer as its own copy - hpsdr_p1.c
-  // (network), usb_gadget.c (USB Audio Class gadget), and iq_stream.c
-  // (the lightweight multi-subscriber telemetry stream - see its own
-  // file header) don't know about each other, and any subset of them
-  // can be active without the others
+  // Each I/Q consumer gets its own copy; any subset may be active.
   hpsdr_send_iq(i_samples, q_samples, n_samples);
   iq_stream_send(i_samples, q_samples, n_samples);
 
-  // output_speaker carries the RX audio demod (rx_audio.c) - the
-  // receiver's own I/Q turned into an audible CW tone. uac_audio[]
-  // receives the SAME demodulation one stage earlier - post-AGC,
-  // pre-rx_volume (rx_audio.h's uac_out parameter) - for
-  // usb_gadget.c's WSJT-X audio bridge below. output_tx stays silent
-  // here; it's only driven by the CW sidetone/TX-IF chain in
-  // audio_loop() below.
+  // Demodulate: output_speaker gets the local speaker audio, uac_audio the
+  // same audio before rx_volume. output_tx stays silent here; audio_loop()
+  // drives the exciter.
   rx_audio_process(i_samples, q_samples, n_samples, output_speaker, uac_audio);
   memset(output_tx, 0, n_samples * sizeof(int32_t));
 
-  // usb_gadget.c's UAC2 gadget is fixed at 48kHz (matches real UAC2
-  // hosts like the QMX/Tab5 panadapter this was built to interoperate
-  // with - see docs/dsp_design_notes/usb_uac_decimation_design.md),
-  // but uac_audio[] above is still native 96kHz - decim48k_apply()
-  // only emits a kept sample on every other call, so
-  // uac_push_audio_rx() is only called when one's actually ready.
+  // The USB audio gadget runs at 48kHz; decim48k_apply() yields a sample on
+  // every other call.
   for (int n = 0; n < n_samples; n++) {
     double out_audio;
     if (decim48k_apply(&dec_audio, uac_audio[n], &out_audio))
@@ -708,39 +568,14 @@ static void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output
 /*  Per-block compute timing                                          */
 /* ------------------------------------------------------------------ */
 //
-// Wraps sound_process() (mixing/antialias/decim/streaming/rx_audio.c's
-// stage 1-4, including both stage-3 filters - see rx_audio.c) with a
-// clock_gettime()-based stopwatch and prints a periodic avg/max summary
-// against the ~10.667ms real-time budget (96kHz/PERIOD_FRAMES) - added
-// after a real-hardware xrun-flood report (docs/ARCHITECTURE.md §10 step
-// 7's follow-up) to get an actual measured number from the board in
-// question instead of guessing from a different, faster dev machine.
-// Same "rate-limit the printf, don't spam" discipline as xrun_note()
-// above, on a longer (5s) window since this is a periodic status report,
-// not a per-occurrence warning.
+// Per-block timing of the audio loop's phases (read, process, write, and
+// the whole loop period, which should sit at 10.667ms), summarized every
+// 5s. Always measured (it's cheap); printed only when MAXIBITX_LOOP_TIMING
+// is set. Used to trace the startup xrun flood (ARCHITECTURE.md §10 step
+// 7 follow-ups).
 #define BLOCK_TIMING_WINDOW_NS 5000000000L /* 5 seconds */
 #define BLOCK_PERIOD_BUDGET_MS (1000.0 * PERIOD_FRAMES / SAMPLE_RATE) /* 10.667ms */
 
-// A first version of this only timed sound_process() - a real-hardware
-// run (docs/ARCHITECTURE.md §10 step 7's follow-up) showed that alone
-// avg=1.9-2.7ms/max=3.3ms, comfortably under the 10.667ms/block budget,
-// with NO visible spike even in the same 5s windows where the playback
-// xrun flood was actively happening - ruling out sound_process() itself
-// (the DSP path steps 6/7 touched) as the cause. Since the flood is real
-// but invisible here, the missing time has to be hiding somewhere this
-// wasn't looking: the blocking `snd_pcm_readi()` call (which should
-// normally take ~one period's worth of time as its own natural pacing,
-// but would reveal an upstream capture-side stall if it ever took much
-// more or less than that), the `snd_pcm_writei()` call plus the
-// buffer-fill work around it, or genuinely unaccounted time between one
-// iteration's write and the next iteration's read (`cw_poll_key()`, or a
-// scheduling gap this thread didn't get to run through). This widens the
-// same periodic report to all of those phases, plus the whole loop
-// iteration's own period (measured start-of-read to start-of-read, which
-// is what a healthy system should hold near 10.667ms exactly, no more,
-// no less), so whichever phase is actually where the missing time goes
-// shows up directly instead of needing another guess-and-recompile
-// round trip.
 struct phase_stats {
   long sum_ns;
   long max_ns;
@@ -773,27 +608,7 @@ struct loop_timing_tracker {
   int started;
 };
 
-// One call per loop iteration, right at the top (before snd_pcm_readi());
-// records the read/process/write phases *from the previous* iteration
-// (all three are already-elapsed durations the caller measured) and this
-// iteration's period (time since the previous iteration's own top-of-loop
-// timestamp) - then, once BLOCK_TIMING_WINDOW_NS has elapsed, prints all
-// four and resets. Pass -1 for any phase not applicable this iteration
-// (e.g. write when pcm_playback is NULL).
-// Whether to actually print the periodic report below - checked once
-// (getenv() itself is cheap, but this runs every single audio block, so
-// caching beats re-checking ~94 times a second forever). Opt-in via
-// MAXIBITX_LOOP_TIMING, not on by default: this instrumentation did its
-// job (traced the real xrun-flood cause to tx_pipeline_new()'s FFTW_
-// MEASURE search draining the primed playback buffer - see
-// sound_thread_start()'s own comment and docs/ARCHITECTURE.md §10 step
-// 7's follow-up entries - now fixed and confirmed clean on the user's
-// real hardware), so a normal run no longer needs to print a status
-// block every 5 seconds forever. The tracking itself (a handful of
-// clock_gettime()/phase_note() calls per block) stays unconditional -
-// its own overhead is negligible next to sound_process() - so this knob
-// costs nothing to leave in place for whenever the next real hardware
-// mystery shows up.
+// Whether MAXIBITX_LOOP_TIMING is set. Cached, since this runs every block.
 static int loop_timing_should_print(void) {
   static int cached = -1;
   if (cached < 0) {
@@ -803,6 +618,10 @@ static int loop_timing_should_print(void) {
   return cached;
 }
 
+// Call once per loop iteration, before snd_pcm_readi(). Records the
+// previous iteration's read/process/write durations (-1 = not applicable,
+// e.g. write with no pcm_playback) and this iteration's period, then
+// prints and resets once per BLOCK_TIMING_WINDOW_NS.
 static void loop_timing_note(struct loop_timing_tracker *t, long read_ns, long process_ns,
                               long write_ns) {
   struct timespec now;
@@ -909,15 +728,9 @@ static void *audio_loop(void *arg) {
     struct timespec t_write0, t_write1;
     if (pcm_playback) {
       clock_gettime(CLOCK_MONOTONIC, &t_write0);
-      // DIGITAL mode has no physical key/mic PTT to drive cw_tx_active()
-      // (cw.c's cw_poll_key() deliberately ignores that GPIO in this
-      // mode - see its own comment) - PTT is CAT-only there (hamlib.c's
-      // "T"/usb_gadget.c's own TX/RX/TQ handlers, both already
-      // mode-independent), asserting in_tx directly. So this branch is
-      // entered either the original way (a physical key/mic closure the
-      // CW/USB/LSB path below drove tx_active for) or, new, whenever
-      // in_tx is set while in DIGITAL mode - see the tx_mode branch
-      // below for where the two audio sources actually diverge.
+      // TX when the key/mic PTT is down (cw_tx_active()), or when in_tx is set
+      // in DIGITAL - that mode's PTT is CAT-only, and cw_poll_key() ignores the
+      // key GPIO there.
       if (cw_tx_active() || (in_tx && radio_get_mode() == RADIO_MODE_DIGITAL)) {
         // Per-band calibrated scale (see the TX_SAMPLE_HEADROOM
         // comment above) - looked up once per block, not per
@@ -925,26 +738,15 @@ static void *audio_loop(void *arg) {
         double band_scale = hw_settings_tx_scale(freq_hdr);
         double amp = TX_SAMPLE_HEADROOM * TX_DRIVE * band_scale * TX_GAIN_CORRECTION;
 
-        // tx_audio_buf is this block's i_sample source for
-        // tx_pipeline.c, one full TX_PIPELINE_BLOCK_LEN-sample block at
-        // a time (that pipeline owns persistent overlap-save history
-        // across calls, so it needs exactly this many new samples every
-        // call - see docs/ARCHITECTURE.md §10 step 4); it also drives
-        // the local sidetone/monitor channel directly below, same
-        // "one signal, two uses" pattern real sbitx's own
-        // `output_speaker[j] = i_sample * sidetone` uses (see cw.h).
-        // Sized MAX_FRAMES, matching every other per-block buffer in
-        // this function (mic_buf/rx_buf/etc. above) - n is bounded by
-        // MAX_FRAMES already (see the clamp right after snd_pcm_readi()
-        // above), so this can never overrun regardless of what n turns
-        // out to be.
+        // This block's TX audio: tx_pipeline.c's input, and the local
+        // sidetone/monitor below. The pipeline needs exactly TX_PIPELINE_BLOCK_LEN
+        // new samples per call. Sized MAX_FRAMES like the other buffers; n never
+        // exceeds it.
         static double tx_audio_buf[MAX_FRAMES];
         static float tx_pipe_in[TX_PIPELINE_BLOCK_LEN];
         static float tx_pipe_out[TX_PIPELINE_BLOCK_LEN];
-        // DIGITAL mode's own upsampler state (usb_gadget.c's TX/inbound
-        // queue is 48kHz, this pipeline needs 96kHz) and its 48kHz-side
-        // scratch buffer - persistent across calls like tx_pipe_in/out
-        // above, since upsample48k_apply() carries real filter history.
+        // DIGITAL: 48kHz gadget audio -> 96kHz. Persistent, since the upsampler
+        // carries filter history.
         static struct upsample48k_state tx_upsampler;
         static double tx_audio_48k[MAX_FRAMES / 2 + 1];
 
@@ -961,24 +763,14 @@ static void *audio_loop(void *arg) {
           sideband = TX_PIPELINE_KEEP_UPPER; // CW groups with USB - see
                                               // tx_pipeline.h's enum comment
         } else if (tx_mode == RADIO_MODE_DIGITAL) {
-          // WSJT-X's own generated tone, pulled from usb_gadget.c's
-          // TX/inbound queue (uac_pull_audio_tx(), 48kHz) and upsampled
-          // to this pipeline's native 96kHz (upsample48k.c, decim48k.c's
-          // own interpolation counterpart - see docs/ARCHITECTURE.md).
-          // need_48k is ceil(n/2): each 48kHz input sample expands into
-          // exactly 2 96kHz outputs (upsample48k_apply()), so this many
-          // inputs always cover n outputs with at most one to spare.
+          // WSJT-X's audio from the USB gadget (48kHz), upsampled 2x;
+          // ceil(n/2) inputs cover n outputs.
           int need_48k = (n + 1) / 2;
           int got_48k = uac_pull_audio_tx(tx_audio_48k, need_48k);
           int out_idx = 0;
           for (int i = 0; i < need_48k; i++) {
-            // Past what the host actually sent this block (no WSJT-X
-            // running, capture PCM not open, or just a momentary gap),
-            // feed silence through the upsampler rather than skip it -
-            // keeps its filter history warm across a gap the same way
-            // rx_audio.c's stage-3 filters stay warm while bypassed
-            // (rx_audio.h), instead of a settling-time thump on the
-            // next real sample.
+            // Past what the host sent (WSJT-X not running, or a gap), feed
+            // silence rather than skip, keeping the filter history continuous.
             double in_sample = (i < got_48k) ? tx_audio_48k[i] : 0.0;
             double out2[2];
             upsample48k_apply(&tx_upsampler, in_sample, out2);
@@ -990,17 +782,9 @@ static void *audio_loop(void *arg) {
           sideband = TX_PIPELINE_KEEP_UPPER; // FT8/digital convention:
                                               // always USB regardless of band
         } else {
-          // USB/LSB (docs/ARCHITECTURE.md build order step 8): real mic
-          // audio (mic_buf, captured above) is the i_sample source
-          // instead of cw.c's tone - MIC_TX_INPUT_SCALE does the fixed
-          // int32->float unit conversion, mic_tx_gain is the live,
-          // operator-adjustable multiplier on top of it (see both
-          // comments above/sound.h) - first on-air result (audible on
-          // the local monitor, but no measurable power out) is exactly
-          // what mic_tx_gain exists to bisect against a real wattmeter
-          // without a rebuild per trial. cw_poll_key() (cw.c) only ever
-          // asserts TX for this mode pair (plus CW) today, so this else
-          // covers exactly USB/LSB in practice.
+          // USB/LSB: mic audio, through the fixed unit conversion and the
+          // live mic gain. (cw_poll_key() only asserts TX for CW, USB and
+          // LSB, so this branch is exactly USB/LSB.)
           double mic_gain = MIC_TX_INPUT_SCALE * mic_tx_gain;
           for (int i = 0; i < n; i++)
             tx_audio_buf[i] = mic_buf[i] * mic_gain;
@@ -1013,27 +797,13 @@ static void *audio_loop(void *arg) {
             tx_pipe_in[i] = (float)tx_audio_buf[i];
           tx_pipeline_process_block(cw_tx_pipeline, sideband, tx_pipe_in, tx_pipe_out);
         } else {
-          // n is negotiated once at snd_pcm_hw_params_set_period_size_
-          // near() and PERIOD_FRAMES==TX_PIPELINE_BLOCK_LEN by design
-          // (see fft_filter.c's comment on why those two numbers
-          // match), and snd_pcm_readi() above is called with exactly
-          // PERIOD_FRAMES as its size, so in ordinary operation n
-          // always equals TX_PIPELINE_BLOCK_LEN here; this branch only
-          // fires on a genuinely abnormal read (short/interrupted, or
-          // the negotiated hardware period turning out to differ from
-          // what was requested). Feeding anything other than exactly
-          // TX_PIPELINE_BLOCK_LEN new samples into the pipeline would
-          // corrupt its overlap-save history's alignment for every
-          // block after this one - far worse than one silent block -
-          // so this skips the pipeline entirely and outputs silence on
-          // the exciter channel this block (the local monitor channel
-          // below is unaffected either way, since it doesn't share that
-          // state).
+          // n equals TX_PIPELINE_BLOCK_LEN (== PERIOD_FRAMES) in normal
+          // operation; this only fires on an abnormal short read. A
+          // wrong-size block would misalign the pipeline's overlap-save
+          // history for every later block, so skip it and send silence to
+          // the exciter. The local monitor is unaffected.
           memset(tx_pipe_out, 0, sizeof(tx_pipe_out));
-          // Logged once, not every occurrence: if this ever fires from
-          // a genuinely mismatched negotiated period (rather than a
-          // rare one-off short read), it would otherwise repeat on
-          // every single TX block forever.
+          // Logged once, in case the negotiated period itself differs.
           static int warned = 0;
           if (!warned) {
             fprintf(stderr,
@@ -1047,31 +817,19 @@ static void *audio_loop(void *arg) {
         }
 
         for (int i = 0; i < n; i++) {
-          // R = the WM8731's PA-feeding channel - tx_pipeline.c's IF-
-          // placed TX waveform, at the full wattmeter-calibrated
-          // amplitude. tx_pipeline.c is unity-gain by construction for
-          // a steady full-scale tone (bench-verified,
-          // docs/ARCHITECTURE.md §10 step 4) - TX_GAIN_CORRECTION
-          // below is carried over unchanged from the old direct-NCO
-          // scheme on that basis, confirmed on a wattmeter for CW
-          // (tx_power_calibration.md §8); USB/LSB's real mic-driven
-          // envelope is a different amplitude statistics story
-          // (speech isn't a steady tone) and has NOT been checked on a
-          // wattmeter yet - worth doing before relying on this for a
-          // real SSB transmission.
+          // R: exciter feed, at the wattmeter-calibrated amplitude.
+          // tx_pipeline.c is unity-gain for a steady tone, so
+          // TX_GAIN_CORRECTION's CW calibration carries over
+          // (tx_power_calibration.md §8). USB/LSB speech hasn't been
+          // checked on a wattmeter yet.
           double raw_tx = (i < TX_PIPELINE_BLOCK_LEN ? tx_pipe_out[i] : 0.0f) * amp;
           if (raw_tx > TX_SAMPLE_CLAMP)
             raw_tx = TX_SAMPLE_CLAMP;
           if (raw_tx < -TX_SAMPLE_CLAMP)
             raw_tx = -TX_SAMPLE_CLAMP;
 
-          // L = local monitor only (on-board speaker) - the CW sidetone
-          // pitch in CW mode, or a monitor copy of the operator's own
-          // mic audio in USB/LSB (tx_audio_buf holds whichever one this
-          // block is using - see the tx_mode branch above), at a fixed
-          // comfort level - see SIDETONE_PEAK_AMPLITUDE above. Never
-          // reaches the PA, and no longer moves when TX_GAIN_CORRECTION
-          // does.
+          // L: local monitor - CW sidetone or a copy of the mic audio, at a
+          // fixed level (SIDETONE_PEAK_AMPLITUDE). Never reaches the PA.
           double raw_side = tx_audio_buf[i] * SIDETONE_PEAK_AMPLITUDE;
           if (raw_side > TX_SAMPLE_CLAMP)
             raw_side = TX_SAMPLE_CLAMP;
@@ -1082,29 +840,20 @@ static void *audio_loop(void *arg) {
           play_buf[i * 2 + 1] = (int32_t)raw_tx;
         }
       } else if (!in_tx) {
-        // RX: play back rx_audio.c's demodulated CW tone (spk_buf)
-        // on the local monitor channel - same channel cw.c's TX
-        // sidetone uses. R stays silent; nothing drives the PA
-        // while RX.
+        // RX: demodulated audio on the local speaker; R (exciter) silent.
         for (int i = 0; i < n; i++) {
           play_buf[i * 2] = spk_buf[i];
           play_buf[i * 2 + 1] = 0;
         }
       } else {
-        // in_tx but neither cw_tx_active() nor DIGITAL (e.g. CAT/network
-        // MOX asserted for CW/USB/LSB without a physical key/mic PTT
-        // closure - DIGITAL's own CAT-only PTT is handled by the branch
-        // above) - stay silent rather than play back RX audio while
-        // transmitting.
+        // TX without key/mic PTT and not DIGITAL (e.g. CAT/network MOX in
+        // CW/USB/LSB): silence rather than RX audio while transmitting.
         memset(play_buf, 0, (size_t)n * 2 * sizeof(int32_t));
       }
       snd_pcm_sframes_t wframes = snd_pcm_writei(pcm_playback, play_buf, n);
       if (wframes < 0) {
-        // Must check xrun_recover()'s return value here (unlike an
-        // earlier version that didn't - see
-        // docs/08_troubleshooting_and_bringup.md for the retry-
-        // storm bug that caused) and disable playback gracefully
-        // on real failure, rather than killing RX along with it.
+        // On unrecoverable failure, disable playback rather than stop RX
+        // too (docs/08_troubleshooting_and_bringup.md).
         xrun_note(&playback_xrun, "playback");
         if (xrun_recover(pcm_playback, (int)wframes) < 0) {
           fprintf(stderr, "sound: playback recovery failed - disabling CW "
@@ -1135,46 +884,23 @@ int sound_thread_start(const char *device_name) {
   if (!pcm_capture)
     return -1;
 
-  // Playback: CW sidetone output only (see cw.c) - RX IQ still goes
-  // out over the network/UAC2, not through here. Not a hard failure
-  // if it doesn't open; audio_loop() checks pcm_playback before
-  // writing to it, so minibitx still runs (just without CW TX audio).
+  // Playback carries the local speaker and the exciter feed. Not fatal if
+  // it fails: audio_loop() checks pcm_playback, so RX still runs, just
+  // without local audio or TX.
   pcm_playback = open_pcm(dev, SND_PCM_STREAM_PLAYBACK);
   if (!pcm_playback) {
     printf("sound: playback unavailable, CW sidetone output disabled\n");
   }
 
-  // The shared TX pipeline (tx_pipeline.c) - one persistent instance for
-  // this run's lifetime, same as pcm_capture/pcm_playback above (its
-  // FFTW plan is a real setup cost that must not be paid per TX burst -
-  // see tx_pipeline.c/fft_filter.c's own comments). Deliberately created
-  // BEFORE priming/starting playback below, not after - see that block's
-  // own comment for why the ordering here matters now, not just the
-  // FFTW_MEASURE-vs-ESTIMATE choice tx_pipeline_new() itself makes.
+  // Create the TX pipeline before priming playback below - see there.
   cw_tx_pipeline = tx_pipeline_new();
 
   if (pcm_playback) {
-    // Prime the playback ring buffer with a full buffer's worth of
-    // silence right before starting the audio thread that's actually
-    // going to keep it fed - added after a real-hardware xrun-flood
-    // report (docs/ARCHITECTURE.md §10 step 7's follow-up) whose
-    // loop_timing_note() read/process/write/period breakdown traced it
-    // to a short burst of underruns in only the first few periods after
-    // this device opens, never recurring once steady state was reached.
-    // A first attempt primed the buffer immediately after opening
-    // pcm_playback, ABOVE tx_pipeline_new() - that didn't help, because
-    // tx_pipeline_new()'s own FFTW_MEASURE search (a synchronous, real
-    // cost, same class as rx_filter_new()'s that motivated switching RX
-    // to FFTW_ESTIMATE) ran for the whole gap between that priming and
-    // the audio thread's creation below - long enough, on real hardware,
-    // to drain the entire primed buffer before the thread that's
-    // supposed to keep refilling it ever got to run, reproducing the
-    // exact same startup burst regardless of the priming. Moving the
-    // priming to HERE - after tx_pipeline_new() has already paid its
-    // setup cost, immediately before pthread_create() - closes that gap
-    // instead of trying to out-buffer it; tx_pipeline_new() switching to
-    // FFTW_ESTIMATE (see its own comment) shrinks that cost further, for
-    // the same reason rx_filter_new() did.
+    // Prime playback with a full buffer of silence immediately before the
+    // audio thread starts. Nothing slow (like tx_pipeline_new()'s FFTW
+    // planning) may run between priming and pthread_create(), or the buffer
+    // drains and the first periods underrun - the cause of the startup xrun
+    // flood (ARCHITECTURE.md §10 step 7 follow-ups).
     int32_t silence[PERIOD_FRAMES * CHANNELS] = {0};
     for (int i = 0; i < 4; i++) // 4 periods == open_pcm()'s own negotiated buffer size
       snd_pcm_writei(pcm_playback, silence, PERIOD_FRAMES);
