@@ -19,7 +19,7 @@
 // precedent fft_filter_test.c already set.
 //
 // Case A - IF placement accuracy: confirms the shared bin-rotate lands
-//   CW's tone at the frequency tx_pipeline.h's TX_IF_SHIFT_BINS
+//   CW's tone at the frequency tx_pipeline.h's TX_IF_SHIFT_CW_BINS
 //   derivation predicts, and reports the rounding residual against the
 //   *old* direct-NCO scheme's fixed, much larger 700Hz one (cw.c's
 //   TX_IF_OFFSET_HZ comment / docs/03_tx_processing_pipeline.md's "Known
@@ -120,7 +120,7 @@ static double to_db(double measured, double reference)
 // settle_blocks+measure_blocks blocks, discarding the first
 // settle_blocks (overlap-save history/filter-edge transient) and
 // coherently demodulating the rest at measure_hz.
-static double measure_tone(struct tx_pipeline *p, enum tx_pipeline_sideband sb,
+static double measure_tone(struct tx_pipeline *p, enum tx_pipeline_signal sig,
                             double measure_hz, int settle_blocks, int measure_blocks)
 {
 	float in[TX_PIPELINE_BLOCK_LEN], out[TX_PIPELINE_BLOCK_LEN];
@@ -136,7 +136,7 @@ static double measure_tone(struct tx_pipeline *p, enum tx_pipeline_sideband sb,
 			if (phase > 2.0 * M_PI)
 				phase -= 2.0 * M_PI;
 		}
-		tx_pipeline_process_block(p, sb, in, out);
+		tx_pipeline_process_block(p, sig, in, out);
 		if (b >= settle_blocks)
 			demod_feed(&d, out, TX_PIPELINE_BLOCK_LEN);
 	}
@@ -187,7 +187,7 @@ static double measure_raw(struct filter *f, int apply_zero, double measure_hz,
 		filter_forward(f, in_c);
 		if (apply_zero)
 			raw_zero_negative(f->freq, f->N);
-		raw_rotate(f->freq, f->N, TX_IF_SHIFT_BINS, scratch);
+		raw_rotate(f->freq, f->N, TX_IF_SHIFT_CW_BINS, scratch);
 		filter_inverse(f, out_c);
 		// Same per-block phase-continuity correction
 		// tx_pipeline_process_block() applies (tx_pipeline.c) - without
@@ -195,7 +195,7 @@ static double measure_raw(struct filter *f, int apply_zero, double measure_hz,
 		// which would corrupt this case's "wanted" measurement the same
 		// way it corrupted Case A before that fix, not just the
 		// "image"/rejection numbers this case is actually about.
-		int flip = (TX_IF_SHIFT_BINS % 2 != 0) && (b % 2 != 0);
+		int flip = (TX_IF_SHIFT_CW_BINS % 2 != 0) && (b % 2 != 0);
 		// Same x2 "recover the discarded sideband's amplitude" factor
 		// tx_pipeline_process_block() applies (tx_pipeline.c) - without
 		// it this case's own "wanted, with zero" reading would show the
@@ -221,8 +221,8 @@ static double measure_raw(struct filter *f, int apply_zero, double measure_hz,
 #define TONE_GEN_MEASURE_BLOCKS 16
 static float tone_gen_capture[TONE_GEN_MEASURE_BLOCKS * TX_PIPELINE_BLOCK_LEN];
 
-static void measure_tone_gen(enum tone_gen_mode m, const double *hz, double *mags, int n,
-                             double *peak)
+static void measure_tone_gen(enum tone_gen_mode m, enum tx_pipeline_signal sig,
+                             const double *hz, double *mags, int n, double *peak)
 {
 	struct tx_pipeline *p = tx_pipeline_new();
 	float in[TX_PIPELINE_BLOCK_LEN], out[TX_PIPELINE_BLOCK_LEN];
@@ -233,7 +233,7 @@ static void measure_tone_gen(enum tone_gen_mode m, const double *hz, double *mag
 	for (int b = 0; b < TONE_GEN_SETTLE_BLOCKS + TONE_GEN_MEASURE_BLOCKS; b++) {
 		for (int i = 0; i < TX_PIPELINE_BLOCK_LEN; i++)
 			in[i] = (float)tone_gen_sample();
-		tx_pipeline_process_block(p, TX_PIPELINE_KEEP_UPPER, in, out);
+		tx_pipeline_process_block(p, sig, in, out);
 		if (b < TONE_GEN_SETTLE_BLOCKS)
 			continue;
 		memcpy(&tone_gen_capture[(b - TONE_GEN_SETTLE_BLOCKS) * TX_PIPELINE_BLOCK_LEN], out,
@@ -260,22 +260,25 @@ static void measure_tone_gen(enum tone_gen_mode m, const double *hz, double *mag
 
 int main(void)
 {
-	float shift_actual_hz = TX_IF_SHIFT_BINS * TX_PIPELINE_BIN_HZ;
+	float shift_actual_hz = TX_IF_SHIFT_CW_BINS * TX_PIPELINE_BIN_HZ;
 	double target_wanted = CW_PITCH_HZ + shift_actual_hz;
 	double target_image  = shift_actual_hz - CW_PITCH_HZ;
-	float residual_hz = TX_IF_SHIFT_HZ - shift_actual_hz;
+	float residual_hz = TX_IF_SHIFT_CW_HZ - shift_actual_hz;
 
 	printf("tx_pipeline.c bench - Fs=%.0f Hz, N=%d, CW_PITCH_HZ=%d Hz (docs/ARCHITECTURE.md step 4)\n\n",
 	       (double)TEST_FS, TX_PIPELINE_N, CW_PITCH_HZ);
-	printf("TX_IF_SHIFT: ideal %.3f Hz -> %d bins (%.4f Hz/bin) -> actual %.3f Hz, residual %.3f Hz\n",
-	       TX_IF_SHIFT_HZ, TX_IF_SHIFT_BINS, TX_PIPELINE_BIN_HZ, shift_actual_hz, residual_hz);
+	printf("TX_IF_SHIFT (CW, tone on dial): ideal %.3f Hz -> %d bins (%.4f Hz/bin) -> actual %.3f Hz, residual %.3f Hz\n",
+	       TX_IF_SHIFT_CW_HZ, TX_IF_SHIFT_CW_BINS, TX_PIPELINE_BIN_HZ, shift_actual_hz, residual_hz);
+	printf("TX_IF_SHIFT (SSB, carrier on dial): ideal %.3f Hz -> %d bins -> actual %.3f Hz, residual %.3f Hz\n",
+	       TX_IF_SHIFT_SSB_HZ, TX_IF_SHIFT_SSB_BINS, TX_IF_SHIFT_SSB_BINS * TX_PIPELINE_BIN_HZ,
+	       TX_IF_SHIFT_SSB_BINS * TX_PIPELINE_BIN_HZ - TX_IF_SHIFT_SSB_HZ);
 	printf("(compare: the old direct-NCO scheme's fixed residual was %d Hz - cw.c's TX_IF_OFFSET_HZ,\n", CW_PITCH_HZ);
 	printf(" corrected for explicitly in radio_tx_apply()'s clk2 formula - see docs/03_tx_processing_pipeline.md)\n\n");
 
 	// --- Case A: IF placement accuracy --------------------------------
 	{
 		struct tx_pipeline *p = tx_pipeline_new();
-		double m = measure_tone(p, TX_PIPELINE_KEEP_UPPER, target_wanted, 8, 8);
+		double m = measure_tone(p, TX_PIPELINE_CW, target_wanted, 8, 8);
 		printf("A. Wanted tone at %.3f Hz (predicted placement): %.2f dB (want ~0 dB)\n",
 		       target_wanted, to_db(m, 1.0));
 		tx_pipeline_free(p);
@@ -345,7 +348,7 @@ int main(void)
 				phase -= 2.0 * M_PI;
 		}
 		for (int b = 0; b < NBLK; b++)
-			tx_pipeline_process_block(p, TX_PIPELINE_KEEP_UPPER,
+			tx_pipeline_process_block(p, TX_PIPELINE_CW,
 			                           in_env + b * TX_PIPELINE_BLOCK_LEN,
 			                           out_all + b * TX_PIPELINE_BLOCK_LEN);
 
@@ -370,52 +373,26 @@ int main(void)
 		tx_pipeline_free(p);
 	}
 
-	// --- Case D: LSB's own mirrored IF placement (docs/ARCHITECTURE.md
-	// build order step 8's on-air bug: LSB measured 0W, reusing USB's
-	// TX_IF_SHIFT_BINS unmirrored - see TX_IF_SHIFT_BINS_LSB's comment,
-	// tx_pipeline.h) - same measurement this harness already trusts for
-	// Case A, just aimed at TX_PIPELINE_KEEP_LOWER's own target instead
-	// of assuming the fix is correct.
+	// --- Case D: LSB's own placement -----------------------------------
+	// Both sidebands share the SSB shift (tx_pipeline.h): LSB's kept
+	// negative half lands the carrier on the same point USB's positive
+	// half does, each band extending from it in its own direction. A
+	// 1000Hz tone should therefore appear 1000Hz BELOW that carrier point,
+	// and nothing 1000Hz above it - which is what separates LSB from USB.
 	{
-		float shift_actual_hz_lsb = TX_IF_SHIFT_BINS_LSB * TX_PIPELINE_BIN_HZ;
-		double target_wanted_lsb = shift_actual_hz_lsb - CW_PITCH_HZ;
-		float residual_hz_lsb = TX_IF_SHIFT_HZ_LSB - shift_actual_hz_lsb;
+		float shift_ssb_hz = TX_IF_SHIFT_SSB_BINS * TX_PIPELINE_BIN_HZ;
+		double lsb_wanted = shift_ssb_hz - TONE_GEN_SINGLE_HZ;
+		double lsb_wrong_side = shift_ssb_hz + TONE_GEN_SINGLE_HZ;
 
-		printf("\nD. LSB's own IF shift: ideal %.3f Hz -> %d bins -> actual %.3f Hz, residual %.3f Hz\n",
-		       TX_IF_SHIFT_HZ_LSB, TX_IF_SHIFT_BINS_LSB, shift_actual_hz_lsb, residual_hz_lsb);
-		printf("   (compare Case A's own target %.3f Hz - both sidebands' single-tone anchor\n",
-		       target_wanted);
-		printf("   should land within a bin or two of the same spot, extending in opposite\n");
-		printf("   directions for a real audio passband)\n");
+		printf("\nD. LSB placement (same SSB shift as USB, mirrored content)\n");
 
-		struct tx_pipeline *p = tx_pipeline_new();
-		double m_lsb = measure_tone(p, TX_PIPELINE_KEEP_LOWER, target_wanted_lsb, 8, 8);
-		printf("   Wanted tone at %.3f Hz (LSB, predicted placement): %.2f dB (want ~0 dB)\n",
-		       target_wanted_lsb, to_db(m_lsb, 1.0));
-		// The regression this second measurement actually checks: NOT
-		// "does LSB collide with USB's own target_wanted" (target_wanted
-		// and target_wanted_lsb are only ~6Hz apart by design - both
-		// sidebands' single-tone anchors are SUPPOSED to sit within a bin
-		// or two of the same spot, per TX_IF_SHIFT_BINS_LSB's comment,
-		// tx_pipeline.h - so a short coherent measurement can't and
-		// shouldn't cleanly separate them; the real, physically-meaningful
-		// separation is between each sideband's whole 300-3000Hz audio
-		// passband, not this single low-pitch tone sitting right at the
-		// shared boundary between them).
-		//
-		// target_image (Case B, above) is the frequency the OLD bug would
-		// have actually put this same -CW_PITCH_HZ content at: reusing
-		// TX_IF_SHIFT_BINS (USB's shift, 467 bins) instead of
-		// TX_IF_SHIFT_BINS_LSB (497) on the same kept bin lands it at
-		// shift_actual_hz - CW_PITCH_HZ = target_image, ~1400Hz away from
-		// target_wanted_lsb - easily resolved by this measurement window,
-		// unlike target_wanted. Reading deeply negative there confirms
-		// this fix actually moved the output, not just that *a* signal
-		// exists somewhere.
-		double m_old_bug_location = measure_tone(p, TX_PIPELINE_KEEP_LOWER, target_image, 8, 8);
-		printf("   Same LSB signal measured at the pre-fix (unmirrored-shift) location %.3f Hz instead: %.2f dB (want: very negative)\n",
-		       target_image, to_db(m_old_bug_location, 1.0));
-		tx_pipeline_free(p);
+		double hz[2] = { lsb_wanted, lsb_wrong_side };
+		double m[2], peak;
+		measure_tone_gen(TONE_GEN_SINGLE, TX_PIPELINE_LSB, hz, m, 2, &peak);
+		printf("   1000 Hz tone at IF %.3f Hz (carrier - 1000): %.2f dB (want ~0 dB)\n",
+		       lsb_wanted, to_db(m[0], 1.0));
+		printf("   Same signal at IF %.3f Hz (carrier + 1000, the USB side): %.1f dB (want: very negative)\n",
+		       lsb_wrong_side, to_db(m[1], 1.0));
 	}
 
 	// --- Case E: the test-tone generator (tone_gen.c) ---------------------
@@ -425,15 +402,16 @@ int main(void)
 	// pipeline is linear, so IMD seen on air comes from the analog chain.
 	// docs/dsp_design_notes/tx_test_tones_and_alc.md.
 	{
-		double hz1[1] = { shift_actual_hz + TONE_GEN_SINGLE_HZ };
+		float shift_ssb = TX_IF_SHIFT_SSB_BINS * TX_PIPELINE_BIN_HZ;
+		double hz1[1] = { shift_ssb + TONE_GEN_SINGLE_HZ };
 		double m1[1], peak1;
-		measure_tone_gen(TONE_GEN_SINGLE, hz1, m1, 1, &peak1);
+		measure_tone_gen(TONE_GEN_SINGLE, TX_PIPELINE_USB, hz1, m1, 1, &peak1);
 
 		double lo = TONE_GEN_TWO_LOW_HZ, hi = TONE_GEN_TWO_HIGH_HZ;
-		double hz2[4] = { shift_actual_hz + lo, shift_actual_hz + hi,
-		                  shift_actual_hz + 2 * lo - hi, shift_actual_hz + 2 * hi - lo };
+		double hz2[4] = { shift_ssb + lo, shift_ssb + hi,
+		                  shift_ssb + 2 * lo - hi, shift_ssb + 2 * hi - lo };
 		double m2[4], peak2;
-		measure_tone_gen(TONE_GEN_TWO, hz2, m2, 4, &peak2);
+		measure_tone_gen(TONE_GEN_TWO, TX_PIPELINE_USB, hz2, m2, 4, &peak2);
 
 		printf("\nE. Test-tone generator (tone_gen.c), upper sideband\n");
 		printf("   Single %.0f Hz at IF %.3f Hz: %.2f dB (want ~0 dB), peak %.4f\n",
