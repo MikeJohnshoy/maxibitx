@@ -93,6 +93,10 @@ static uint32_t last_rx_freq = 0;
 // it's always the spectrum center, same as last_rx_freq.
 static uint32_t last_tx_freq = 0;
 
+// Firmware version reported in EP6 status field 0 (C3), as in sbitx's own
+// hpsdr_p1.c.
+#define HPSDR_FIRMWARE_VERSION 0x4A
+
 // --- Packet construction & inline transmission ------------------------------
 
 static void build_and_send_packet(void) {
@@ -121,52 +125,19 @@ static void build_and_send_packet(void) {
     fp[1] = 0x7F;
     fp[2] = 0x7F;
 
-    // C&C control byte:
-    // bit0 = MOX (TX flag), bits[5:1] = C0 address 0..31
-    int cc_addr = (int)((seq_for_cc * 2 + frame) & 0x1F);
-    fp[3] = (uint8_t)((cc_addr << 1) | (in_tx ? 1 : 0));
+    // C&C status (openHPSDR Protocol 1, radio -> host). C0: bits 7:3 =
+    // which status field C1-C4 carry, bit 2 = CW dot, bit 1 = CW dash,
+    // bit 0 = PTT. Fields 0-4 rotate one per frame, as on real hardware.
+    // The paddle bits stay 0 - clients read them as key closures (docs/06_api.md).
+    int cc_addr = (int)((seq_for_cc * 2 + frame) % 5);
+    fp[3] = (uint8_t)((cc_addr << 3) | (in_tx ? 1 : 0));
 
-    // Fill control payload bytes [4..7] by C0 address
-    // Keep this minimal but consistent with your current behavior.
-    switch (cc_addr) {
-    case 0:
-      // Receiver 1 frequency (network byte order)
-      fp[4] = (freq_hdr >> 24) & 0xFF;
-      fp[5] = (freq_hdr >> 16) & 0xFF;
-      fp[6] = (freq_hdr >> 8) & 0xFF;
-      fp[7] = freq_hdr & 0xFF;
-      break;
-
-    case 1:
-      // Temperature (bits 31:16) / Forward Power (bits 15:0) on
-      // real hardware. No such sensor here, so zero. Sample rate
-      // has no readback field anywhere in EP6 - it's host-
-      // requested only (EP2 addr 0, data bits [25:24]), and
-      // minibitx doesn't parse that request, so the SDR app's
-      // connection must be configured to match sound.c's
-      // SAMPLE_RATE by hand.
-      fp[4] = 0x00;
-      fp[5] = 0x00;
-      fp[6] = 0x00;
-      fp[7] = 0x00;
-      break;
-
-    case 2:
-      // Mirror RX frequency here too to satisfy clients that watch addr 2 traffic
-      fp[4] = (freq_hdr >> 24) & 0xFF;
-      fp[5] = (freq_hdr >> 16) & 0xFF;
-      fp[6] = (freq_hdr >> 8) & 0xFF;
-      fp[7] = freq_hdr & 0xFF;
-      break;
-
-    default:
-      // Leave zeros for unimplemented C&C addresses
-      fp[4] = 0x00;
-      fp[5] = 0x00;
-      fp[6] = 0x00;
-      fp[7] = 0x00;
-      break;
-    }
+    // C1-C4. No sensors are reported, so every field is zero except
+    // field 0's firmware version (C3).
+    fp[4] = 0x00;
+    fp[5] = 0x00;
+    fp[6] = (cc_addr == 0) ? HPSDR_FIRMWARE_VERSION : 0x00;
+    fp[7] = 0x00;
 
     // 63 IQ samples per frame
     for (int s = 0; s < 63; s++) {
