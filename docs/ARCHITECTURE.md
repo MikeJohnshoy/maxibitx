@@ -2147,7 +2147,7 @@ for keying an external accessory's PTT, not this input line.)
       rate defaults to 44100 and its recording channels to 2; WSJT-X's
       Settings -> Audio input channel selector must be on "Mono"), which
       is an operator-facing setup matter for
-      `10_external_digital_modes_wsjtx.md` rather than a code defect.
+      `10_external_digital_modes_wsjtx.md` (since folded into `06_api.md`) rather than a code defect.
     - **Confirmed on the bench: the serial bump worked.** Audacity opens
       "Microphone (Source/Sink)" by name, and **WSJT-X is decoding**.
       That settles the diagnosis above: Windows had been holding cached
@@ -2263,7 +2263,7 @@ for keying an external accessory's PTT, not this input line.)
       4532) has not been tried as WSJT-X's `NET rigctl` rig type at all -
       untested either with or without FLRig in the picture, since direct
       serial CAT already covers the need. See
-      `10_external_digital_modes_wsjtx.md` for the operator-facing setup
+      `10_external_digital_modes_wsjtx.md` (since folded into `06_api.md`) for the operator-facing setup
       steps and the two other things confirmed on the same bench pass
       (the gadget enumerates as "Microphone (Source/Sink)"/"Speakers
       (Source/Sink)", never as "sBitx Audio," by name; and it advertises
