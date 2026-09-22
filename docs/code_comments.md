@@ -16,6 +16,8 @@ machine code across the whole build:
 | `src/interfaces/hamlib.h` | 20 -> 21 |
 | `src/cw.c` | 81 -> 33 |
 | `src/cw.h` | 50 -> 21 |
+| `src/tx_pipeline.c` | 161 -> 48 |
+| `src/tx_pipeline.h` | 138 -> 59 |
 
 This project records its engineering history carefully, and that record
 is worth keeping. But source comments are read by someone trying to
