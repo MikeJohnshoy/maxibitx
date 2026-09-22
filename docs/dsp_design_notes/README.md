@@ -19,6 +19,11 @@ already used in `antialias_filter_design.md`.
   frequency per band) to re-derive per-band values for a flat 5W.
   Status: done - all 9 bands bench-confirmed in the 4.7-5.5W target
   window.
+- [`tx_direct_to_dac_cw_history.md`](tx_direct_to_dac_cw_history.md)
+  — the original CW-only TX scheme (a second, IF-shifted oscillator in
+  `cw.c` and a clk2 correction in `radio.c`), formerly
+  `03_tx_processing_pipeline.md`. Status: historical - replaced by
+  `tx_pipeline.c`.
 - [`usb_uac_decimation_design.md`](usb_uac_decimation_design.md) — the
   96kHz->48kHz decimating lowpass that makes `usb_gadget.c`'s UAC2
   gadget actually deliver the 48kHz it advertises, cascaded after
