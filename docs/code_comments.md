@@ -14,6 +14,8 @@ machine code across the whole build:
 | `src/interfaces/usb_gadget.h` | 203 -> 73 |
 | `src/interfaces/hamlib.c` | 142 -> 61 |
 | `src/interfaces/hamlib.h` | 20 -> 21 |
+| `src/cw.c` | 81 -> 33 |
+| `src/cw.h` | 50 -> 21 |
 
 This project records its engineering history carefully, and that record
 is worth keeping. But source comments are read by someone trying to
