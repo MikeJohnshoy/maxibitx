@@ -1,8 +1,9 @@
 # TX test tones, carrier-offset check, and ALC
 
 Status: in progress. Step 1 (the test-tone generator) is built and
-bench-tested, and step 2 (the carrier-offset check and fix) is measured
-and fixed, pending an on-air re-check. Steps 3-5 are proposed.
+bench-tested; step 2 (the carrier-offset check and fix) is measured,
+fixed and confirmed on air, and the reference-frequency question it
+raised is settled. Steps 3-5 are proposed.
 
 ## Why
 
@@ -157,37 +158,49 @@ few Hz of bin quantization plus the reference error below.
 
 ## Frequency calibration (the si5351 reference)
 
-Every measurement so far read low by about the same fraction:
+The transmit tone measurements all read low by about the same fraction:
 
 | Date | Mode | Error vs. predicted | Implied reference |
 |---|---|---|---|
-| 09-22 (before the fix) | USB | −10.6 Hz | 24,999,963 Hz |
-| 09-22 (before the fix) | LSB | −13.9 Hz | 24,999,952 Hz |
-| 09-22 (after the fix) | USB | −7.8 Hz | 24,999,973 Hz |
-| 09-22 (after the fix) | LSB | −12.8 Hz | 24,999,956 Hz |
+| 09-22 (before the placement fix) | USB | −10.6 Hz | 24,999,963 Hz |
+| 09-22 (before the placement fix) | LSB | −13.9 Hz | 24,999,952 Hz |
+| 09-22 (after the placement fix) | USB | −7.8 Hz | 24,999,973 Hz |
+| 09-22 (after the placement fix) | LSB | −12.8 Hz | 24,999,956 Hz |
 
-An error in the si5351's reference oscillator scales every clock, so the
-transmitted carrier moves by `(T/C − 1)(clk2 − bfo_freq)`, where `T` is
-the real reference, `C` the value the code assumes, and
-`clk2 − bfo_freq = f − 22,600`. That is proportional to the operating
-frequency: about −11 Hz at 7 MHz, so about −22 Hz at 14 MHz and −44 Hz
-at 28 MHz. Receive shifts by the same fraction, so the radio reads low
-in both directions - which is why nothing in an RX-only test showed it.
+An error in the si5351's reference oscillator scales every clock it
+makes. Writing `T` for the real reference and `C` for the value the code
+assumes:
 
-Solving for the reference: `T = C × (1 + e / (f − 22,600))`. The four
-readings average −11.25 Hz at 7.219 MHz, giving 24,999,961 Hz, about
-1.6 ppm low.
+- **Transmit** moves by `(T/C − 1) × (f − 22,600)`, because the carrier
+  comes out as `clk2 − bfo_freq + IF` and both clocks scale.
+- **Receive** moves the *other way*, by `−(T/C − 1) × (f − 24,000)`: the
+  first mixer's LO is above the signal, so a high clk2 pushes the IF up,
+  which the inverted baseband then shows as a station lower in frequency.
 
-**Applied.** `hw_settings.ini` now carries `cal=24999961` under a
-`[tcxo]` section - the same key, units and section sbitx's own file
-uses, so a settings file copied from either project works in the other.
-A top-level `cal` is accepted too. `hw_settings_load()` passes it to
-`si5351_set_calibration()` before any clock is set; left out, the
-nominal 25,000,000 applies.
+That opposite sign is what settled this. Both are proportional to the
+operating frequency: 1 ppm is 7 Hz at 7 MHz, 15 Hz at 15 MHz and 28 Hz
+at 10 m.
 
-**Refining it.** The four readings spread about ±0.3 ppm, which is the
-remote receiver's own accuracy as much as anything. Better references,
-in order:
+**The reference is at nominal.** Receiving WWV 15 MHz (a GPS-referenced
+transmitter) through SDR Console on the HPSDR I/Q, with `cal` at
+25,000,000, put the carrier on frequency as closely as it could be
+read - within a couple of Hz, so under ~0.2 ppm. A reference 1.5 ppm
+low, as the transmit readings suggested, would have shown WWV about
+22 Hz *high* instead.
+
+So the ~11 Hz the transmit tests saw was not this radio: the remote
+receiver used for them is itself about 1.5 ppm low. `cal` stays at its
+nominal 25,000,000, and WWV on receive is the reference to re-check it
+against. Transmit should now be within the ~6 Hz of bin quantization;
+confirming that needs a GPS-locked receiver, not the one used so far.
+
+**Lesson for the next measurement:** an absolute frequency check is only
+as good as the receiver making it, and here transmit and receive respond
+to a reference error with opposite signs - so a disagreement between a
+transmit and a receive check localizes the error rather than averaging
+into a wrong answer.
+
+**Refining it.** Better references, in order:
 
 - Receive WWV (5, 10, 15 MHz) or CHU and read the carrier offset in a
   spectrum display. Higher frequency means more resolution per ppm.
@@ -195,8 +208,8 @@ in order:
   receiver (a KiwiSDR advertising GPS).
 - Measure clk2 directly with a counter locked to a good reference.
 
-Whichever is used: `new cal = old cal × (1 + error / measured frequency)`,
-where `error` is how far low the reading is. Re-check after a big
+Whichever is used, apply the formula for that direction (transmit or
+receive) from above - they have opposite signs. Re-check after a big
 temperature change; a TCXO drifts far less than a plain crystal, but
 not to zero.
 
