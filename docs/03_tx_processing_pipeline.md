@@ -1,350 +1,265 @@
 # 03 — TX processing pipeline
 
-**As of `ARCHITECTURE.md` build order step 5, this document is
-historical, not current.** It describes minibitx's original,
-inherited direct-to-DAC CW scheme (a second, IF-shifted oscillator in
-`cw.c`, a matching residual correction in `radio.c`'s
-`radio_tx_apply()`) - real code that ran on real hardware for a real
-stretch of this project, and the actual starting point
-[`ARCHITECTURE.md`](ARCHITECTURE.md)'s replacement was designed
-against, but no longer what the shipped `maxibitx` binary runs. Step 5
-replaced that scheme with `tx_pipeline.c`'s shared FFT pipeline (an
-explicit sideband-zero plus a bin-rotate doing the same IF-placement
-job in the frequency domain instead) - see `ARCHITECTURE.md` §10 step
-4/5 for the current mechanism, its derivation, and its bench numbers.
-Kept here rather than deleted because most of the *analog* chain this
-document describes (the crystal filter, both mixers, the PA, the LPF
-bank) didn't change at all - only how the baseband/IF waveform
-reaching the DAC gets constructed digitally did; this remains the
-right reference for that hardware, just not for `cw.c`'s own math
-below.
-
-Status: CW TX implemented and bench-verified, including single-sideband
-image suppression (~40dB, confirmed on-air on two independent SDR
-displays) and dial-accurate TX frequency (confirmed on-air against an
-independent remote receiver — see "Known limitations" below for both).
-This document covers the signal chain the same way
+This documents the transmit signal path, from the audio source for each
+mode to the antenna, the same way
 [`02_rx_processing_pipeline.md`](02_rx_processing_pipeline.md) covers
-receive.
+receive. TX runs through the same two si5351 clocks, the same crystal
+filter and the same LPF relays as RX, with the signal flowing the other
+way; the digital part in front of them is `tx_pipeline.c`, one shared
+FFT pipeline for every mode.
 
-Note: [`dsp_design_notes/tx_power_calibration.md`](dsp_design_notes/tx_power_calibration.md)
-has been updated for the current pipeline (`TX_GAIN_CORRECTION` = 0.045,
-one QRP CW test frequency per band) — its worksheet is filled in for 40m
-only; the other eight bands' `scale` values still need a bench session
-with a wattmeter to bisect.
+Status: CW is on-air verified - on frequency, image suppression as
+predicted, and a flat ~5 W across all nine bands. USB and LSB from the
+mic have been on the air: both put out power and each lands on the
+correct side of the dial, but see "Known limitations" - the carrier is
+~700 Hz off the dial in both. DIGITAL (WSJT-X over the USB gadget) is
+code-complete and not yet tested on air.
 
-minibitx transmits CW only — a straight key wired into GPIO (see
-[`01_hardware_init_and_control.md`](01_hardware_init_and_control.md)),
-no voice, no digital modes, no keyer logic beyond a single on/off
-contact. That's a deliberate scope choice, not a missing feature: any
-richer TX mode is an external SDR app's job, same as demodulation is on
-receive.
+The earlier CW-only scheme this pipeline replaced (a second, IF-shifted
+oscillator in `cw.c` plus a matching clk2 correction in `radio.c`) is
+kept for reference in
+[`dsp_design_notes/tx_direct_to_dac_cw_history.md`](dsp_design_notes/tx_direct_to_dac_cw_history.md).
+The derivations and bench numbers behind the current design are
+[`ARCHITECTURE.md`](ARCHITECTURE.md) §10 steps 4, 5, 8 and 9.
 
 ## The chain, end to end
 
-TX reuses the exact same two mixer stages and both si5351 clocks that
-[`02_rx_processing_pipeline.md`](02_rx_processing_pipeline.md) covers
-for RX — same hardware, signal flowing the opposite direction:
-
 ```
-  cw.c: two NCOs x envelope      (sidetone at 700Hz, TX carrier IF-shifted
-     |                            to 700Hz + TX_IF_OFFSET_HZ ~= 23.3kHz)
-     v
-  WM8731 DAC, right=TX carrier,  (sound.c - PCM amplitude sets TX power;
-          left=sidetone           left channel never reaches the PA)
+  TX audio source, by mode (sound.c's audio_loop())
+     CW:      cw.c's 700 Hz sidetone x keying envelope
+     USB/LSB: mic (WM8731 right capture channel) x mic_tx_gain
+     DIGITAL: WSJT-X audio from the USB gadget, 48 -> 96 kHz (upsample48k.c)
      |
      v
-  Mixer 2  <---  clk1, si5351 (same physical clock RX uses, retuned to
-     |           bfo_freq for the duration of TX - see below)
-     |           balanced modulator: ~23.3kHz carrier mixed onto bfo_freq -
-     |           BFO sits at the filter's edge, not its center, so only
-     |           the difference product lands in the passband (see below)
+  tx_pipeline.c, one 1024-sample block at a time (96 kHz):
+     FFT -> 300-3000 Hz bandpass -> zero one sideband -> rotate bins
+     (the IF shift) -> inverse FFT -> real part
+     |            result: a real IF near 22.6 kHz
      v
-  Crystal filter, fixed at ~xtal_filter_center  (same filter RX uses)
+  WM8731 DAC, right channel = exciter feed (at the calibrated TX level),
+     |        left channel = local sidetone/mic monitor (never reaches the PA)
+     v
+  Mixer 2  <---  clk1 = bfo_freq (40,035,000 Hz) while transmitting
+     |           difference product lands on the crystal filter center;
+     |           the sum product lands ~45 kHz above it, in the stopband
+     v
+  Crystal filter, centered at xtal_filter_center (40,012,400 Hz)
      |
      v
-  Mixer 1  <---  clk2, si5351 RX/TX LO (radio_tx_apply() retunes it for
-     |           TX; radio_tune_to() itself has no notion of TX at all)
-     |           radio.c: si5351bx_setfreq(2, freq_hdr + xtal_filter_center
-     |                                        - CW_PITCH_HZ)  [TX only]
-     v
-  PA  (gain fixed by hardware; drive level set upstream - see below)
+  Mixer 1  <---  clk2 = freq_hdr + xtal_filter_center (no RIT during TX)
      |
      v
-  LPF bank  (radio_hw.c: set_lpf_40mhz, same relays RX uses)
+  PA (fixed gain)
+     |
+     v
+  LPF bank (radio_hw.c: set_lpf_40mhz, same relays RX uses)
      |
      v
   Antenna
 ```
 
-Everything from the DAC onward is analog hardware; minibitx's own code
-only ever touches the two endpoints — generating the baseband waveform
-at the top, and the GPIO/relay sequencing that turns the whole path on
-and off (`radio_set_tx()`, `radio.c` — covered in
-[`01_hardware_init_and_control.md`](01_hardware_init_and_control.md),
-not repeated here).
+Everything from the DAC onward is analog. maxibitx's code sets two
+things: the waveform written to the DAC's right channel, and the
+sequencing that switches the path in and out (`radio_tx_apply()`,
+below). Output power is set entirely by the amplitude of that
+waveform - see "Adjusting power levels".
+
+## Keying and PTT
+
+Every TX path ends up in `radio_set_tx()` (`radio.c`). It sets `in_tx`
+immediately, so every other thread sees the new state at once, and
+hands the slow hardware sequence to a dedicated worker thread (see
+[`05_process_and_threading_model.md`](05_process_and_threading_model.md)
+for why). Who calls it:
+
+- **The key/PTT line** (`CW_KEY`, BCM4), polled once per audio block by
+  `cw_poll_key()` (`cw.c`). In CW it's a straight key with semi
+  break-in: a hang timer (`CW_HANG_POLLS`, ~300 ms) holds TX through
+  the gaps between elements so the relay doesn't chatter. In USB and
+  LSB the same line is a mic PTT switch - TX follows the switch, no hang
+  timer. In DIGITAL the line is ignored.
+- **Remote PTT/MOX:** rigctld `T` (`hamlib.c`), Kenwood `TX`/`RX`/`TQ`
+  on the gadget's serial port (`usb_gadget.c`), and HPSDR MOX
+  (`hpsdr_p1.c`, which first retunes to the client's TX frequency if
+  it differs). While the local key/PTT line holds TX, remote
+  requests to change it are ignored - the local key wins.
+
+Which audio actually reaches the exciter is decided in `audio_loop()`:
+it transmits when the key/PTT line has TX asserted
+(`cw_tx_active()`), or when `in_tx` is set in DIGITAL. Remote PTT in
+CW, USB or LSB keys the radio but sends silence - there's no remote
+audio source in those modes, so a CAT or HPSDR MOX in CW doesn't
+produce a carrier.
+
+`radio_tx_apply(1)` then runs, in order: mute RX capture
+(`sound_set_rx_capture(0)`, before any TX RF exists), set clk1 to
+`bfo_freq` and clk2 to `freq_hdr + xtal_filter_center`, raise PTT
+(`EXT_PTT`), wait 20 ms, switch the T/R relay (`TX_LINE`), and open the
+exciter feed (`sound_set_tx_drive(TX_MASTER_VOL)`). Returning to RX is
+the reverse: exciter feed to 0, PTT off, 5 ms, relay off, clk1 back to
+`xtal_filter_center + RX_IF_FREQ_HZ`, clk2 back to its RX value (with
+RIT), and RX capture unmuted last, once the relay has settled.
 
 ## Stage by stage
 
-Following one CW keydown at 7,020,000 Hz (`bfo_freq` at its compiled
-default, 40,035,000 Hz; `xtal_filter_center` at its compiled default,
-40,012,400 Hz) as a worked example.
+Following one CW key-down at a dial frequency of 7,030,000 Hz, with
+`bfo_freq` and `xtal_filter_center` at this board's values (40,035,000
+and 40,012,400 Hz).
 
-**Baseband CW waveform — two oscillators, one envelope.** `cw.c` runs
-two software NCOs (`vfo.c`) sharing a single table-driven attack/decay
-envelope (480 samples, 5ms, Blackman-Harris-shaped) so key-down/key-up
-transitions don't click. `cw_poll_key()` drives the envelope's direction
-(rising while the key is down, falling once it's up) and also owns the
-semi break-in hang timer that keeps PTT/the relay asserted for a short
-window after key-up (`CW_HANG_POLLS`, ~300ms) so the relay doesn't
-chatter between individual dits and dahs.
+**Audio source.** `sound.c` fills one block of TX audio per ~10.7 ms
+period:
 
-`cw_get_sample()` reads the first NCO, tuned to the bare `CW_PITCH_HZ`
-(700 Hz) — this is the sidetone the operator actually hears, unchanged
-from earlier. `cw_get_tx_sample()` reads the second NCO, tuned to
-`CW_PITCH_HZ + TX_IF_OFFSET_HZ` (~23.3 kHz) — this is what actually gets
-transmitted, and it's deliberately *not* the pitch you hear; see
-`TX_IF_OFFSET_HZ`'s comment in `cw.c` and "Mixer 2" below for why. Both
-functions read the same envelope position for a given sample (only
-`cw_get_sample()` advances it — callers must call it first), so the two
-stay in lockstep. Each returns a floating value roughly in [-1, 1].
+- CW: `cw_get_sample()`, a 700 Hz tone (`CW_PITCH_HZ`) times a 5 ms
+  Blackman-Harris attack/decay envelope, so key transitions don't
+  click. The same tone is the local sidetone, so what you hear is
+  exactly what's being sent.
+- USB/LSB: the mic, from the WM8731's right capture channel, converted
+  to about ±1 full scale (`MIC_TX_INPUT_SCALE`) and multiplied by
+  `mic_tx_gain`. That gain is live-adjustable with rigctld `L MICGAIN`
+  or the control panel's Mic Gain slider; on air the right setting was
+  found somewhere under ~5.
+- DIGITAL: WSJT-X's audio, pulled from the USB gadget at 48 kHz
+  (`uac_pull_audio_tx()`) and upsampled 2x (`upsample48k.c`). Gaps are
+  filled with silence so the filter history stays continuous.
 
-**WM8731 DAC, both channels now doing real work.** `sound.c`'s audio
-thread converts each oscillator's value to a 32-bit PCM sample: the
-right channel gets `cw_get_tx_sample()` at the full wattmeter-calibrated
-amplitude (this is what reaches the balanced modulator and, eventually,
-the PA); the left channel gets `cw_get_sample()` at a small, fixed,
-independent amplitude for the local on-board-speaker monitor only (see
-"Adjusting power levels" below — the left channel never reaches the PA,
-regardless of its amplitude). The right channel's amplitude is the one
-place in the whole chain that sets how much power eventually reaches
-the antenna — everything after this point is fixed analog gain.
+For the example, the input is a 700 Hz tone.
 
-**Mixer 2 — clk1, retuned to the BFO (`bfo_freq`) only while
-transmitting, deliberately placed at the filter's edge.** RX and TX
-used to be forced to share one single `clk1` value for the whole
-process; they now each have their own, and `radio_tx_apply()` (`radio.c`)
-retunes `clk1` from its RX value (`xtal_filter_center + RX_IF_FREQ_HZ`)
-to `bfo_freq` right before asserting PTT, and restores the RX value the
-moment TX ends — see
-[`02_rx_processing_pipeline.md`](02_rx_processing_pipeline.md)'s "Mixer
-2" section for the RX side of this. While transmitting, the DAC's
-analog output drives a balanced modulator that mixes the ~23.3 kHz TX
-carrier onto `bfo_freq`, producing two products: `bfo_freq` − 23.3kHz
-(≈ 40,011,700 Hz) and `bfo_freq` + 23.3kHz (≈ 40,058,300 Hz). There's no
-phasing network or Hilbert-transform stage here — this hardware has a
-single real balanced modulator (confirmed against the schematic), and a
-real signal times a real LO always produces both sum and difference, no
-way around it. What makes this come out single-sideband anyway is
-*where* `bfo_freq` sits: 40,035,000 Hz is not the crystal filter's
-center (`xtal_filter_center`, 40,012,400 Hz by default) — it's
-deliberately ~22.6 kHz above it (`TX_IF_OFFSET_HZ`, `cw.c`), the same
-"BFO at the filter's edge" placement real sbitx's own design article
-describes (VU2ESE, "The sBitx": clock 1 sits ~25 kHz above the filter's
-passband center for this exact reason). With the BFO off-center like
-this, the *difference* product lands almost exactly at the filter's
-real center - actually `CW_PITCH_HZ` (700 Hz) short of it, a small, real
-residual baked into how `TX_IF_OFFSET_HZ` was originally bench-derived
-(see its comment in `cw.c`), not an oversight - deep in the passband
-either way, while the *sum* product lands far into the stopband — see
-"Crystal filter" below. Before this, `cw.c` fed a bare 700 Hz tone
-straight into this same mixer, so both products (`bfo_freq` ± 700 Hz)
-landed within ~5-6 kHz of each other, far too close together for this
-filter to tell apart — see "Known limitations" for how that showed up on
-the air.
+**`tx_pipeline.c`.** One shared instance serves every mode. Each
+1024-sample block goes through an overlap-save FFT filter (N = 2048,
+46.875 Hz per bin) in five steps:
 
-**Crystal filter.** The same fixed bandpass RX uses, measured (see
-[`dsp_design_notes/antialias_filter_design.md`](dsp_design_notes/antialias_filter_design.md))
-at ~40.0124 MHz center, ~35 kHz wide (-4dB cutoffs at ±17.4/17.5 kHz),
-with a skirt steep enough to reach -61dB by +28.5 kHz above center. The
-wanted difference product (~40,011,700 Hz) sits almost exactly at that
-measured center — close to peak passband, minimal attenuation. The
-unwanted sum product (~40,058,300 Hz) sits about 28.5 kHz above the
-passband's upper edge, right where the measured data shows -61dB of
-rejection. On the air this measured out to ~40dB of actual suppression
-between the two — real, usable, but short of the idealized curve, most
-likely because the curve came from a different (if representative)
-physical filter than the one on this board. This is also, not
-coincidentally, why the *old* 700Hz-straight-to-the-mixer scheme didn't
-work: both of its products landed only ~5-6 kHz from `bfo_freq`, nowhere
-near this filter's edge, so neither one got meaningfully rejected.
+1. **Bandpass**, 300-3000 Hz (`filter_tune_real()`, Kaiser β = 5). It
+   keeps both the positive- and negative-frequency images of that band,
+   so either sideband is available to the next step.
+2. **Sideband zero.** A real audio tone has energy at both +f and −f;
+   zeroing one half of the spectrum is what makes the result
+   single-sideband. CW, USB and DIGITAL keep the upper half, LSB the
+   lower.
+3. **Bin rotate** - the IF shift, done in the frequency domain instead
+   of with an oscillator. The upper half is rotated by 467 bins
+   (21,890.6 Hz, `TX_IF_SHIFT_BINS`), the lower half by 497 bins
+   (23,296.9 Hz, `TX_IF_SHIFT_BINS_LSB`). Both are chosen so a 700 Hz
+   tone lands on the crystal filter center after the analog mixers.
+4. **Inverse FFT, real part, ×2.** Taking the real part of the
+   one-sided spectrum produces the real IF waveform the DAC needs; the
+   ×2 restores the half of the tone's amplitude that the sideband zero
+   discarded, so the pipeline has unity gain for a steady tone.
+5. **Phase correction.** Rotating by an odd number of bins flips the
+   carrier's sign on every other block; the output is negated on those
+   blocks to keep it continuous.
 
-**Mixer 1 — the RX/TX LO (clk2), same clock `radio_tune_to()` sets for
-RX, retuned by `radio_tx_apply()` while transmitting.** `radio_tune_to()`
-itself only ever computes `f + xtal_filter_center` — it has no notion of
-TX at all, and must not: it's also what drives the RX baseband NCO
-(`vfo_start(&lo, RX_IF_FREQ_HZ, ...)`), which has no pitch offset to
-correct for in the first place (see "Known limitations"). The TX-only
-value lives one level up, in `radio.c`'s `radio_tx_apply()` — the single
-place all TX (straight key via `cw.c`, and remote MOX via `hpsdr_p1.c`)
-actually engages hardware — which re-issues clk2 as
-`freq_hdr + xtal_filter_center - CW_PITCH_HZ` right before asserting
-PTT (alongside retuning clk1 to `bfo_freq` - see "Mixer 2" above), and
-restores the plain RX formula right after dropping the relay. For our
-example: RX/idle clk2 = `7,020,000 + 40,012,400 = 47,032,400 Hz`; while
-keyed, clk2 = `7,020,000 + 40,012,400 - 700 = 47,031,700 Hz` - the same
-TX clk2 value the pipeline has always produced (verified algebraically
-identical to the older `f + bfo_freq - RX_IF_FREQ_HZ + CW_PITCH_HZ`
-formula for today's constants; only the RX-side value changed - see
-[`dsp_design_notes/antialias_filter_design.md`](dsp_design_notes/antialias_filter_design.md)
-§3). Mixing the crystal filter's output back down against this LO is
-what actually determines the transmitted RF frequency — see "Known
-limitations" for the dial-accuracy story this is part of.
+For the example: the 700 Hz tone comes out at 700 + 21,890.6 =
+22,590.6 Hz. The other half of the tone, which step 2 zeroed, would
+have landed at 21,190.6 Hz; on the bench it's 70 dB down
+(`test-tx-pipeline`).
 
-**PA.** A fixed-gain analog power amplifier stage. minibitx has no
-digital gain control over the PA itself — `radio_set_tx()`
-(`radio.c`) only sequences *whether* it's active (PTT/relay
-timing, covered in
-[`01_hardware_init_and_control.md`](01_hardware_init_and_control.md)).
-Everything about *how much* power comes out was already decided
-upstream, at the DAC stage.
+**WM8731 DAC.** The right channel carries the pipeline output at the
+calibrated TX amplitude - this is the exciter feed, and the only place
+in the chain that sets output power. The left channel carries the
+unprocessed TX audio (sidetone or mic) at a fixed, low level
+(`SIDETONE_PEAK_AMPLITUDE`) for the local speaker only.
 
-**LPF bank.** The same four relays (`LPF_A`–`LPF_D`) RX uses for
-front-end preselection, selected by `set_lpf_40mhz()` from
-`radio_tune_to()` — one filter path serves both directions. On TX
-this is what keeps harmonics of the fundamental from reaching the
-antenna.
+**Mixer 2 — clk1 at `bfo_freq`.** While transmitting, clk1 is
+`bfo_freq`, not its RX value. The DAC output drives a single balanced
+modulator, so both products appear: 40,035,000 − 22,590.6 =
+40,012,409.4 Hz, 9.4 Hz from the crystal filter center, and
+40,035,000 + 22,590.6 = 40,057,590.6 Hz, about 45 kHz above it. There's
+no phasing network; placing `bfo_freq` ~22.6 kHz above the filter is
+what lets the filter keep one product and reject the other.
+
+**Crystal filter.** The same filter RX uses (~35 kHz wide, centered at
+`xtal_filter_center`). The wanted product sits at its center; the sum
+product is deep in its stopband.
+
+**Mixer 1 — clk2.** clk2 is `freq_hdr + xtal_filter_center` =
+47,042,400 Hz, the same as RX without RIT. The output is
+47,042,400 − 40,012,409.4 = 7,029,990.6 Hz: the carrier lands 9.4 Hz
+below the dial. That residual comes from the bin rotate moving in
+whole 46.875 Hz steps. The zeroed image, if any of it survives, would
+land 1,400 Hz below that (~7,028,590 Hz); on the air a remote receiver
+tuned there heard nothing.
+
+**PA and LPF.** The PA has fixed gain. The LPF relay was already
+selected for the band by `radio_tune_to()`; on TX it removes harmonics.
 
 ## Adjusting power levels
 
-Only one stage in the whole chain sets output power: the PCM
-amplitude written to the DAC. Everything downstream (balanced
-modulator, crystal filter, PA, LPF) is fixed analog gain that doesn't
-change per-band or per-drive-setting — so working backward from a
-target wattage always means changing one of these `sound.c` constants,
-never anything hardware-facing:
+Only the amplitude written to the DAC's right channel sets output
+power; everything downstream is fixed analog gain. Per sample, the
+pipeline output is multiplied by
+`TX_SAMPLE_HEADROOM × TX_DRIVE × band scale × TX_GAIN_CORRECTION` and
+clamped. The constants (`sound.c` unless noted):
 
-- **`TX_DRIVE`** — mirrors real sbitx's "drive" setting (0–100).
-  Fixed at 50 (no live UI/command to adjust it yet); the per-band
-  scale table below was itself measured against this value.
-- **`hw_settings_tx_scale(freq)`** (`hw_settings.c`) — looks up the
-  current band's `scale` entry from `data/hw_settings.ini`'s
-  `[tx_band]` sections. This is real sbitx bench data (their own
-  `calibrate_band_power()`, compensating for PA gain rolling off
-  toward 10m), reused here as a starting point rather than derived
-  from scratch.
-- **`TX_SAMPLE_HEADROOM`** (`sound.c`) — anchors the per-band scale
-  table above to a PCM amplitude: set so the reference band (40m,
-  `HW_DEFAULT_TX_SCALE`) reproduces exactly the same output level the
-  old flat, unscaled `1e9` constant it replaced did, so that band's
-  already-tested level doesn't move. Other bands scale up/down from
-  there following the table's real per-band ratios (roughly 14x across
-  the table, 80m to 10m) — `TX_SAMPLE_CLAMP` below exists specifically
-  because that spread can call for several times more amplitude than
-  40m on the high end.
-- **`TX_GAIN_CORRECTION`** — a flat multiplier on top of the above, now
-  **0.045**, bench-verified against a wattmeter (40m/7.020MHz: 5.1W,
-  matching real sbitx's own 4.8W measured on the same board at the same
-  drive setting). This replaced an earlier value of 4.0 that was
-  calibrated against the old (pre-`TX_IF_OFFSET_HZ`) scheme, where both
-  transmitted products sat on the crystal filter's skirt and lost real
-  power to its own attenuation before ever reaching the antenna. Now
-  that the wanted product sits at the filter's point of *least*
-  attenuation (see "Mixer 2" above), the same digital drive level
-  produces much more RF output — the swing from 4.0 to 0.045 (~89x) is
-  the direct consequence of removing that incidental loss, discovered
-  the hard way (a first re-test at the old 4.0 measured >23W on a board
-  whose PA had only ever been bench-verified safe up to ~6-8W). Re-derive
-  this value from scratch on any board where the filter's measured
-  center or `bfo_freq` differ meaningfully from this one — the relation
-  between "how far the wanted product sits from the filter's peak" and
-  "how much gain that costs you" isn't obvious in advance, and the
-  power vs. gain curve near the low end here didn't turn out to be a
-  clean square law either (bench data, not derived) — treat this as
-  something to re-bisect against a wattmeter on new hardware, not a
-  constant to trust blind.
-- **`TX_SAMPLE_CLAMP`** — hard-limits the PCM sample so it can't wrap
-  around the 32-bit sample format. At today's much lower
-  `TX_GAIN_CORRECTION` (0.045), no band's pre-clip amplitude reaches
-  this clamp any more — the "every band saturates to the same ceiling"
-  problem documented in
-  [`dsp_design_notes/tx_power_calibration.md`](dsp_design_notes/tx_power_calibration.md)
-  no longer applies as written; that doc's specific numbers are stale
-  and its band-by-band procedure needs re-running against the current
-  pipeline (not yet done).
-- **`TX_MASTER_VOL`** (`radio.c`) — the WM8731 "Master" ALSA control,
-  set to 95 during TX. This gates the DAC's whole analog output stage
-  (both channels), not a per-channel volume — real sbitx's own code
-  comment is explicit that muting it "mutes the PA, killing TX power
-  regardless of the DRIVE setting." Lowering it would undo the
-  wattmeter-calibrated power above, not just turn down the local
-  sidetone.
-- **`sound_set_rx_capture()`** (`sound.c`) — mutes the WM8731 "Capture"
-  ALSA control (the RX analog gain stage - see
-  [`dsp_design_notes/rx_gain_and_level_calibration.md`](dsp_design_notes/rx_gain_and_level_calibration.md))
-  to 0 the moment `radio_tx_apply()` enters TX, before PTT/the relay/
-  either clock change - i.e. before any TX RF exists at all - and
-  restores it to `RX_CAPTURE_GAIN_PERCENT` only as the very last step of
-  returning to RX, after the relay has actually settled back. Protects
-  the ADC and the DSP chain built on it from whatever bleeds into the RX
-  input during TX (relay leakage, PA harmonics, shared-ground
-  crosstalk) - the same protection real sbitx's own `tr_switch()`
-  applies to this exact codec. Purely a TX-safety measure; it has no
-  effect on transmitted power (that's `TX_MASTER_VOL` and
-  `TX_GAIN_CORRECTION` above).
-- **`SIDETONE_PEAK_AMPLITUDE`** (`sound.c`) — the one knob that does
-  *not* affect transmitted power: a fixed PCM peak amplitude applied
-  only to the DAC's left channel (local on-board-speaker monitor, at
-  the `CW_PITCH_HZ` sidetone — see "Baseband CW waveform" above); the
-  right channel that actually feeds the balanced modulator uses the
-  full TX-calibrated amplitude regardless of this value. It used to be
-  `amp * SIDETONE_SCALE` — coupled to the same `amp` as the TX channel —
-  which meant the sidetone silently went near-inaudible the moment
-  `TX_GAIN_CORRECTION` dropped ~89x above. It's a fixed comfort-level
-  constant now, independent of whatever `TX_GAIN_CORRECTION` is
-  currently bench-calibrated to.
+- **`TX_DRIVE`** — mirrors real sbitx's 0-100 "drive" setting. Fixed at
+  50; there's no command to change it.
+- **`hw_settings_tx_scale(freq)`** (`hw_settings.c`) — the current
+  band's `scale` from the `[tx_band]` entries in
+  `data/hw_settings.ini`, compensating for the PA's gain varying across
+  bands. The values were re-derived with a wattmeter for this pipeline;
+  procedure and results are in
+  [`dsp_design_notes/tx_power_calibration.md`](dsp_design_notes/tx_power_calibration.md).
+- **`TX_SAMPLE_HEADROOM`** — anchors the scale table to a PCM amplitude,
+  defined against the 40 m value (`HW_DEFAULT_TX_SCALE`).
+- **`TX_GAIN_CORRECTION`** — a flat multiplier, 0.045, set with a
+  wattmeter (5.1 W on 40 m). With the scale table this gives ~5-6 W on
+  every band. Re-derive it on any board whose filter center or
+  `bfo_freq` differ; it depends on where the wanted product sits on
+  the filter.
+- **`TX_SAMPLE_CLAMP`** — keeps the sample inside the 32-bit range. At
+  the current calibration no band reaches it.
+- **`TX_MASTER_VOL`** (`radio.c`) — the WM8731 `Master` right-channel
+  volume, 95 during TX and 0 otherwise (`sound_set_tx_drive()`). It
+  gates the exciter feed; lowering it would undo the calibration
+  above. The left (local speaker) channel is never touched here.
+- **`mic_tx_gain`** — USB/LSB only. It changes the level going into
+  the pipeline, so it changes power directly. There's no ALC yet, and
+  voice power hasn't been calibrated on a wattmeter
+  (`ARCHITECTURE.md` §10 step 10).
+- **`SIDETONE_PEAK_AMPLITUDE`** — the local monitor level on the left
+  channel. It has no effect on transmitted power.
+
+`tx_pipeline.c` has unity gain for a steady tone, which is why CW's
+calibration carries over from the old scheme. Speech and FT8 audio have
+different peak-to-average ratios, so their power at a given setting
+still needs checking with a wattmeter.
 
 ## Known limitations
 
-- **Image suppressed, not eliminated (~40dB).** The `TX_IF_OFFSET_HZ`
-  placement (see "Mixer 2" above) fixed what used to be a genuine DSB
-  problem (two equal-strength tones 1.4 kHz apart) — confirmed on-air,
-  on two independent SDR displays, at roughly 40dB of suppression
-  between the wanted and unwanted product. That's real, usable
-  single(-ish)-sideband CW, comparable to what many communications-grade
-  phasing/filter-method exciters achieve — but it's not infinite. The
-  crystal filter's own measured skirt (see
-  [`dsp_design_notes/antialias_filter_design.md`](dsp_design_notes/antialias_filter_design.md))
-  theoretically supports closer to -61dB at the unwanted product's
-  offset; the ~20dB gap between that and the measured ~40dB most likely
-  comes from this being a different physical filter unit than the one
-  characterized in that doc, plus whatever the diode mixer's own
-  balance and any minor path nonlinearity contribute. Nothing here
-  suggests it's fixable further without new measurement data specific
-  to this board's actual filter.
-- **TX frequency offset from the dial — fixed, bench-verified on air.**
-  Real sbitx computes a
-  *different* LO frequency for TX in CW mode than for RX — it applies
-  an additional ∓`rx_pitch` (700 Hz) correction specifically so the
-  transmitted carrier lands exactly on the dial frequency, compensating
-  for its own onboard RX demodulator's pitch convention. minibitx's
-  version of this gap has a different root cause: minibitx has no
-  onboard RX demod at all (that's the external SDR app's job, per this
-  document's opening paragraph), so the baseband I/Q it delivers over
-  HPSDR/USB carries no pitch offset of its own — `radio_tune_to()`'s
-  formula puts RX exactly on the dial. TX was the one side that was
-  off, by `CW_PITCH_HZ` (700 Hz) low, because `cw.c`'s TX carrier sits
-  at `CW_PITCH_HZ + TX_IF_OFFSET_HZ` rather than at `xtal_filter_center`
-  (see "Mixer 2" above - the difference product lands `CW_PITCH_HZ`
-  short of true center) — bench-confirmed on the air as transmitting at
-  dial − 700 Hz. Fixed by computing clk2 during TX as
-  `freq_hdr + xtal_filter_center - CW_PITCH_HZ` (`radio_tx_apply()` in
-  `radio.c`), the mirror of real sbitx's own `rx_pitch` correction,
-  applied at the one place all TX funnels through rather than inside
-  `radio_tune_to()` (which must stay TX-agnostic, since it also drives
-  the RX baseband NCO). Originally implemented as a `+ CW_PITCH_HZ`
-  correction on top of the plain RX formula
-  (`f + bfo_freq - RX_IF_FREQ_HZ`); re-derived in terms of
-  `xtal_filter_center` when RX and TX stopped sharing a single `clk1`
-  value (see
-  [`dsp_design_notes/antialias_filter_design.md`](dsp_design_notes/antialias_filter_design.md)
-  §3) - algebraically identical to the old formula for today's
-  constants (verified: both give clk2 = 47,031,700 Hz for the 7.02 MHz
-  worked example above), so the original on-air confirmation (keyed
-  down at a known dial frequency with an independent remote receiver,
-  landing exactly on it, no residual 700 Hz offset) should still hold,
-  but re-verifying it on air after this change is still worth doing
-  before trusting it, same as any change that touches TX. Re-verify
-  again after any future change to `bfo_freq`, `TX_IF_OFFSET_HZ`,
-  `xtal_filter_center`, or `CW_PITCH_HZ`, since this formula depends on
-  all four.
+- **USB, LSB and DIGITAL transmit ~700 Hz off the dial.** The bin
+  rotations were chosen so a 700 Hz tone lands on the dial - right for
+  CW, but for sideband modes the *suppressed carrier* should be on the
+  dial. In the model the analog chain follows (the one CW's on-air
+  frequency check confirms), audio at `a` Hz goes out at:
+
+  | Mode | On air | 700 Hz | 1500 Hz |
+  |---|---|---|---|
+  | CW | dial − 9 Hz | dial − 9 Hz | — |
+  | USB, DIGITAL | dial + a − 709 Hz | dial − 9 Hz | dial + 791 Hz |
+  | LSB | dial − a + 697 Hz | dial − 3 Hz | dial − 803 Hz |
+
+  (Bench simulation of `tx_pipeline.c` plus the two mixer stages.)
+  The on-air SSB tests so far checked power and which side of the dial
+  each sideband lands on, not the carrier's exact position, so this
+  hasn't been seen on air yet. For FT8 it would put WSJT-X's signal
+  ~709 Hz below where it reports transmitting - still decodable, but in
+  the wrong place. The likely fix is a separate rotation for sideband
+  modes: `bfo_freq − xtal_filter_center` (22,600 Hz ≈ 482 bins) for
+  both USB and LSB puts the carrier within ~6 Hz of the dial, while CW
+  keeps its current rotation. Not yet changed.
+- **The IF shift doesn't follow `hw_settings.ini`.** `tx_pipeline.h`
+  computes its rotations from compiled-in copies of `bfo_freq` and
+  `xtal_filter_center` (`TX_PIPELINE_BENCH_BFO_FREQ_HZ`/
+  `_XTAL_CENTER_HZ`), not from the values loaded at startup. They match
+  this board's `hw_settings.ini` today; on a board with different
+  values, TX frequency would be off by the difference.
+- **No band limits.** Nothing refuses PTT outside the `[tx_band]`
+  ranges; rigctld's `dump_state` advertises them, but only as
+  information.
+- **CW-reverse isn't a TX mode yet**, matching RX. For a pure CW tone
+  the kept sideband doesn't change the carrier frequency anyway.
+- **Remote PTT in CW sends no carrier** (see "Keying and PTT"). Tuning
+  up or keying CW from a computer needs a real key or a future remote
+  keying path.
+- **Voice levels uncalibrated.** No ALC, no wattmeter check of real
+  speech; `mic_tx_gain`'s best default isn't settled
+  (`ARCHITECTURE.md` §9, §10 step 10).
