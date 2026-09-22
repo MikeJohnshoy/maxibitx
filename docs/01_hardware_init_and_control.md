@@ -161,6 +161,16 @@ see [`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md) and
 [`dsp_design_notes/antialias_filter_design.md`](dsp_design_notes/antialias_filter_design.md)
 §3 for why RX and TX need different `clk1` values in the first place.
 
+Every clock is derived from the si5351's reference oscillator, a nominal
+25 MHz TCXO. `hw_settings.ini`'s `cal` key gives its measured frequency,
+in sbitx's own `[tcxo]` section (accepted at the top level too);
+`hw_settings_load()` passes it to `si5351_set_calibration()` before any
+clock is set, and with it left out the nominal 25,000,000 is used. An error here moves RX and TX together,
+in proportion to the operating frequency - about 11 Hz at 7 MHz for the
+1.6 ppm measured on this board. Measuring it:
+[`dsp_design_notes/tx_test_tones_and_alc.md`](dsp_design_notes/tx_test_tones_and_alc.md),
+"Frequency calibration".
+
 The si5351 sits on I2C bus 22 (`SI5351_I2C_BUS` in `si5351v2.c`), sharing
 the physical bus with the board's RTC via the `i2c-rtc-gpio` device tree
 overlay. That bus number came from `i2cdetect -y 22` showing a device at
