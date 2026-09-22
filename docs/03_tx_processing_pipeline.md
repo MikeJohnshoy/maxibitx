@@ -86,7 +86,8 @@ for why). Who calls it:
 
 Which audio actually reaches the exciter is decided in `audio_loop()`:
 it transmits when the key/PTT line has TX asserted
-(`cw_tx_active()`), or when `in_tx` is set in DIGITAL. Remote PTT in
+(`cw_tx_active()`), when `in_tx` is set in DIGITAL, or when `in_tx` is
+set with the test-tone generator on (below). Otherwise remote PTT in
 CW, USB or LSB keys the radio but sends silence - there's no remote
 audio source in those modes, so a CAT or HPSDR MOX in CW doesn't
 produce a carrier.
@@ -121,6 +122,14 @@ period:
 - DIGITAL: WSJT-X's audio, pulled from the USB gadget at 48 kHz
   (`uac_pull_audio_tx()`) and upsampled 2x (`upsample48k.c`). Gaps are
   filled with silence so the filter history stays continuous.
+- Test tones, in any mode, while the generator is on (`tone_gen.c`,
+  rigctld `U TONE 1|2`): a full-scale 1000 Hz tone, or 700 + 1900 Hz at
+  half amplitude each. Both peak at full scale, so both reach the same
+  PEP as CW; the two-tone's average power is half. Any PTT source keys
+  them, and the sideband still follows the mode. After 30 s in transmit
+  the generator turns itself off and PTT drops. Design and measurement
+  procedure:
+  [`dsp_design_notes/tx_test_tones_and_alc.md`](dsp_design_notes/tx_test_tones_and_alc.md).
 
 For the example, the input is a 700 Hz tone.
 
@@ -257,9 +266,9 @@ still needs checking with a wattmeter.
   information.
 - **CW-reverse isn't a TX mode yet**, matching RX. For a pure CW tone
   the kept sideband doesn't change the carrier frequency anyway.
-- **Remote PTT in CW sends no carrier** (see "Keying and PTT"). Tuning
-  up or keying CW from a computer needs a real key or a future remote
-  keying path.
+- **Remote PTT in CW sends no carrier** (see "Keying and PTT") unless
+  the test-tone generator is on. Keying CW from a computer needs a real
+  key or a future remote keying path.
 - **Voice levels uncalibrated.** No ALC, no wattmeter check of real
   speech; `mic_tx_gain`'s best default isn't settled
   (`ARCHITECTURE.md` §9, §10 step 10).
