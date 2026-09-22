@@ -1,40 +1,15 @@
 // cw.c
 //
-// Polls the one physical key/PTT line wired into GPIO (radio_hw.h's
-// CW_KEY line) and holds PTT/the T/R relay for the duration of a burst.
-// In CW mode this is a straight key: semi break-in via a hang timer,
-// and this file also generates the single tone (gated by a table-driven
-// envelope) that both the local sidetone monitor and the shared TX
-// pipeline use. In USB/LSB mode the same physical line is read as a
-// plain mic PTT switch instead (see cw_poll_key()'s comment) - real
-// mic audio, not this file's tone, is what sound.c feeds the TX
-// pipeline in that case. minibitx stays a support layer for external
-// SDR apps so there is no iambic keyer, no macros - this gets clean
-// dots and dashes (or a plain PTT switch) in, nothing more.
+// Polls the key/PTT line (radio_hw.h's CW_KEY) and keys the radio from
+// it. In CW it's a straight key with semi break-in, and this file
+// generates the keyed tone that feeds both the local sidetone and
+// tx_pipeline.c (via sound.c). In USB/LSB the same line is a mic PTT
+// switch. No keyer and no macros - maxibitx leaves those to external apps.
 //
-// Table-driven Blackman-Harris attack/decay envelope: 480 samples (5ms
-// rise and fall time at 96kHz, similar to the implementation in sBitx's own
-// CW keyer uses in modem_cw.c), rising from ~0 to 1.0. Table-driven so
-// a different keying shape later is a table swap, not a logic change.
-// The same table is used forward for attack (key down) and backward
-// for decay (key up), same trick sbitx's own keyer uses.
-//
-// docs/ARCHITECTURE.md build order step 5: this file used to also carry
-// a SECOND oscillator (`cw_tx_carrier`) at a fixed IF offset
-// (`TX_IF_OFFSET_HZ`, ~22.6kHz above CW_PITCH_HZ) purely so the actual
-// TX product would land inside the crystal filter's passband without a
-// phasing/Hilbert stage - see git history for that derivation, or
-// docs/ARCHITECTURE.md §4 for why it worked at all (a single real mixer
-// with the BFO deliberately off-center from the crystal filter). That
-// whole scheme - the second NCO here, and the matching
-// `- CW_PITCH_HZ` residual correction `radio_tx_apply()` (radio.c) used
-// to apply to clk2 to square up the dial frequency - is gone as of this
-// step: `cw_get_sample()`'s one real-valued tone now also feeds
-// tx_pipeline.c's shared FFT pipeline (sound.c) as its `i_sample`, which
-// does the IF placement (an explicit sideband-zero plus a bin-rotate,
-// bench-derived and verified in docs/ARCHITECTURE.md §10 step 4) in the
-// frequency domain instead. See radio_tx_apply()'s own comment (radio.c)
-// for the resulting, simpler clk2 formula.
+// Keying envelope: a table-driven Blackman-Harris ramp, 480 samples (5ms
+// at 96kHz), from ~0 to 1.0 - similar to sBitx's own keyer (modem_cw.c).
+// Read forward for attack and backward for decay. A different keying
+// shape is a table swap, not a logic change.
 
 #include "cw.h"
 #include "radio.h"
@@ -44,13 +19,8 @@
 
 #define CW_ENVELOPE_LEN 480
 
-// CW_PITCH_HZ (the sidetone/keying pitch, and now the only frequency
-// this file ever generates) lives in cw.h - see its comment there.
-
-// How many cw_poll_key() calls (audio blocks) to hold TX after the key
-// goes up before actually releasing PTT/the relay - standard semi
-// break-in, so the relay doesn't chatter between individual dits and
-// dahs. ~300ms at the assumed ~10.7ms/block cadence above.
+// Semi break-in: audio blocks to hold TX after the key goes up, so the
+// relay doesn't chatter between elements. 28 x ~10.7ms = ~300ms.
 #define CW_HANG_POLLS 28
 
 static const double cw_envelope[CW_ENVELOPE_LEN] = {
@@ -109,11 +79,7 @@ static const double cw_envelope[CW_ENVELOPE_LEN] = {
     0.996989, 0.997511, 0.997984, 0.998406, 0.998780, 0.999103, 0.999377, 0.999601, 0.999776,
     0.999900, 0.999975, 1.000000,
 };
-// CW_PITCH_HZ - the only tone this file generates now (see cw.h); feeds
-// both the local sidetone monitor and, via cw_get_sample(), sound.c's
-// tx_pipeline.c as its i_sample - step 5 removed the second,
-// IF-shifted cw_tx_carrier oscillator that used to live here.
-static struct vfo cw_tone;
+static struct vfo cw_tone;     // CW_PITCH_HZ oscillator
 static int envelope_pos = 0;   // 0 = silent, CW_ENVELOPE_LEN-1 = full output
 static int key_down = 0;       // last polled key state
 static int tx_active = 0;      // PTT/relay currently asserted for a keying burst
@@ -131,22 +97,12 @@ void cw_poll_key(void) {
     key_down = radio_hw_key_down();
     enum radio_mode mode = radio_get_mode();
 
-    // This one physical line (radio_hw.h's CW_KEY, BCM4) is genuinely
-    // dual-purpose on real sbitx hardware, not a maxibitx-only quirk:
-    // Farhan's own sbitx_gtk.c defines the identical wiringPi pin (7,
-    // which is this same BCM4/physical-pin-7 line - see
-    // docs/01_hardware_init_and_control.md's migration table) as `PTT`,
-    // read as a straight key in CW mode and as a plain mic PTT switch in
-    // voice modes ("Farhan sometimes demonstrates operating CW with his
-    // thumb on the mic PTT switch" - it's the same contact closure
-    // either way). So sensing mic PTT needs no new GPIO at all; what was
-    // missing was this function treating a closure the same way
-    // regardless of mode. Now it doesn't.
+    // One line, two uses: CW_KEY (BCM4) is the same pin sbitx calls PTT,
+    // read as a straight key in CW and as a mic PTT switch in USB/LSB.
+    // History: ARCHITECTURE.md §10 step 8.
     if (mode == RADIO_MODE_CW) {
-        // Straight-key CW: semi break-in - the hang timer holds TX
-        // through the gaps between individual dits/dahs so the relay
-        // doesn't chatter (see CW_HANG_POLLS above). Unchanged from
-        // before this function became mode-aware.
+        // Straight key, semi break-in: CW_HANG_POLLS holds TX through
+        // the gaps between elements.
         if (key_down) {
             if (!tx_active) {
                 tx_active = 1;
@@ -163,14 +119,8 @@ void cw_poll_key(void) {
             }
         }
     } else if (mode == RADIO_MODE_USB || mode == RADIO_MODE_LSB) {
-        // Same line, read as a plain mic PTT switch instead: assert/
-        // release TX immediately with the switch, no hang timer - a
-        // voice transmission has no inter-element gap to bridge the way
-        // CW's dits/dahs do, and holding a switch down is exactly what a
-        // real PTT should do while held. Matches real sbitx's own
-        // `tx_on(TX_PTT)`/`tx_off()` on this identical GPIO
-        // (sbitx_gtk.c's main loop, PTT low -> tx_on, PTT high -> tx_off
-        // while in_tx == TX_PTT).
+        // Mic PTT: TX follows the switch, no hang timer (as sbitx does on
+        // the same GPIO).
         if (key_down) {
             if (!tx_active) {
                 tx_active = 1;
@@ -182,10 +132,10 @@ void cw_poll_key(void) {
         }
         hang_counter = 0; // no semi break-in outside CW mode
     }
-    // RADIO_MODE_DIGITAL: this key line isn't wired to a TX source in
-    // that mode yet (external digital-mode audio, e.g. WSJT-X, is still
-    // unbuilt - docs/ARCHITECTURE.md) - ignore it here rather than
-    // keying an undefined transmission.
+    // DIGITAL: the line is ignored; PTT comes from CAT, rigctld or HPSDR.
+    // Caveat: nothing here releases a TX this function asserted before
+    // the mode changed to DIGITAL (e.g. within CW's hang time) - it stays
+    // keyed until the mode changes back.
 }
 
 int cw_tx_active(void) {
