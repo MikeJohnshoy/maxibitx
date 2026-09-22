@@ -1,7 +1,8 @@
 # TX test tones, carrier-offset check, and ALC
 
-Status: in progress. Step 1 (the test-tone generator) is implemented and
-bench-tested; steps 2-5 are proposed.
+Status: in progress. Step 1 (the test-tone generator) is built and
+bench-tested, and step 2 (the carrier-offset check and fix) is measured
+and fixed, pending an on-air re-check. Steps 3-5 are proposed.
 
 ## Why
 
@@ -26,11 +27,7 @@ A mic can't answer any of these precisely. A generated tone can.
 
 1. **Test-tone generator** (done). A TX audio source that replaces the
    mode's normal source (key tone, mic or USB audio) while it's on.
-2. **Carrier-offset check and fix.** Transmit a single 1000 Hz tone and
-   read where it lands on a remote receiver. Expected dial + 1000 Hz in
-   USB and dial − 1000 Hz in LSB; the model predicts dial + 291 and
-   dial − 303 today. Then give USB/LSB/DIGITAL their own bin rotation
-   (`bfo_freq − xtal_filter_center` ≈ 482 bins) and re-check.
+2. **Carrier-offset check and fix** (measured and fixed; see below).
 3. **Two-tone calibration.** Measure average power per band and look at
    the IMD products on a remote SDR's spectrum, to find the highest
    clean peak envelope power (PEP).
@@ -114,6 +111,49 @@ measurement over the same 16 blocks reads about −62 dB at the IMD
 frequencies - leakage from the tones 1200 Hz away, not real IMD - which
 is why Case E windows.) Re-run with
 `make test-tx-pipeline && ./test-tx-pipeline`.
+
+## The carrier offset (step 2)
+
+**Measured, 2026-09-22.** Dial 7,218,000 Hz, single 1000 Hz tone, read
+on a remote receiver:
+
+| Mode | Measured | Model | Should be |
+|---|---|---|---|
+| USB | dial + 280 Hz | dial + 291 Hz | dial + 1000 Hz |
+| LSB | dial − 317 Hz | dial − 303 Hz | dial − 1000 Hz |
+
+The offset is confirmed, and both readings sit within ~14 Hz of the
+model - close enough to treat the bench model of the mixer chain as
+correct.
+
+**The cause.** Both rotations were derived to land a `CW_PITCH_HZ` tone
+on the dial. That is what CW wants (a key-down carrier on frequency),
+but a sideband mode's audio is referenced to its *suppressed carrier*,
+i.e. audio 0 Hz. Anchoring a 700 Hz tone instead puts the carrier 700 Hz
+off in either direction.
+
+**The fix.** `tx_pipeline.h` now has two placements, selected by an
+`enum tx_pipeline_signal` (CW, USB, LSB) that replaced the old
+upper/lower sideband argument:
+
+| Signal | Anchor | Ideal shift | Bins | Actual | Carrier |
+|---|---|---|---|---|---|
+| CW | 700 Hz tone on the dial | 21,900 Hz | 467 | 21,890.6 Hz | dial − 9.4 Hz |
+| USB, LSB, DIGITAL | carrier on the dial | 22,600 Hz | 482 | 22,593.8 Hz | dial − 6.3 Hz |
+
+Both sidebands share the SSB shift: USB rotates its kept positive half
+onto the carrier point and LSB its kept negative half, each band running
+from that same point in its own direction. The separate mirrored LSB
+shift the earlier tone-anchored derivation needed is gone.
+
+`tx_pipeline_test.c` Case D now checks LSB placement directly: a 1000 Hz
+tone reads 0 dB at the carrier − 1000 Hz and −122 dB at carrier + 1000
+Hz, which is what distinguishes LSB from USB.
+
+**Still open:** an on-air re-check (USB should read dial + 1000 Hz), and
+the separate ~10-14 Hz low bias both measurements showed, about 1.5-2
+ppm at 7.2 MHz. That is the si5351 reference, not the DSP, and there's
+no frequency calibration for it yet.
 
 ## Doing the measurements
 
