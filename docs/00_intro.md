@@ -61,9 +61,13 @@ Transmit: CW from a straight key on the sbitx key input, with
 Blackman-Harris shaping, runs through the shared FFT TX pipeline
 (`tx_pipeline.c`) and has been checked on air — on frequency, image
 suppression as predicted, and a flat ~5 W across the nine bands.
-USB/LSB from the mic and DIGITAL from the USB audio gadget use the same
-pipeline; both are code-complete but not yet tested on air, and voice
-power/ALC calibration is still to do (`ARCHITECTURE.md` §10).
+USB and LSB from the mic use the same pipeline and have been on the
+air (power out, each on its correct side of the dial), though the
+carrier appears to sit ~700 Hz off the dial - see
+[`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md)'s
+"Known limitations". DIGITAL from the USB audio gadget is code-complete
+but not yet tested on air, and voice power/ALC calibration is still to
+do (`ARCHITECTURE.md` §10).
 
 ## How the rest of these docs are organized
 
@@ -78,9 +82,8 @@ code:
   CW/USB/LSB demodulator that taps the same I/Q for the local speaker
   and the USB audio gadget.
 - [`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md) — the
-  transmit side's analog chain, and the original direct-to-DAC CW
-  scheme `tx_pipeline.c` replaced (the current mechanism is
-  `ARCHITECTURE.md` §10 steps 4–5).
+  transmit signal chain: each mode's audio source, keying/PTT,
+  `tx_pipeline.c`, the analog mixers, and power levels.
 - [`04_remote_control_and_iq_output.md`](04_remote_control_and_iq_output.md)
   — how external software tunes/keys the radio and receives the I/Q
   and audio it produces.
