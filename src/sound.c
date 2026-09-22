@@ -120,7 +120,7 @@ static volatile int g_running = 0;
 
 // The shared TX pipeline (tx_pipeline.c): one instance for the process
 // lifetime, since its FFTW plans are expensive to build. CW, USB/LSB and
-// DIGITAL all use it; only the input source and the sideband differ (see
+// DIGITAL all use it; only the input source and the signal type differ (see
 // audio_loop()).
 static struct tx_pipeline *cw_tx_pipeline = NULL;
 
@@ -755,15 +755,16 @@ static void *audio_loop(void *arg) {
         static double tx_audio_48k[MAX_FRAMES / 2 + 1];
 
         enum radio_mode tx_mode = radio_get_mode();
-        enum tx_pipeline_sideband sideband = TX_PIPELINE_KEEP_UPPER;
+        enum tx_pipeline_signal signal = TX_PIPELINE_CW;
 
         if (tone_on) {
           // Test tones replace the mode's own source; the sideband still
           // follows the mode (tone_gen.h).
           for (int i = 0; i < n; i++)
             tx_audio_buf[i] = tone_gen_sample();
-          sideband = (tx_mode == RADIO_MODE_LSB) ? TX_PIPELINE_KEEP_LOWER
-                                                  : TX_PIPELINE_KEEP_UPPER;
+          signal = (tx_mode == RADIO_MODE_LSB)  ? TX_PIPELINE_LSB
+                   : (tx_mode == RADIO_MODE_CW) ? TX_PIPELINE_CW
+                                                : TX_PIPELINE_USB;
         } else if (tx_mode == RADIO_MODE_CW) {
           // cw_get_sample() owns the envelope advance for this sample -
           // must be called exactly once per real audio sample (its
@@ -771,8 +772,7 @@ static void *audio_loop(void *arg) {
           // pipeline below batches them).
           for (int i = 0; i < n; i++)
             tx_audio_buf[i] = cw_get_sample();
-          sideband = TX_PIPELINE_KEEP_UPPER; // CW groups with USB - see
-                                              // tx_pipeline.h's enum comment
+          signal = TX_PIPELINE_CW;
         } else if (tx_mode == RADIO_MODE_DIGITAL) {
           // WSJT-X's audio from the USB gadget (48kHz), upsampled 2x;
           // ceil(n/2) inputs cover n outputs.
@@ -790,8 +790,7 @@ static void *audio_loop(void *arg) {
             if (out_idx < n)
               tx_audio_buf[out_idx++] = out2[1];
           }
-          sideband = TX_PIPELINE_KEEP_UPPER; // FT8/digital convention:
-                                              // always USB regardless of band
+          signal = TX_PIPELINE_USB; // FT8/digital convention: always USB
         } else {
           // USB/LSB: mic audio, through the fixed unit conversion and the
           // live mic gain. (cw_poll_key() only asserts TX for CW, USB and
@@ -799,14 +798,13 @@ static void *audio_loop(void *arg) {
           double mic_gain = MIC_TX_INPUT_SCALE * mic_tx_gain;
           for (int i = 0; i < n; i++)
             tx_audio_buf[i] = mic_buf[i] * mic_gain;
-          sideband = (tx_mode == RADIO_MODE_LSB) ? TX_PIPELINE_KEEP_LOWER
-                                                  : TX_PIPELINE_KEEP_UPPER;
+          signal = (tx_mode == RADIO_MODE_LSB) ? TX_PIPELINE_LSB : TX_PIPELINE_USB;
         }
 
         if (n == TX_PIPELINE_BLOCK_LEN) {
           for (int i = 0; i < TX_PIPELINE_BLOCK_LEN; i++)
             tx_pipe_in[i] = (float)tx_audio_buf[i];
-          tx_pipeline_process_block(cw_tx_pipeline, sideband, tx_pipe_in, tx_pipe_out);
+          tx_pipeline_process_block(cw_tx_pipeline, signal, tx_pipe_in, tx_pipe_out);
         } else {
           // n equals TX_PIPELINE_BLOCK_LEN (== PERIOD_FRAMES) in normal
           // operation; this only fires on an abnormal short read. A
