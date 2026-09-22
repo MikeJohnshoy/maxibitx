@@ -110,9 +110,9 @@ silence - there is no network or USB audio path in those modes.
   TX, remote PTT requests are acknowledged but ignored.
 - **An HPSDR client drives tuning.** While an HPSDR app is streaming,
   maxibitx follows that app's receive frequency on every command
-  packet, so a frequency set through rigctld or CAT is overridden
-  unless the HPSDR app follows the change itself. Apps that track the
-  radio's reported frequency (e.g. SparkSDR) do.
+  packet, so a frequency set through rigctld or CAT is overridden by
+  the app's next command packet. HPSDR carries no frequency back to
+  the app, so with an HPSDR app connected, tune from that app.
 - **PTT is not released automatically.** If a client sets TX and then
   disconnects or crashes, the radio stays in TX. There's no timeout.
 
@@ -213,8 +213,10 @@ single-client limit.
   tunes to it while receiving; the TX frequency (addr 0x01), used when
   MOX is set; and MOX (addr 0). Everything else in the command packets,
   including the transmit I/Q samples, is ignored.
-- **Reported back:** the current frequency (addrs 0 and 2) and PTT.
-  Temperature and power readbacks are zero.
+- **Reported back:** PTT (C0 bit 0) and the five status fields,
+  rotating one per frame as on real hardware - all zero except a
+  firmware version (0x4A) in field 0. The CW dot/dash bits are always
+  0, and no frequency, temperature or power is reported.
 
 ## USB gadget (audio + Kenwood CAT)
 
