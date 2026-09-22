@@ -32,7 +32,8 @@ Status: stub.
   - the Kenwood CAT thread on `/dev/ttyGS0`;
   - a dedicated TX worker thread (below), started on the first
     `radio_set_tx()` call;
-  - and the main thread's idle loop.
+  - and the main thread's idle loop, which also turns the TX test-tone
+    generator off and drops PTT after 30 s in transmit.
 - **TX transitions run on their own worker thread** (`radio.c`'s
   `radio_tx_worker()`), not on whichever thread calls `radio_set_tx()`.
   This replaced an earlier version where `radio_set_tx()` did its
