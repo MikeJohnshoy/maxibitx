@@ -1,104 +1,111 @@
-# maxibitx
+# 00 — maxibitx introduction
 
-A headless, all-mode (CW, USB, LSB, DIGITAL) radio daemon for the
-Raspberry Pi inside an [sBitx](https://github.com/afarhan/sbitx). It
-brings up the radio hardware, runs the receive and transmit signal
-chains, and serves external software. There's no user interface in
-the process: SDR apps, WSJT-X, FLRig and a small desktop control panel
-provide the display and controls, over the network or USB.
+**Origin:** maxibitx started from
+[MikeJohnshoy/minibitx](https://github.com/MikeJohnshoy/minibitx)'s
+architecture, carried over as a step-1 skeleton. It has since grown an
+all-mode (CW/SSB/DIGITAL) TX pipeline and an onboard CW/USB/LSB
+demodulator on top of that same control/hardware layer. The design
+rationale and build order for that work, step by step, is
+[`ARCHITECTURE.md`](ARCHITECTURE.md); these docs describe the code as
+it is now.
 
-## Where it came from
+## What this is
 
-**sbitx** is Ashhar Farhan's (VU2ESE) software for his radio. It's
-full of features, and most of them live in one place. `sbitx_gtk.c`
-alone is more than 12,000 lines, with the GTK user interface, DSP and
-hardware control intertwined. That coupling has real costs.
-On sbitx/zBitx, a slow display update holding a shared I2C mutex was
-measured stalling the real-time audio thread for 50 ms to over 2
-seconds. Spectrum FFTs computed inline in the DSP functions caused
-audio underruns.
+maxibitx runs on the Raspberry Pi inside an sbitx radio, in place of the
+`sbitx` software that shipped with it. It brings the hardware up and
+then serves three kinds of client:
 
-**minibitx** asked how little code it takes to run the sBitx hardware
-well. It pulled out only what the hardware needs and refined each
-piece. wiringPi gave way to the kernel's GPIO character device,
-bit-banged I2C to the kernel's I2C driver, and the rest of the DSP and
-all of the UI were left to mature external SDR apps.
+- SDR applications (SparkSDR and other HPSDR Protocol 1 apps), which
+  receive baseband I/Q over UDP and do their own display,
+  demodulation and filtering.
+- Digital-mode and logging software such as WSJT-X, which sees the
+  radio as a USB sound card plus a USB serial port (Kenwood CAT)
+  through the Pi's USB gadget.
+- Remote control: a rigctld-compatible TCP port, used by
+  `tools/rigctl_panel.py` (a small desktop control panel with a
+  spectrum display) and Hamlib clients.
 
-**maxibitx** starts from minibitx's hardware and control layer and adds
-back an all-mode transmitter and an onboard demodulator - without
-bringing the coupling back. Every job lives in its own small file,
-and no UI runs in the process. Anything a display or controller needs
-goes through a narrow interface.
+The sBitx code base grew to support multiple operating modes with a powerful
+user interface. My goal was to strip out everything but what was needed to make the
+hardware work right, and leave as much as possible of the signal processing and user-interface
+to the growing collection of high quality SDR applications.  
 
-The whole daemon is about 6,300 lines of C in 21 files; the largest,
-the USB gadget, is about 1,300.
+## What this is not
 
-| Job | Files |
-|---|---|
-| Startup and shutdown | `maxibitx.c` |
-| Radio state: tuning, RIT, mode, T/R switching | `radio.c` |
-| Hardware: GPIO, I2C, si5351 clocks, LPF relays, board calibration | `radio_hw.c`, `gpio.c`, `i2c.c`, `si5351v2.c`, `hw_settings.c` |
-| Real-time audio thread and WM8731 codec | `sound.c` |
-| RX: I/Q mixing, anti-aliasing, demodulation | `vfo.c`, `antialias.c`, `rx_audio.c`, `rx_filter.c` |
-| TX: CW keying, shared FFT TX pipeline | `cw.c`, `tx_pipeline.c`, `fft_filter.c` |
-| USB audio rate conversion | `decim48k.c`, `upsample48k.c` |
-| External interfaces | `interfaces/hamlib.c` (rigctld), `interfaces/hpsdr_p1.c` (HPSDR Protocol 1), `interfaces/usb_gadget.c` (USB audio + Kenwood CAT), `interfaces/iq_stream.c` (I/Q for the control panel) |
+maxibitx has no waterfall and no user interface of its own; the
+control panel and external apps provide those. The I/Q it streams is
+not demodulated — an SDR app does that. Its one onboard demodulator,
+`rx_audio.c`, produces CW, USB or LSB audio (DIGITAL demodulates as
+USB) for the box's own speaker/headphone output and for the USB audio
+gadget — see
+[`02_rx_processing_pipeline.md`](02_rx_processing_pipeline.md) and
+[`dsp_design_notes/rx_audio_demod_design.md`](dsp_design_notes/rx_audio_demod_design.md).
+Mode is one value owned by `radio.c` (`radio_get_mode()`/
+`radio_set_mode()`), shared by every control surface, and it selects
+both that demodulator and the TX path. There is no dependency on the
+original sbitx codebase at runtime; minibitx was built by extracting
+the minimum set of functions from sbitx needed to let an external SDR
+app drive the hardware, and maxibitx runs stand-alone the same way.
 
-The DSP is bench-tested on its own (`make test-fft-filter`,
-`test-tx-pipeline`, `test-rx-filter`, `test-rx-audio`,
-`test-upsample48k`), without any hardware attached.
+## Status
 
-## What works
+Receive works: antenna to baseband I/Q, streamed over HPSDR Protocol 1
+and to the control panel's spectrum display, tunable via HPSDR,
+rigctld or Kenwood CAT. The onboard demodulator lets the box's own
+speaker/headphone output be used with no external app running. FT8
+over the USB audio gadget has been checked on air and decodes on par
+with SparkSDR on the same I/Q. USB/LSB voice reception hasn't been
+tested on air yet.
 
-- **Receive:** baseband I/Q to SDR apps over HPSDR Protocol 1 (e.g.
-  SparkSDR). An onboard CW/USB/LSB demodulator feeds the radio's own
-  speaker and a USB sound card for WSJT-X. FT8 decodes over USB audio
-  match SparkSDR on the same I/Q.
-- **Transmit:** CW from a straight key, on frequency, ~5 W on all nine
-  bands. USB/LSB from the mic have been on the air, and DIGITAL from
-  WSJT-X is code-complete. Current limitations are listed in
-  [`docs/03_tx_processing_pipeline.md`](docs/03_tx_processing_pipeline.md).
-- **Control:** rigctld-compatible TCP (port 4532), Kenwood TS-480 CAT
-  over USB serial, HPSDR, and `tools/rigctl_panel.py` (tuning, mode,
-  volume, filters, mic gain and a live spectrum).
+Transmit: CW from a straight key on the sbitx key input, with
+Blackman-Harris shaping, runs through the shared FFT TX pipeline
+(`tx_pipeline.c`) and has been checked on air — on frequency, image
+suppression as predicted, and a flat ~5 W across the nine bands.
+USB and LSB from the mic use the same pipeline and have been on the
+air (power out, each on its correct side of the dial), though the
+carrier appears to sit ~700 Hz off the dial - see
+[`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md)'s
+"Known limitations". DIGITAL from the USB audio gadget is code-complete
+but not yet tested on air, and voice power/ALC calibration is still to
+do (`ARCHITECTURE.md` §10).
 
-## Building and running
+## How the rest of these docs are organized
 
-```
-make
-./maxibitx
-```
+Roughly bottom-up, following the signal and control paths through the
+code:
 
-Needs `libasound` and single-precision FFTW (`libfftw3f`); see
-`Makefile`. `make` also grants the binary real-time scheduling and the
-permission the USB gadget needs (`setcap`). The USB gadget needs a
-device-mode USB port and a few kernel options - see
-[`docs/07_build_and_deployment.md`](docs/07_build_and_deployment.md).
+- [`01_hardware_init_and_control.md`](01_hardware_init_and_control.md) —
+  bringing up the GPIO lines, the si5351 oscillator, the I2C bus, and the
+  WM8731 audio codec before any signal processing can happen.
+- [`02_rx_processing_pipeline.md`](02_rx_processing_pipeline.md) — the
+  receive signal chain itself, antenna to baseband I/Q, plus the onboard
+  CW/USB/LSB demodulator that taps the same I/Q for the local speaker
+  and the USB audio gadget.
+- [`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md) — the
+  transmit signal chain: each mode's audio source, keying/PTT,
+  `tx_pipeline.c`, the analog mixers, and power levels.
+- [`04_remote_control_and_iq_output.md`](04_remote_control_and_iq_output.md)
+  — how the external interfaces are implemented.
+- [`05_process_and_threading_model.md`](05_process_and_threading_model.md)
+  — how `main()` brings all of the above up, and the thread structure
+  that keeps it running.
+- [`06_api.md`](06_api.md) — the reference for external software: every
+  interface's commands and formats, the shared radio state, WSJT-X
+  setup, and what isn't available yet.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — maxibitx's own design
+  rationale and build order: why this is a fresh repo rather than a
+  minibitx branch, the shared FFT TX/RX pipeline decision, and what's
+  still open.
+- [`dsp_design_notes/`](dsp_design_notes/) — standalone design write-ups,
+  measurements and debugging history for the DSP code.
+- [`07_build_and_deployment.md`](07_build_and_deployment.md) — building
+  maxibitx and the kernel/OS pieces it depends on.
+- [`08_troubleshooting_and_bringup.md`](08_troubleshooting_and_bringup.md)
+  — hardware bring-up gotchas that don't fit neatly elsewhere.
+- [`12_simple_cw_transceiver.md`](12_simple_cw_transceiver.md) — a
+  simple CW transceiver built around maxibitx (stub).
 
-## Documentation
-
-| Doc | Content |
-|---|---|
-| [`docs/00_intro.md`](docs/00_intro.md) | Scope, status, and a map of the rest of the docs |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Design rationale and build order, step by step, with measurements |
-| [`docs/01_hardware_init_and_control.md`](docs/01_hardware_init_and_control.md) | GPIO, si5351/I2C, WM8731 codec bring-up |
-| [`docs/02_rx_processing_pipeline.md`](docs/02_rx_processing_pipeline.md) | Antenna to I/Q and audio, stage by stage |
-| [`docs/03_tx_processing_pipeline.md`](docs/03_tx_processing_pipeline.md) | Audio source to antenna: keying/PTT, `tx_pipeline.c`, power, known limitations |
-| [`docs/04_remote_control_and_iq_output.md`](docs/04_remote_control_and_iq_output.md) | rigctld, Kenwood CAT, HPSDR, USB audio |
-| [`docs/05_process_and_threading_model.md`](docs/05_process_and_threading_model.md) | Startup sequence and threads |
-| [`docs/07_build_and_deployment.md`](docs/07_build_and_deployment.md) | Build, kernel/overlay dependencies, deployment |
-| [`docs/08_troubleshooting_and_bringup.md`](docs/08_troubleshooting_and_bringup.md) | Hardware bring-up gotchas |
-| [`docs/10_external_digital_modes_wsjtx.md`](docs/10_external_digital_modes_wsjtx.md) | Using maxibitx with WSJT-X |
-| [`docs/11_general_coverage_sdr_receiver.md`](docs/11_general_coverage_sdr_receiver.md) | Using maxibitx as a general-coverage SDR receiver |
-| [`docs/12_simple_cw_transceiver.md`](docs/12_simple_cw_transceiver.md) | A simple CW transceiver around maxibitx |
-| [`docs/dsp_design_notes/`](docs/dsp_design_notes/) | Measurements, derivations and debugging history for the DSP |
-| [`docs/code_comments.md`](docs/code_comments.md) | Comment policy: code says what's true now, docs say how it got there |
-
-## Credits
-
-- Ashhar Farhan (VU2ESE) - the sBitx radio and its original software
-- JJ's 64-bit sbitx repository, https://github.com/drexjj/sbitx, which
-  the code was based on
-- `hpsdrsim.c` from the piHPSDR project
-- [minibitx](https://github.com/MikeJohnshoy/minibitx), maxibitx's direct
-  predecessor
+Documents in the `0x` range describe how the code works internally,
+except [`06_api.md`](06_api.md), the reference for external software;
+documents numbered `10` and up describe how to use it;
+`ARCHITECTURE.md` records the design decisions and build order.
