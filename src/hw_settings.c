@@ -75,8 +75,8 @@ void hw_settings_load(void) {
       // The si5351's reference frequency as measured on this board, the
       // same key and units sbitx uses (nominal 25,000,000 for the TCXO).
       // sbitx's own file puts it under [tcxo]; accepted at the top level
-      // too. Every clock is derived from it, so an error here moves RX and
-      // TX together, in proportion to the operating frequency. Procedure:
+      // too. Every clock is derived from it, so an error here moves TX and
+      // RX in opposite directions, both proportional to frequency. Procedure:
       // dsp_design_notes/tx_test_tones_and_alc.md, "Frequency calibration".
       si5351_set_calibration((int32_t)value);
       printf("init: si5351 reference calibration loaded from %s: %ld Hz "
