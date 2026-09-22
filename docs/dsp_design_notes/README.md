@@ -19,6 +19,10 @@ already used in `antialias_filter_design.md`.
   frequency per band) to re-derive per-band values for a flat 5W.
   Status: done - all 9 bands bench-confirmed in the 4.7-5.5W target
   window.
+- [`tx_test_tones_and_alc.md`](tx_test_tones_and_alc.md) — the TX
+  test-tone generator (single and two-tone), the carrier-offset check
+  and two-tone calibration it enables, and the digital ALC plan.
+  Status: generator built and bench-tested; the rest proposed.
 - [`tx_direct_to_dac_cw_history.md`](tx_direct_to_dac_cw_history.md)
   — the original CW-only TX scheme (a second, IF-shifted oscillator in
   `cw.c` and a clk2 correction in `radio.c`), formerly
