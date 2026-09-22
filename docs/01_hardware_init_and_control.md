@@ -165,9 +165,11 @@ Every clock is derived from the si5351's reference oscillator, a nominal
 25 MHz TCXO. `hw_settings.ini`'s `cal` key gives its measured frequency,
 in sbitx's own `[tcxo]` section (accepted at the top level too);
 `hw_settings_load()` passes it to `si5351_set_calibration()` before any
-clock is set, and with it left out the nominal 25,000,000 is used. An error here moves RX and TX together,
-in proportion to the operating frequency - about 11 Hz at 7 MHz for the
-1.6 ppm measured on this board. Measuring it:
+clock is set, and with it left out the nominal 25,000,000 is used. An
+error here moves transmit and receive in *opposite* directions, both in
+proportion to the operating frequency (1 ppm is 7 Hz at 7 MHz, 15 Hz at
+15 MHz). This board measures at its nominal 25,000,000, checked against
+WWV on receive. Measuring it:
 [`dsp_design_notes/tx_test_tones_and_alc.md`](dsp_design_notes/tx_test_tones_and_alc.md),
 "Frequency calibration".
 
