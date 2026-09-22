@@ -81,3 +81,24 @@ section numbers are stable.
 6. Rebuild and run the tests.
 7. Commit on its own, separate from any functional change, so the diff
    is reviewable as "comments only".
+
+## Keeping it that way
+
+New code brings new comments, and most of them are written while a fix
+is fresh - exactly when history creeps in. Two things keep the policy
+from eroding:
+
+- **`CLAUDE.md`** at the repo root states the rule and where each kind
+  of change is documented. AI assistants working in the repo read it
+  automatically, and it's a one-page summary for anyone else.
+- **`make check-comments`** (`tools/check_comments.py`) lists
+  history-style comment lines - "used to", "previously", "now uses",
+  dates, "bug", bench/on-air reports, build-order steps without a doc
+  pointer - and comment blocks of 30+ lines, in files changed vs
+  `origin/main`. It's advisory: every hit is a suspect to read, and
+  lines that point at a doc section aren't flagged. `make
+  check-comments-all` runs it over all of `src/`, for the periodic
+  sweep. It also checks, over every file, that a source file's header
+  names that file, and fails if one names a different file - the sign
+  of a file uploaded under the wrong name, which has happened more
+  than once.
