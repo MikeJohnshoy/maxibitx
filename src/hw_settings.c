@@ -1,14 +1,14 @@
 // hw_settings.c
 //
-// Reader for data/hw_settings.ini. That file is the same file that sbitx
-// uses, so 'bfo_freq' and the per-band 'scale' calibration table carry
-// over to minibitx. 'xtal_filter_center' is new here (not read by real
-// sbitx), added alongside bfo_freq for the same reason - both are
-// board-specific measurements, not source-code constants. If
-// hw_settings.ini is not found, minibitx just uses its own default
-// settings.
+// Reader for data/hw_settings.ini. That file is the same file sbitx
+// uses, so 'cal' (the si5351 reference), 'bfo_freq' and the per-band
+// 'scale' table carry over. 'xtal_filter_center' is new here (not read
+// by real sbitx), added alongside bfo_freq for the same reason - all of
+// them are board-specific measurements, not source-code constants.
+// Without the file, the compiled-in defaults apply.
 
 #include "hw_settings.h"
+#include "si5351.h" // si5351_set_calibration() - the "cal" key below
 #include "radio.h"
 #include <ctype.h>
 #include <stdio.h>
@@ -22,7 +22,7 @@ int tx_band_scale_count = 0;
 // Section state while scanning the file - only [tx_band] sections are
 // acted on today; [tcxo] and any others are recognized (so their key=value
 // lines aren't mistaken for top-level keys) but not yet applied.
-enum hw_section { HW_SECTION_TOP, HW_SECTION_TX_BAND, HW_SECTION_OTHER };
+enum hw_section { HW_SECTION_TOP, HW_SECTION_TCXO, HW_SECTION_TX_BAND, HW_SECTION_OTHER };
 
 void hw_settings_load(void) {
   tx_band_scale_count = 0;
@@ -57,8 +57,10 @@ void hw_settings_load(void) {
                    "ignoring the rest\n",
                    HW_SETTINGS_PATH, HW_MAX_TX_BANDS);
           }
+        } else if (!strcmp(name, "tcxo")) {
+          section = HW_SECTION_TCXO; // where sbitx's own file puts 'cal'
         } else {
-          section = HW_SECTION_OTHER; // e.g. [tcxo] - not applied yet
+          section = HW_SECTION_OTHER;
         }
       }
       continue;
@@ -69,7 +71,18 @@ void hw_settings_load(void) {
     if (sscanf(p, "%63[^=]=%ld", key, &value) != 2)
       continue;
 
-    if (section == HW_SECTION_TOP) {
+    if (!strcmp(key, "cal") && (section == HW_SECTION_TCXO || section == HW_SECTION_TOP)) {
+      // The si5351's reference frequency as measured on this board, the
+      // same key and units sbitx uses (nominal 25,000,000 for the TCXO).
+      // sbitx's own file puts it under [tcxo]; accepted at the top level
+      // too. Every clock is derived from it, so an error here moves RX and
+      // TX together, in proportion to the operating frequency. Procedure:
+      // dsp_design_notes/tx_test_tones_and_alc.md, "Frequency calibration".
+      si5351_set_calibration((int32_t)value);
+      printf("init: si5351 reference calibration loaded from %s: %ld Hz "
+             "(%+.2f ppm from nominal)\n",
+             HW_SETTINGS_PATH, value, (value - 25000000.0) / 25.0);
+    } else if (section == HW_SECTION_TOP) {
       if (!strcmp(key, "bfo_freq")) {
         bfo_freq = (int)value;
         printf("init: bfo_freq loaded from %s: %d Hz\n", HW_SETTINGS_PATH, bfo_freq);
