@@ -85,11 +85,13 @@ code:
   transmit signal chain: each mode's audio source, keying/PTT,
   `tx_pipeline.c`, the analog mixers, and power levels.
 - [`04_remote_control_and_iq_output.md`](04_remote_control_and_iq_output.md)
-  — how external software tunes/keys the radio and receives the I/Q
-  and audio it produces.
+  — how the external interfaces are implemented.
 - [`05_process_and_threading_model.md`](05_process_and_threading_model.md)
   — how `main()` brings all of the above up, and the thread structure
   that keeps it running.
+- [`06_api.md`](06_api.md) — the reference for external software: every
+  interface's commands and formats, the shared radio state, WSJT-X
+  setup, and what isn't available yet.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — maxibitx's own design
   rationale and build order: why this is a fresh repo rather than a
   minibitx branch, the shared FFT TX/RX pipeline decision, and what's
@@ -100,9 +102,10 @@ code:
   maxibitx and the kernel/OS pieces it depends on.
 - [`08_troubleshooting_and_bringup.md`](08_troubleshooting_and_bringup.md)
   — hardware bring-up gotchas that don't fit neatly elsewhere.
-- `10_`–`12_` — guides for using maxibitx with specific kinds of external
-  software (digital modes, general-coverage receive, a CW transceiver).
+- [`12_simple_cw_transceiver.md`](12_simple_cw_transceiver.md) — a
+  simple CW transceiver built around maxibitx (stub).
 
-Documents in the `0x` range describe how the code works internally;
+Documents in the `0x` range describe how the code works internally,
+except [`06_api.md`](06_api.md), the reference for external software;
 documents numbered `10` and up describe how to use it;
 `ARCHITECTURE.md` records the design decisions and build order.
