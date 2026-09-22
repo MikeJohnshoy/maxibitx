@@ -19,6 +19,7 @@
 #include "radio.h"
 #include "rx_audio.h"
 #include "sound.h"
+#include "tone_gen.h"
 #include "tx_pipeline.h"
 #include "upsample48k.h"
 #include "usb_gadget.h"
@@ -731,8 +732,10 @@ static void *audio_loop(void *arg) {
       clock_gettime(CLOCK_MONOTONIC, &t_write0);
       // TX when the key/mic PTT is down (cw_tx_active()), or when in_tx is set
       // in DIGITAL - that mode's PTT is CAT-only, and cw_poll_key() ignores the
-      // key GPIO there.
-      if (cw_tx_active() || (in_tx && radio_get_mode() == RADIO_MODE_DIGITAL)) {
+      // key GPIO there - or with the test-tone generator on, which any PTT
+      // source keys.
+      int tone_on = tone_gen_get_mode() != TONE_GEN_OFF;
+      if (cw_tx_active() || (in_tx && (radio_get_mode() == RADIO_MODE_DIGITAL || tone_on))) {
         // Per-band calibrated scale (see the TX_SAMPLE_HEADROOM
         // comment above) - looked up once per block, not per
         // sample, since freq_hdr doesn't change mid-block.
@@ -754,7 +757,14 @@ static void *audio_loop(void *arg) {
         enum radio_mode tx_mode = radio_get_mode();
         enum tx_pipeline_sideband sideband = TX_PIPELINE_KEEP_UPPER;
 
-        if (tx_mode == RADIO_MODE_CW) {
+        if (tone_on) {
+          // Test tones replace the mode's own source; the sideband still
+          // follows the mode (tone_gen.h).
+          for (int i = 0; i < n; i++)
+            tx_audio_buf[i] = tone_gen_sample();
+          sideband = (tx_mode == RADIO_MODE_LSB) ? TX_PIPELINE_KEEP_LOWER
+                                                  : TX_PIPELINE_KEEP_UPPER;
+        } else if (tx_mode == RADIO_MODE_CW) {
           // cw_get_sample() owns the envelope advance for this sample -
           // must be called exactly once per real audio sample (its
           // envelope timing depends on elapsed samples, not on how the
@@ -847,8 +857,8 @@ static void *audio_loop(void *arg) {
           play_buf[i * 2 + 1] = 0;
         }
       } else {
-        // TX without key/mic PTT and not DIGITAL (e.g. CAT/network MOX in
-        // CW/USB/LSB): silence rather than RX audio while transmitting.
+        // TX without key/mic PTT, not DIGITAL and no test tone (e.g.
+        // CAT/network MOX in CW/USB/LSB): silence rather than RX audio.
         memset(play_buf, 0, (size_t)n * 2 * sizeof(int32_t));
       }
       snd_pcm_sframes_t wframes = snd_pcm_writei(pcm_playback, play_buf, n);
