@@ -36,7 +36,7 @@ static void handle_shutdown_signal(int sig) {
 int main(int argc, char **argv) {
   (void)argc;
   (void)argv;
-  printf("Starting maxiBitx IQ Streamer and control interface...\n");
+  printf("Starting maxiBitx radio hardware and control interfaces ...\n");
  
   // prepare to receive shutdown signal
   struct sigaction sa = {0};
