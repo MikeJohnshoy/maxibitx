@@ -246,10 +246,10 @@ the dash bit toggled on every frame and the dot bit every other packet
 - 750 of 1,000 frames carried a paddle closure in a bench capture - and
 fields 0 and 2 carried the dial frequency, which a client reads as the
 ADC-overload flag and firmware version. SDR Console ignored all of it;
-SparkSDR's receive audio had a loud "buzzsaw" across the dial, the
-prime suspect being SparkSDR acting on those phantom paddle closures.
-Fixed and bench-checked (no paddle bits set, fields cycling 0-4); the
-SparkSDR re-test is pending.
+SparkSDR's receive audio had a loud "buzzsaw" across the dial.
+Fixed and bench-checked (no paddle bits set, fields cycling 0-4), and
+confirmed with SparkSDR on 2026-09-22: the buzz is gone, which makes
+SparkSDR acting on the phantom paddle closures the cause.
 
 ## Lightweight I/Q telemetry stream (`iq_stream.c`)
 
