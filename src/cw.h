@@ -3,62 +3,33 @@
 #ifndef CW_H
 #define CW_H
 
-// Sidetone/keying pitch - what the operator actually hears on the local
-// monitor (see cw_get_sample()). This is what a real CW pitch control
-// would adjust. As of docs/ARCHITECTURE.md build order step 5, this is
-// also the ONLY frequency cw.c ever generates - the same real-valued,
-// envelope-shaped tone at CW_PITCH_HZ feeds both the local sidetone
-// monitor AND (as the shared TX pipeline's `i_sample`, sound.c) the
-// actual TX-modulating waveform, matching real sbitx's own
-// `output_speaker[j] = i_sample * sidetone` pattern (one signal, two
-// uses) instead of a second, IF-shifted NCO of its own.
-//
-// Before step 5, cw.c generated a SECOND tone here, at
-// CW_PITCH_HZ + TX_IF_OFFSET_HZ (a now-removed constant - see this
-// file's git history / docs/ARCHITECTURE.md §5 for the derivation),
-// specifically to land the actual TX product inside the crystal
-// filter's passband without a phasing/Hilbert stage. That whole
-// IF-shifted-NCO/residual-correction scheme (and the matching
-// `- CW_PITCH_HZ` term `radio_tx_apply()`, radio.c, used to apply to
-// clk2 for the same reason) is now handled instead by tx_pipeline.c's
-// shared IF bin-rotate, bench-derived and verified in
-// docs/ARCHITECTURE.md §10 step 4 - see radio.c's radio_tx_apply() for
-// the current clk2 formula and derivation.
+// CW sidetone and keying pitch, Hz. cw_get_sample() generates this one
+// tone; sound.c uses it both as the local sidetone and as tx_pipeline.c's
+// CW input, so the sidetone is exactly what's transmitted. rx_audio.c's
+// CW demod and narrow filter are centered on it too, and tx_pipeline.h's
+// IF shift is derived from it - changing it moves all of those.
 #define CW_PITCH_HZ 700
 
 // Call once at startup, after radio_hw_gpio_init() (CW_KEY must already
 // be configured) and after vfo_init_phase_table().
 void cw_init(void);
 
-// Call once per audio block (~10.7ms - sound.c's PERIOD_FRAMES at
-// 96kHz) from the audio thread. Polls the one physical key/PTT line and
-// is the only place this module calls radio_set_tx() - what a closure
-// actually means depends on radio_get_mode() (radio.h): in
-// RADIO_MODE_CW it's a straight key, managing the keying-burst semi
-// break-in hang timer same as always; in RADIO_MODE_USB/_LSB it's read
-// as an immediate mic PTT switch instead (no hang timer - see this
-// function's own comment in cw.c). RADIO_MODE_DIGITAL ignores this line
-// entirely (no TX source wired to it in that mode yet).
+// Call once per audio block (~10.7ms) from the audio thread. Polls the
+// key/PTT line and is the only place this module calls radio_set_tx().
+// What a closure means depends on radio_get_mode(): in CW a straight key
+// with semi break-in (hang timer); in USB/LSB a mic PTT switch (TX follows
+// the switch, no hang). DIGITAL ignores the line - its PTT comes from
+// CAT, rigctld or HPSDR.
 void cw_poll_key(void);
 
-// True while cw_poll_key() has TX asserted via this key/PTT line
-// (radio_set_tx(1) called and not yet released) - true for the same
-// reason regardless of which mode's branch set it. sound.c checks this
-// before pulling TX audio samples (cw_get_sample()'s sidetone in CW
-// mode, real mic audio in USB/LSB - see sound.c).
+// True while cw_poll_key() has TX asserted, in any mode. sound.c checks
+// it before pulling TX audio (this tone in CW, the mic in USB/LSB); remote
+// PTT paths check it so the local key wins.
 int cw_tx_active(void);
 
-// Call once per audio sample while cw_tx_active() is true. Returns the
-// next output sample: the sidetone, scaled by the attack/decay envelope
-// as the key goes down/up. Range is approximately [-1, 1]. Owns the
-// envelope advance.
-//
-// This is now the ONLY sample cw.c produces (see CW_PITCH_HZ's comment
-// above) - sound.c uses it two ways every TX sample: directly, for the
-// local sidetone monitor (unchanged), and as tx_pipeline.c's `i_sample`
-// input, one full TX_PIPELINE_BLOCK_LEN-sized block at a time, to
-// produce the actual TX-modulating waveform. There is no longer a
-// second, IF-shifted function to call afterward.
+// Call exactly once per audio sample while transmitting in CW - it
+// owns the envelope advance. Returns the CW_PITCH_HZ tone times the
+// attack/decay envelope, approximately [-1, 1].
 double cw_get_sample(void);
 
 #endif /* CW_H */
