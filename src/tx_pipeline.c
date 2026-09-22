@@ -1,9 +1,8 @@
 // tx_pipeline.c
 //
-// See tx_pipeline.h for what this is, and its TX_IF_SHIFT_HZ comment for
-// the placement derivation. This file owns the two pieces of new math
-// the shared pipeline needs that fft_filter.c doesn't already provide:
-// the explicit sideband-zero step and the shared IF bin-rotate.
+// See tx_pipeline.h for what this is and the IF-shift derivation. This
+// file adds the two steps fft_filter.c doesn't provide: the sideband
+// zero and the bin rotate.
 
 #include <stdio.h>
 #include <string.h>
@@ -13,26 +12,11 @@ struct tx_pipeline *tx_pipeline_new(void)
 {
 	struct tx_pipeline *p = malloc(sizeof(struct tx_pipeline));
 
-	// FFTW_ESTIMATE by default, not filter_new()'s FFTW_MEASURE - the
-	// same trade rx_filter_new() made (see its own comment in
-	// rx_filter.c) for the same reason, applied here after real-hardware
-	// evidence (docs/ARCHITECTURE.md §10 step 7's follow-up) that this
-	// specific FFTW_MEASURE search - which runs synchronously inside
-	// sound_thread_start(), AFTER pcm_playback is opened/primed but
-	// BEFORE the audio thread that's supposed to keep it fed is even
-	// created - was long enough to drain sound.c's newly-added playback
-	// pre-fill before the real per-block writes ever got a chance to
-	// start, producing a burst of startup xruns that priming alone
-	// couldn't fix (the buffer was primed, then sat idle draining for
-	// the whole length of this search). FFTW_ESTIMATE removes that gap
-	// instead of trying to out-buffer it. Overridable via
-	// MAXIBITX_TX_PIPELINE_FFTW_MEASURE (same diagnostic pattern as
-	// rx_filter.c's own env var) for re-testing whether this was really
-	// the cause, or reverting if FFTW_ESTIMATE's own per-block cost ever
-	// turns out not to fit TX_PIPELINE_N=2048's real-time budget on some
-	// board (checked, not assumed, for RX's own larger N=4096 - not yet
-	// separately re-checked here, though TX's N is smaller, so it should
-	// only be an easier case).
+	// FFTW_ESTIMATE, not FFTW_MEASURE: this runs inside
+	// sound_thread_start() after playback is primed but before the audio
+	// thread starts, and a MEASURE search there drained the playback buffer
+	// into startup xruns (ARCHITECTURE.md §10 step 7). Set
+	// MAXIBITX_TX_PIPELINE_FFTW_MEASURE to force MEASURE for comparison.
 	const char *force_measure = getenv("MAXIBITX_TX_PIPELINE_FFTW_MEASURE");
 	unsigned flags = (force_measure && *force_measure) ? FFTW_MEASURE : FFTW_ESTIMATE;
 	printf("tx_pipeline: using %s for its FFTW plan (TX_PIPELINE_N=%d)%s\n",
@@ -40,18 +24,11 @@ struct tx_pipeline *tx_pipeline_new(void)
 	       flags == FFTW_MEASURE ? " - MAXIBITX_TX_PIPELINE_FFTW_MEASURE set, expect a slower startup" : "");
 
 	p->filt = filter_new_ex(TX_PIPELINE_BLOCK_LEN, TX_PIPELINE_IMPULSE_LEN, flags);
-	// filter_tune_real(), not plain filter_tune() - see tx_pipeline_retune()'s
-	// comment for why this one bit is the real fix behind
-	// TX_IF_SHIFT_BINS_LSB (tx_pipeline.h): zero_sideband()/rotate_bins()
-	// below can only select and place whichever sideband's content the
-	// filter itself actually let through, and a real, on-air LSB test
-	// (docs/ARCHITECTURE.md build order step 8) found there was none to
-	// select - a hard 0W, not just a mis-tuned one.
+	// filter_tune_real(), not filter_tune(): see tx_pipeline_retune().
 	filter_tune_real(p->filt, 300.0f / TX_PIPELINE_FS_HZ, 3000.0f / TX_PIPELINE_FS_HZ,
 	                  TX_PIPELINE_KAISER_BETA);
-	// Plain malloc, not fftwf_alloc_complex: this buffer is only ever a
-	// memcpy scratch for rotate_bins() below, never handed to FFTW
-	// itself, so it doesn't need FFTW's alignment guarantee.
+	// Plain malloc: only memcpy'd by rotate_bins(), never passed to FFTW,
+	// so FFTW's alignment isn't needed.
 	p->rotate_scratch = malloc(p->filt->N * sizeof(complex float));
 	p->block_count = 0;
 	return p;
@@ -59,38 +36,16 @@ struct tx_pipeline *tx_pipeline_new(void)
 
 int tx_pipeline_retune(struct tx_pipeline *p, float low_hz, float high_hz, float fs_hz)
 {
-	// filter_tune_real(), not plain filter_tune() - a genuine bug this
-	// session's real on-air LSB test (docs/ARCHITECTURE.md build order
-	// step 8) found the hard way: plain filter_tune()'s passband is
-	// deliberately ONE-SIDED (fft_filter.h's own header comment on it -
-	// "the *other* half of the spectrum is deliberately unwanted image
-	// content"), which is only true for a caller that only ever wants
-	// TX_PIPELINE_KEEP_UPPER. tx_pipeline_process_block()'s
-	// zero_sideband() step exists specifically so ONE shared filter can
-	// serve both TX_PIPELINE_KEEP_UPPER and TX_PIPELINE_KEEP_LOWER
-	// callers, selecting whichever half it wants per-block - but that
-	// only works if the filter itself preserves BOTH halves
-	// (filter_tune_real()'s mirrored [-high,-low] passband) for
-	// zero_sideband() to choose from. With plain filter_tune(), the
-	// filter had already thrown away every LSB caller's -300..-3000Hz
-	// content before zero_sideband(TX_PIPELINE_KEEP_LOWER) ever got a
-	// chance to keep it - not a mis-placed IF, literally nothing there
-	// to place. TX_IF_SHIFT_BINS_LSB (tx_pipeline.h) is a necessary
-	// second fix (the correctly-preserved content still needs its own,
-	// mirrored bin-rotate to land on xtal_filter_center), but this one -
-	// giving LSB something to rotate in the first place - is the fix
-	// that actually explains the measured "hard 0W, not just low power"
-	// symptom. Verified by tx_pipeline_test.c's Case D, which was
-	// reading -146dB (i.e. nothing, not a rounding error) before this
-	// change and ~0dB after it.
+	// filter_tune_real(), not filter_tune(). filter_tune()'s passband is
+	// one-sided (positive frequencies only), which leaves nothing for
+	// TX_PIPELINE_KEEP_LOWER to keep - LSB put out 0W on air until this
+	// changed (ARCHITECTURE.md §10 step 8; tx_pipeline_test.c Case D).
 	return filter_tune_real(p->filt, low_hz / fs_hz, high_hz / fs_hz, TX_PIPELINE_KAISER_BETA);
 }
 
-// Explicit sideband zero - see fft_filter.h's filter_forward() comment
-// on why this is the caller's job, not the filter's. Same bin convention
-// filter_tune()/fft_filter_test.c already use: bins n <= N/2 are
-// positive frequencies (kept for TX_PIPELINE_KEEP_UPPER), n > N/2 are
-// the folded negative frequencies (kept for TX_PIPELINE_KEEP_LOWER).
+// Sideband zero. Bins n <= N/2 are positive frequencies (kept for
+// TX_PIPELINE_KEEP_UPPER); n > N/2 are negative (kept for
+// TX_PIPELINE_KEEP_LOWER), the same convention as filter_tune().
 static void zero_sideband(complex float *freq, int N, enum tx_pipeline_sideband sideband)
 {
 	if (sideband == TX_PIPELINE_KEEP_UPPER) {
@@ -102,25 +57,15 @@ static void zero_sideband(complex float *freq, int N, enum tx_pipeline_sideband 
 	}
 }
 
-// Circularly rotates an N-point frequency-domain buffer by `shift_bins`
-// bins - the frequency-domain equivalent of multiplying the time-domain
-// signal by a complex exponential at shift_bins*Fs/N Hz, i.e. an IF
-// shift with no separate NCO needed. Needs a full-buffer scratch copy
-// (can't rotate a circular buffer in place one element at a time without
-// one) - p->rotate_scratch (tx_pipeline_new()) exists so this never
-// mallocs on the audio-rate path.
+// Circularly rotates the N-point spectrum by shift_bins - the frequency-
+// domain equivalent of mixing with a complex exponential at
+// shift_bins*Fs/N Hz. Uses the caller's scratch buffer, so no malloc on
+// the audio path.
 static void rotate_bins(complex float *freq, int N, int shift_bins, complex float *scratch)
 {
-	// The explicit bounds check below isn't for correctness (N is always
-	// TX_PIPELINE_N, a positive compile-time constant, at this
-	// function's one real call site) - it's what stops GCC's
-	// -Wstringop-overflow range analysis from treating N as
-	// unconstrained across this static helper being inlined two levels
-	// deep into tx_pipeline_process_block. Without it, GCC can't
-	// convince itself N stays non-negative (it's read from a plain int
-	// struct field with no visible range restriction) and warns about a
-	// memcpy bound that, taken as a negative int reinterpreted as
-	// size_t, looks like ~16 exabytes - not anything actually reachable.
+	// Not needed for correctness (N is always TX_PIPELINE_N). It keeps
+	// GCC's -Wstringop-overflow from treating N as possibly negative once
+	// this is inlined, and warning about the memcpy size.
 	if (N <= 0)
 		return;
 	memcpy(scratch, freq, (size_t)N * sizeof(complex float));
@@ -135,16 +80,12 @@ void tx_pipeline_process_block(struct tx_pipeline *p, enum tx_pipeline_sideband 
 	complex float in_c[TX_PIPELINE_BLOCK_LEN];
 	complex float out_c[TX_PIPELINE_BLOCK_LEN];
 
-	// Real audio in, imaginary part 0 - same as real sbitx's own
-	// fft_in[j] = i_sample (tx_process(), mj_zbitx/src/sbitx.c).
+	// Real audio in, imaginary part 0 (as sbitx's tx_process()).
 	for (int i = 0; i < TX_PIPELINE_BLOCK_LEN; i++)
 		in_c[i] = in[i];
 
-	// Which rotation lands the kept half back on
-	// TX_PIPELINE_BENCH_XTAL_CENTER_HZ depends on which half
-	// zero_sideband() just kept - see TX_IF_SHIFT_BINS_LSB's comment
-	// (tx_pipeline.h) for the on-air bug this fixes (LSB reusing
-	// KEEP_UPPER's rotation measured a hard 0W).
+	// Each half needs its own rotation to land on the filter center - see
+	// TX_IF_SHIFT_HZ_LSB (tx_pipeline.h).
 	int shift_bins = (sideband == TX_PIPELINE_KEEP_LOWER) ? TX_IF_SHIFT_BINS_LSB : TX_IF_SHIFT_BINS;
 
 	filter_forward(f, in_c);
@@ -152,81 +93,25 @@ void tx_pipeline_process_block(struct tx_pipeline *p, enum tx_pipeline_sideband 
 	rotate_bins(f->freq, f->N, shift_bins, p->rotate_scratch);
 	filter_inverse(f, out_c);
 
-	// --- Per-block phase-continuity correction -----------------------
-	// A bin-rotate isn't "free" the way it first looks: rotating each
-	// block's own N-point spectrum by k bins modulates that block's
-	// LOCAL time samples (index m = 0..N-1) by e^(j*2*pi*k*m/N) - but
-	// overlap-save's valid output for block b sits at *local* indices
-	// m = M-1..N-1 every single block, while the *global* sample index
-	// those correspond to keeps advancing by L each block
-	// (global = b*L - (M-1) + m). Substituting m = global - b*L + (M-1)
-	// splits the per-sample modulation into the continuous term this
-	// pipeline actually wants (e^(j*2*pi*k*global/N), a clean, steady
-	// IF shift) times a per-BLOCK constant e^(j*2*pi*k*(M-1-b*L)/N) that
-	// is NOT the same from one block to the next unless k*L/N happens
-	// to be an integer. Left uncorrected, that extra per-block phase
-	// silently rotates the carrier's phase by a different, unrelated
-	// amount at every block boundary - not a subtle rounding error, a
-	// real, measured bug: an early version of this function without
-	// this correction measured the wanted tone at -97.75dB instead of
-	// ~0dB (docs/ARCHITECTURE.md §10 step 4), because for this
-	// pipeline's fixed L=1024/N=2048 (L/N always exactly 1/2 - see
-	// tx_pipeline.h), k*L/N = k/2 - an integer only when k is even, and
-	// TX_IF_SHIFT_BINS (467) is odd, so the uncorrected version was
-	// flipping the carrier's sign by exactly 180 degrees every other
-	// block, and a long coherent measurement across many blocks (the
-	// only way to get a clean reading on a non-bin-aligned real tone
-	// like CW_PITCH_HZ - see tx_pipeline_test.c) averages a signal
-	// that's alternating sign to almost nothing.
-	//
-	// The fix only needs to cancel the per-block factor
-	// e^(j*2*pi*k*(M-1-b*L)/N); the (M-1)/N part is a fixed constant
-	// (same every block - just an arbitrary, harmless overall starting
-	// phase) and the -b*L/N part is what actually varies with b. Since
-	// L/N is exactly 1/2 here, k*b*L/N = k*b/2 is always an exact
-	// integer or exact half-integer - never any other fraction - so
-	// e^(j*pi*k*b) collapses to a plain +-1 (no trig, no float drift):
-	// +1 whenever k is even (no correction ever needed) or whenever b
-	// is even, and -1 only when BOTH k and b are odd. p->block_count
-	// (incremented once per call) is exactly the running b this needs;
-	// if this pipeline's fixed block/impulse-length choice
-	// (TX_PIPELINE_BLOCK_LEN/IMPULSE_LEN, tx_pipeline.h) ever changes
-	// away from an exact 2:1 N:L ratio, this simplification stops
-	// applying and the general e^(j*2*pi*k*b*L/N) correction (a real
-	// phase, not just a sign) would need implementing instead.
+	// Phase continuity. Rotating each block's spectrum by k bins modulates
+	// the block's *local* samples by e^(j*2*pi*k*m/N), but overlap-save's
+	// output starts L samples later in global time every block, which adds
+	// a per-block phase of e^(-j*2*pi*k*b*L/N). With L/N exactly 1/2
+	// (1024/2048) that factor is e^(-j*pi*k*b): +1 unless both k and b are
+	// odd, then -1. Both rotations here are odd (467, 497), so without this
+	// the carrier flips sign every other block (measured: the wanted tone
+	// at -97.75dB, ARCHITECTURE.md §10 step 4). If the block/impulse sizes
+	// ever change so that N != 2L, this needs a general phase correction,
+	// not a sign.
 	long b = p->block_count++;
-	// Uses shift_bins (this call's actual rotation, TX_IF_SHIFT_BINS or
-	// _LSB above) rather than hardcoding TX_IF_SHIFT_BINS - the odd/even
-	// parity that decides whether this correction ever fires depends on
-	// which one was actually applied. Both happen to be odd (467 and
-	// 497), so this fix doesn't change CW/USB's own already-verified
-	// numbers - it only makes the correction correct for the new LSB
-	// rotation too, which the CW-derived hardcoded version never
-	// accounted for.
+	// Parity of the rotation actually applied this call.
 	int flip = (shift_bins % 2 != 0) && (b % 2 != 0);
 
-	// The bin-zero+rotate above turned f->freq into a frequency-shifted
-	// analytic (one-sided-spectrum) signal - taking the real part here
-	// is what actually produces the real IF waveform the DAC wants; see
-	// docs/ARCHITECTURE.md §4's "mathematically the same job a
-	// Hilbert-transform phasing exciter does" note.
-	//
-	// The x2 factor: a real input tone A*cos(wn) splits into two equal
-	// complex exponentials of amplitude A/2 each (at +f and -f);
-	// zero_sideband() above deliberately throws one of those A/2 halves
-	// away, and crealf() of what's left reproduces only that surviving
-	// A/2, not A - an inherent, well-known property of analytic-signal
-	// SSB construction (discard half the energy, and the real part of a
-	// single complex exponential of magnitude A/2 stays A/2), not
-	// specific to this implementation. Left uncorrected this cost a
-	// real, measured -6.02dB (~0.5x) here - caught the same way step
-	// 2's fft_filter.c 1/N-vs-1/N^2 gain bug was: by literally measuring
-	// it against an expected ~0dB, not assuming unity gain. Correcting
-	// it here (rather than leaving it to be silently absorbed into some
-	// later, unrelated gain constant - see docs/ARCHITECTURE.md §10 step
-	// 2's writeup on exactly that failure mode in real sbitx's own
-	// filter_tune()) keeps this pipeline unity-gain by construction for
-	// a full-amplitude real input tone, same discipline as fft_filter.c.
+	// The real part of the rotated one-sided spectrum is the real IF
+	// waveform. x2 because a real tone's energy is split evenly between +f
+	// and -f and the sideband zero discarded one half; without it the
+	// output is -6.02dB. Keeps the pipeline unity-gain, so power
+	// calibration (sound.c's TX_GAIN_CORRECTION) doesn't have to absorb it.
 	for (int i = 0; i < TX_PIPELINE_BLOCK_LEN; i++)
 		out[i] = (flip ? -2.0f : 2.0f) * crealf(out_c[i]);
 }
