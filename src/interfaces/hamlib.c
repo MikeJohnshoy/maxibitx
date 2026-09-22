@@ -17,6 +17,7 @@
 #include "radio.h"    // freq_hdr, in_tx, tuning, PTT, RIT, mode
 #include "rx_audio.h"
 #include "sound.h"    // sound_set_mic_tx_gain()/sound_get_mic_tx_gain() - l/L MICGAIN below
+#include "tone_gen.h" // u/U TONE below
 #include "hw_settings.h" // tx_band_scales[] - dump_state TX ranges
 
 static int listen_fd = -1;
@@ -268,9 +269,10 @@ static int handle_line(int fd, char *line)
     }
 
     if (cmd[0] == 'u' && (cmd[1] == '\0' || cmd[1] == ' ')) {
-        // get_func <name>: NARROW (rx_audio.c's narrow stage-3 filter, on/off)
-        // and FFTFILT (which stage-3 implementation it uses). Not Hamlib
-        // RIG_FUNC names - extensions for tools/rigctl_panel.py.
+        // get_func <name>: NARROW (rx_audio.c's narrow stage-3 filter, on/off),
+        // FFTFILT (which stage-3 implementation it uses) and TONE (the TX
+        // test-tone generator, 0-2). Not Hamlib RIG_FUNC names - extensions
+        // for tools/rigctl_panel.py.
         char func_name[32] = "";
         sscanf(cmd + 1, "%31s", func_name);
         if (strcmp(func_name, "NARROW") == 0) {
@@ -285,6 +287,11 @@ static int handle_line(int fd, char *line)
             send_line(fd, buf);
             printf("rigctl: u FFTFILT -> %s\n",
                    rx_audio_get_narrow_filter_impl() ? "fft" : "elliptic");
+        } else if (strcmp(func_name, "TONE") == 0) {
+            char buf[8];
+            snprintf(buf, sizeof(buf), "%d\n", (int)tone_gen_get_mode());
+            send_line(fd, buf);
+            printf("rigctl: u TONE -> %d\n", (int)tone_gen_get_mode());
         } else {
             send_rprt(fd, -1);
             printf("rigctl: u %s -> unsupported function\n", func_name);
@@ -309,6 +316,18 @@ static int handle_line(int fd, char *line)
             send_rprt(fd, 0);
             printf("rigctl: U FFTFILT %d -> stage-3 implementation %s\n", val,
                    val ? "fft" : "elliptic");
+        } else if (strcmp(func_name, "TONE") == 0) {
+            // Test-tone generator: 0 off, 1 single tone, 2 two-tone
+            // (tone_gen.h). Doesn't key the radio - any PTT source does.
+            if (val < TONE_GEN_OFF || val > TONE_GEN_TWO) {
+                send_rprt(fd, -1);
+                printf("rigctl: U TONE %d -> out of range (0-2), ignored\n", val);
+            } else {
+                tone_gen_set_mode((enum tone_gen_mode)val);
+                send_rprt(fd, 0);
+                printf("rigctl: U TONE %d -> test tone %s\n", val,
+                       val == TONE_GEN_TWO ? "two-tone" : val == TONE_GEN_SINGLE ? "single" : "off");
+            }
         } else {
             send_rprt(fd, -1);
             printf("rigctl: U %s -> unsupported function\n", cmd + 1);
