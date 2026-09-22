@@ -240,13 +240,14 @@ still needs checking with a wattmeter.
 
 ## Known limitations
 
-- **Carrier placement is ~6 Hz low, and this board reads ~12 Hz low
-  on top of that.** Whole-bin rotation leaves the SSB carrier 6.25 Hz
-  below the dial and CW's tone 9.4 Hz below. Separately, a 2026-09-22
-  on-air check read both sidebands about 10-14 Hz lower still (about
-  1.5-2 ppm at 7.2 MHz), which looks like the si5351's reference rather
-  than anything in the DSP - there's no frequency calibration for it
-  yet. Both are well inside an SSB or FT8 channel.
+- **Carrier placement is a few Hz low.** Whole-bin rotation leaves the
+  SSB carrier 6.25 Hz below the dial and CW's tone 9.4 Hz below. It
+  could be removed by nudging clk2 during TX, at the cost of making
+  `radio_tx_apply()` mode-aware again; 6 Hz is well inside an SSB or
+  FT8 channel, so it hasn't been. The separate reference error the same
+  measurements found (1.6 ppm, about 11 Hz at 7 MHz) is now corrected
+  by `hw_settings.ini`'s `cal` key - see
+  [`01_hardware_init_and_control.md`](01_hardware_init_and_control.md).
 - **The IF shift doesn't follow `hw_settings.ini`.** `tx_pipeline.h`
   computes its rotations from compiled-in copies of `bfo_freq` and
   `xtal_filter_center` (`TX_PIPELINE_BENCH_BFO_FREQ_HZ`/
