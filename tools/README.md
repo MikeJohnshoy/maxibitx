@@ -1,9 +1,17 @@
 # tools/
 
-Client-side utilities that talk to a running minibitx over the network -
-none of these run on the Pi as part of minibitx itself, and none require
-changes to build/run minibitx (beyond whatever server-side support they
-depend on, noted per tool below).
+Client-side utilities that talk to a running maxibitx over the network -
+none of these run on the Pi as part of maxibitx itself, and none require
+changes to build/run maxibitx (beyond whatever server-side support they
+depend on, noted per tool below) - plus one developer check.
+
+## `check_comments.py`
+
+Checks source comments against the comment policy
+([`../docs/code_comments.md`](../docs/code_comments.md)) and checks that
+each source file's header names the file itself. Run it with
+`make check-comments` (files changed vs `origin/main`) or
+`make check-comments-all` (all of `src/`). Python 3, no extra modules.
 
 ## `rigctl_panel.py`
 
