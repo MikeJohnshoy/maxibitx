@@ -11,9 +11,12 @@ FFT pipeline for every mode.
 Status: CW is on-air verified - on frequency, image suppression as
 predicted, and a flat ~5 W across all nine bands. USB and LSB from the
 mic have been on the air: both put out power and each lands on the
-correct side of the dial, but see "Known limitations" - the carrier is
-~700 Hz off the dial in both. DIGITAL (WSJT-X over the USB gadget) is
-code-complete and not yet tested on air.
+correct side of the dial. Their carrier placement was measured with the
+test-tone generator on 2026-09-22 and corrected
+([`dsp_design_notes/tx_test_tones_and_alc.md`](dsp_design_notes/tx_test_tones_and_alc.md));
+the corrected placement hasn't been re-checked on air yet. DIGITAL
+(WSJT-X over the USB gadget) is code-complete and not yet tested on
+air.
 
 The earlier CW-only scheme this pipeline replaced (a second, IF-shifted
 oscillator in `cw.c` plus a matching clk2 correction in `radio.c`) is
@@ -145,10 +148,13 @@ For the example, the input is a 700 Hz tone.
    single-sideband. CW, USB and DIGITAL keep the upper half, LSB the
    lower.
 3. **Bin rotate** - the IF shift, done in the frequency domain instead
-   of with an oscillator. The upper half is rotated by 467 bins
-   (21,890.6 Hz, `TX_IF_SHIFT_BINS`), the lower half by 497 bins
-   (23,296.9 Hz, `TX_IF_SHIFT_BINS_LSB`). Both are chosen so a 700 Hz
-   tone lands on the crystal filter center after the analog mixers.
+   of with an oscillator. What it aims at depends on the signal: CW
+   rotates by 467 bins (21,890.6 Hz, `TX_IF_SHIFT_CW_BINS`), putting its
+   700 Hz tone on the dial; USB, LSB and DIGITAL rotate by 482 bins
+   (22,593.8 Hz, `TX_IF_SHIFT_SSB_BINS`), putting the suppressed carrier
+   there, so audio at `a` Hz goes out at dial ± `a`. Both sidebands use
+   the same SSB rotation and extend from that carrier point in opposite
+   directions.
 4. **Inverse FFT, real part, ×2.** Taking the real part of the
    one-sided spectrum produces the real IF waveform the DAC needs; the
    ×2 restores the half of the tone's amplitude that the sideband zero
@@ -234,27 +240,13 @@ still needs checking with a wattmeter.
 
 ## Known limitations
 
-- **USB, LSB and DIGITAL transmit ~700 Hz off the dial.** The bin
-  rotations were chosen so a 700 Hz tone lands on the dial - right for
-  CW, but for sideband modes the *suppressed carrier* should be on the
-  dial. In the model the analog chain follows (the one CW's on-air
-  frequency check confirms), audio at `a` Hz goes out at:
-
-  | Mode | On air | 700 Hz | 1500 Hz |
-  |---|---|---|---|
-  | CW | dial − 9 Hz | dial − 9 Hz | — |
-  | USB, DIGITAL | dial + a − 709 Hz | dial − 9 Hz | dial + 791 Hz |
-  | LSB | dial − a + 697 Hz | dial − 3 Hz | dial − 803 Hz |
-
-  (Bench simulation of `tx_pipeline.c` plus the two mixer stages.)
-  The on-air SSB tests so far checked power and which side of the dial
-  each sideband lands on, not the carrier's exact position, so this
-  hasn't been seen on air yet. For FT8 it would put WSJT-X's signal
-  ~709 Hz below where it reports transmitting - still decodable, but in
-  the wrong place. The likely fix is a separate rotation for sideband
-  modes: `bfo_freq − xtal_filter_center` (22,600 Hz ≈ 482 bins) for
-  both USB and LSB puts the carrier within ~6 Hz of the dial, while CW
-  keeps its current rotation. Not yet changed.
+- **Carrier placement is ~6 Hz low, and this board reads ~12 Hz low
+  on top of that.** Whole-bin rotation leaves the SSB carrier 6.25 Hz
+  below the dial and CW's tone 9.4 Hz below. Separately, a 2026-09-22
+  on-air check read both sidebands about 10-14 Hz lower still (about
+  1.5-2 ppm at 7.2 MHz), which looks like the si5351's reference rather
+  than anything in the DSP - there's no frequency calibration for it
+  yet. Both are well inside an SSB or FT8 channel.
 - **The IF shift doesn't follow `hw_settings.ini`.** `tx_pipeline.h`
   computes its rotations from compiled-in copies of `bfo_freq` and
   `xtal_filter_center` (`TX_PIPELINE_BENCH_BFO_FREQ_HZ`/
