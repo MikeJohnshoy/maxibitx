@@ -50,6 +50,7 @@
 #include <string.h>
 #include "tx_pipeline.h"
 #include "cw.h" // CW_PITCH_HZ
+#include "tone_gen.h"
 
 #define TEST_FS TX_PIPELINE_FS_HZ
 
@@ -206,6 +207,55 @@ static double measure_raw(struct filter *f, int apply_zero, double measure_hz,
 			demod_feed(&d, out_r, TX_PIPELINE_BLOCK_LEN);
 	}
 	return demod_mag(&d);
+}
+
+// Case E: runs tone_gen.c's output in mode m through the pipeline (upper
+// sideband), then reports the level at each of the n IF frequencies in
+// hz[] (into mags[], unit = a full-scale tone) and the output's peak
+// absolute sample over the measured blocks. The level uses a
+// Hann-windowed DFT rather than demod_mag(): the IMD check looks for
+// something ~1200 Hz from a strong tone, and a rectangular window's
+// leakage at that spacing (~-56 dB over these 16 blocks) would read as
+// fake IMD.
+#define TONE_GEN_SETTLE_BLOCKS 8
+#define TONE_GEN_MEASURE_BLOCKS 16
+static float tone_gen_capture[TONE_GEN_MEASURE_BLOCKS * TX_PIPELINE_BLOCK_LEN];
+
+static void measure_tone_gen(enum tone_gen_mode m, const double *hz, double *mags, int n,
+                             double *peak)
+{
+	struct tx_pipeline *p = tx_pipeline_new();
+	float in[TX_PIPELINE_BLOCK_LEN], out[TX_PIPELINE_BLOCK_LEN];
+	const int len = TONE_GEN_MEASURE_BLOCKS * TX_PIPELINE_BLOCK_LEN;
+
+	*peak = 0.0;
+	tone_gen_set_mode(m);
+	for (int b = 0; b < TONE_GEN_SETTLE_BLOCKS + TONE_GEN_MEASURE_BLOCKS; b++) {
+		for (int i = 0; i < TX_PIPELINE_BLOCK_LEN; i++)
+			in[i] = (float)tone_gen_sample();
+		tx_pipeline_process_block(p, TX_PIPELINE_KEEP_UPPER, in, out);
+		if (b < TONE_GEN_SETTLE_BLOCKS)
+			continue;
+		memcpy(&tone_gen_capture[(b - TONE_GEN_SETTLE_BLOCKS) * TX_PIPELINE_BLOCK_LEN], out,
+		       sizeof(out));
+		for (int i = 0; i < TX_PIPELINE_BLOCK_LEN; i++)
+			if (fabs(out[i]) > *peak)
+				*peak = fabs(out[i]);
+	}
+	tone_gen_set_mode(TONE_GEN_OFF);
+	tx_pipeline_free(p);
+
+	for (int k = 0; k < n; k++) {
+		double re = 0, im = 0, wsum = 0;
+		for (int i = 0; i < len; i++) {
+			double w = 0.5 - 0.5 * cos(2.0 * M_PI * i / (len - 1));
+			double ph = 2.0 * M_PI * hz[k] * i / TEST_FS;
+			re += w * tone_gen_capture[i] * cos(ph);
+			im -= w * tone_gen_capture[i] * sin(ph);
+			wsum += w;
+		}
+		mags[k] = 2.0 * sqrt(re * re + im * im) / wsum; // real tone amplitude, as demod_mag()
+	}
 }
 
 int main(void)
@@ -366,6 +416,34 @@ int main(void)
 		printf("   Same LSB signal measured at the pre-fix (unmirrored-shift) location %.3f Hz instead: %.2f dB (want: very negative)\n",
 		       target_image, to_db(m_old_bug_location, 1.0));
 		tx_pipeline_free(p);
+	}
+
+	// --- Case E: the test-tone generator (tone_gen.c) ---------------------
+	// Single tone: full scale, so ~0 dB at its IF. Two-tone: 0.5 each, so
+	// each tone ~-6.02 dB, the combined peak equal to the single tone's
+	// (same PEP), and nothing at the third-order IMD locations - the
+	// pipeline is linear, so IMD seen on air comes from the analog chain.
+	// docs/dsp_design_notes/tx_test_tones_and_alc.md.
+	{
+		double hz1[1] = { shift_actual_hz + TONE_GEN_SINGLE_HZ };
+		double m1[1], peak1;
+		measure_tone_gen(TONE_GEN_SINGLE, hz1, m1, 1, &peak1);
+
+		double lo = TONE_GEN_TWO_LOW_HZ, hi = TONE_GEN_TWO_HIGH_HZ;
+		double hz2[4] = { shift_actual_hz + lo, shift_actual_hz + hi,
+		                  shift_actual_hz + 2 * lo - hi, shift_actual_hz + 2 * hi - lo };
+		double m2[4], peak2;
+		measure_tone_gen(TONE_GEN_TWO, hz2, m2, 4, &peak2);
+
+		printf("\nE. Test-tone generator (tone_gen.c), upper sideband\n");
+		printf("   Single %.0f Hz at IF %.3f Hz: %.2f dB (want ~0 dB), peak %.4f\n",
+		       TONE_GEN_SINGLE_HZ, hz1[0], to_db(m1[0], 1.0), peak1);
+		printf("   Two-tone %.0f + %.0f Hz: %.2f / %.2f dB (want ~-6.02 dB each), peak %.4f\n",
+		       lo, hi, to_db(m2[0], 1.0), to_db(m2[1], 1.0), peak2);
+		printf("   Two-tone peak vs single-tone peak: %.2f dB (want ~0 dB - same PEP)\n",
+		       to_db(peak2, peak1));
+		printf("   IMD3 at carrier %+.0f Hz: %.1f dB, at carrier %+.0f Hz: %.1f dB (want: numerical floor)\n",
+		       2 * lo - hi, to_db(m2[2], 1.0), 2 * hi - lo, to_db(m2[3], 1.0));
 	}
 
 	return 0;
