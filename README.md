@@ -10,13 +10,11 @@ provide the display and controls, over the network or USB.
 ## Where it came from
 
 **sbitx** is Ashhar Farhan's (VU2ESE) software for his radio. It's
-full of features, and most of them live in one place. `sbitx_gtk.c`
-alone is more than 12,000 lines, with the GTK user interface, DSP and
-hardware control intertwined. That coupling has real costs.
-On sbitx/zBitx, a slow display update holding a shared I2C mutex was
-measured stalling the real-time audio thread for 50 ms to over 2
-seconds. Spectrum FFTs computed inline in the DSP functions caused
-audio underruns.
+full of features, and most of them live in a few large files. `sbitx.c` and`sbitx_gtk.c`
+alone are more than 3,000 and 12,000 lines respectively, with the GTK user interface, DSP and
+hardware initialization and control intertwined. That coupling has real costs.
+It's difficult for a new developer to find and understand how things work,
+and changes carry a risk of unintended impacts.
 
 **minibitx** asked how little code it takes to run the sBitx hardware
 well. It pulled out only what the hardware needs and refined each
@@ -31,8 +29,9 @@ and no UI runs in the process. Anything a display or controller needs
 goes through a narrow, documented interface
 ([`docs/06_api.md`](docs/06_api.md)).
 
-The whole daemon is about 6,300 lines of C in 21 files; the largest,
-the USB gadget, is about 1,300.
+The whole daemon is about 6,300 lines of C in 21 files; a big part of that is 
+in the external interfaces.  The largest,
+the USB gadget providing an audio connection and CAT control interface, is about 1,300.
 
 | Job | Files |
 |---|---|
