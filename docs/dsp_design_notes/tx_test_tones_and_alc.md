@@ -150,10 +150,55 @@ shift the earlier tone-anchored derivation needed is gone.
 tone reads 0 dB at the carrier − 1000 Hz and −122 dB at carrier + 1000
 Hz, which is what distinguishes LSB from USB.
 
-**Still open:** an on-air re-check (USB should read dial + 1000 Hz), and
-the separate ~10-14 Hz low bias both measurements showed, about 1.5-2
-ppm at 7.2 MHz. That is the si5351 reference, not the DSP, and there's
-no frequency calibration for it yet.
+**Confirmed on air, 2026-09-22.** Dial 7,219,000 Hz, 1000 Hz tone:
+USB read 7,219,986 Hz and LSB 7,217,981 Hz, against 7,219,993.75 and
+7,217,993.75 predicted. Sideband placement is correct; what's left is a
+few Hz of bin quantization plus the reference error below.
+
+## Frequency calibration (the si5351 reference)
+
+Every measurement so far read low by about the same fraction:
+
+| Date | Mode | Error vs. predicted | Implied reference |
+|---|---|---|---|
+| 09-22 (before the fix) | USB | −10.6 Hz | 24,999,963 Hz |
+| 09-22 (before the fix) | LSB | −13.9 Hz | 24,999,952 Hz |
+| 09-22 (after the fix) | USB | −7.8 Hz | 24,999,973 Hz |
+| 09-22 (after the fix) | LSB | −12.8 Hz | 24,999,956 Hz |
+
+An error in the si5351's reference oscillator scales every clock, so the
+transmitted carrier moves by `(T/C − 1)(clk2 − bfo_freq)`, where `T` is
+the real reference, `C` the value the code assumes, and
+`clk2 − bfo_freq = f − 22,600`. That is proportional to the operating
+frequency: about −11 Hz at 7 MHz, so about −22 Hz at 14 MHz and −44 Hz
+at 28 MHz. Receive shifts by the same fraction, so the radio reads low
+in both directions - which is why nothing in an RX-only test showed it.
+
+Solving for the reference: `T = C × (1 + e / (f − 22,600))`. The four
+readings average −11.25 Hz at 7.219 MHz, giving 24,999,961 Hz, about
+1.6 ppm low.
+
+**Applied.** `hw_settings.ini` now carries `cal=24999961` under a
+`[tcxo]` section - the same key, units and section sbitx's own file
+uses, so a settings file copied from either project works in the other.
+A top-level `cal` is accepted too. `hw_settings_load()` passes it to
+`si5351_set_calibration()` before any clock is set; left out, the
+nominal 25,000,000 applies.
+
+**Refining it.** The four readings spread about ±0.3 ppm, which is the
+remote receiver's own accuracy as much as anything. Better references,
+in order:
+
+- Receive WWV (5, 10, 15 MHz) or CHU and read the carrier offset in a
+  spectrum display. Higher frequency means more resolution per ppm.
+- Transmit a tone into a dummy load and read it on a GPS-locked
+  receiver (a KiwiSDR advertising GPS).
+- Measure clk2 directly with a counter locked to a good reference.
+
+Whichever is used: `new cal = old cal × (1 + error / measured frequency)`,
+where `error` is how far low the reading is. Re-check after a big
+temperature change; a TCXO drifts far less than a plain crystal, but
+not to zero.
 
 ## Doing the measurements
 
