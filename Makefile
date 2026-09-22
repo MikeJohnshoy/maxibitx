@@ -54,6 +54,15 @@ maxibitx: $(OBJ)
 	#    /sys/kernel/config/usb_gadget/ configfs tree
 	-sudo setcap cap_sys_nice,cap_dac_override+ep $@
 
+# Comment policy check (docs/code_comments.md): flags history-style
+# comments in files changed vs origin/main, and any source file whose
+# header names a different file. Advisory except for the header check.
+check-comments:
+	python3 tools/check_comments.py
+
+check-comments-all:
+	python3 tools/check_comments.py --all
+
 clean:
 	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-upsample48k \
 		src/fft_filter.o src/fft_filter_test.o src/tx_pipeline.o src/tx_pipeline_test.o \
