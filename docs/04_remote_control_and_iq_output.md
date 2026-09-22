@@ -234,6 +234,23 @@ whatever's available each tick. I and Q values are scaled up before
 sending to make SDR apps happier. This file has no dependency on
 `usb_gadget.c` — each holds its own independent copy of the I/Q.
 
+**Outbound status bytes (C0-C4).** Each 512-byte frame the radio sends
+starts with a C0 byte whose layout is fixed by the protocol: bits 7:3
+say which status field C1-C4 carry, bit 2 is the CW dot paddle, bit 1
+the dash paddle, bit 0 PTT. `build_and_send_packet()` now rotates
+status fields 0-4 one per frame, as real hardware and sbitx's own
+`hpsdr_p1.c` do, and reports everything as zero except a firmware
+version in field 0. Until 2026-09-22 it put a 0-31 counter in bits 5:1
+instead (the host-to-radio EP2 layout, not the radio-to-host one), so
+the dash bit toggled on every frame and the dot bit every other packet
+- 750 of 1,000 frames carried a paddle closure in a bench capture - and
+fields 0 and 2 carried the dial frequency, which a client reads as the
+ADC-overload flag and firmware version. SDR Console ignored all of it;
+SparkSDR's receive audio had a loud "buzzsaw" across the dial, the
+prime suspect being SparkSDR acting on those phantom paddle closures.
+Fixed and bench-checked (no paddle bits set, fields cycling 0-4); the
+SparkSDR re-test is pending.
+
 ## Lightweight I/Q telemetry stream (`iq_stream.c`)
 
 A third, independent way to get baseband I/Q off the box, built
