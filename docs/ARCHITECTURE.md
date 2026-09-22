@@ -2043,7 +2043,10 @@ for keying an external accessory's PTT, not this input line.)
      [`rx_uac_out_digital_mode_bandwidth.md`](dsp_design_notes/rx_uac_out_digital_mode_bandwidth.md)
      §10.
 
-10. Power/ALC calibration for voice, per §9.
+10. Power/ALC calibration for voice, per §9. Planned in
+    [`dsp_design_notes/tx_test_tones_and_alc.md`](dsp_design_notes/tx_test_tones_and_alc.md);
+    its first piece, a TX test-tone generator (`tone_gen.c`, rigctld
+    `U TONE`), is built and bench-tested.
 
 11. **Done, code-complete — on-air test still outstanding.** Simplified
     step 9's UAC2 gadget audio from stereo-duplicated to genuinely mono,
