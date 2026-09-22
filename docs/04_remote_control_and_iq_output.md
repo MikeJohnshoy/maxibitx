@@ -13,6 +13,10 @@ core (`sound.c`, `rx_audio.c`, `radio.c`, `cw.c`, `vfo.c`, ...) in plain
 themselves - they only carry state in and out of it for whichever
 external app is on the other end.
 
+This document covers how those interfaces are implemented. For the
+client-side reference - every command, reply and wire format, and what
+an application can and can't do today - see [`06_api.md`](06_api.md).
+
 ## The single-entry-point pattern
 
 `radio_tune_to()` and `radio_set_tx()` (`radio.c`) are the *only*
@@ -42,9 +46,9 @@ It implements a small plain-text rigctl command set:
 | `f` / `F <hz>` | get / set frequency — `F` calls `radio_tune_to()`, which also clears RIT back to 0 (see `j`/`J` below) |
 | `t` / `T <0\|1>` | get / set PTT — `T` calls `radio_set_tx()`; any nonzero value means TX (no separate mic/data state) |
 | `j` / `J <hz>` | get / set RIT — a receive-only tuning offset, `radio_set_rit()`/`radio_get_rit()` (`radio.c`), range `+/-RIT_MAX_HZ` (`radio.h`, 9999 Hz). Applied to RX's clk2 only; TX's own clk2 (`radio_tx_apply()`) never sees it, so RIT never moves your transmit frequency. Persists across your own TX bursts (restored the moment TX drops back to RX) but auto-clears on the next `F` — a RIT offset dialed in against one frequency has no defined meaning on a different one. |
-| `m` / `M <mode> <passband>` | get / set mode — mode itself is real now: `radio_get_mode()`/`radio_set_mode()` (`radio.c`), the single owner `usb_gadget.c`'s `MD` also reads/writes, per `docs/ARCHITECTURE.md`'s build order step 3. `M` rejects an unrecognized mode name (`RPRT -1`, same as an out-of-range `J`) rather than silently accepting it. `CW`/`USB`/`LSB`/`PKTUSB` (→`RADIO_MODE_DIGITAL`) are the names `hamlib.c`'s `mode_to_name()`/`name_to_mode()` recognize — `PKTUSB` is a best-effort stand-in, not yet confirmed against a real WSJT-X rigctld session. `passband` stays cosmetic (echoed back, not applied) — there's still no real passband-width setting to apply it to. Doesn't yet select anything downstream (build order steps 4/5, not done) — this is "every control surface agrees on one real value", not "the value does something" |
-| `l` / `L <level> <value>` | get / set a hamlib "level" — only `AF` (audio/volume, 0.0-1.0) is backed by anything real, wired to `rx_audio.c`'s `rx_audio_get_volume()`/`rx_audio_set_volume()`; every other hamlib level (`RF`, `SQL`, preamp, ...) gets an error reply, same as an unknown command |
-| `u` / `U <func> <0\|1>` | get / set a hamlib "function" — only `NARROW` is backed by anything real: toggles `rx_audio.c`'s stage-3 narrow (~300Hz) post-demod CW filter on/off via `rx_audio_get_narrow_filter()`/`rx_audio_set_narrow_filter()`. `NARROW` isn't a name real Hamlib ships in its own function table — this server only ever talks to `tools/rigctl_panel.py`, not stock `rigctl`, so there's no compatibility reason to hunt for a closer standard name. Everything else gets an error reply. |
+| `m` / `M <mode> <passband>` | get / set mode — mode itself is real now: `radio_get_mode()`/`radio_set_mode()` (`radio.c`), the single owner `usb_gadget.c`'s `MD` also reads/writes, per `docs/ARCHITECTURE.md`'s build order step 3. `M` rejects an unrecognized mode name (`RPRT -1`, same as an out-of-range `J`) rather than silently accepting it. `CW`/`USB`/`LSB`/`PKTUSB` (→`RADIO_MODE_DIGITAL`) are the names `hamlib.c`'s `mode_to_name()`/`name_to_mode()` recognize — `PKTUSB` is a best-effort stand-in, not yet confirmed against a real WSJT-X rigctld session. `passband` stays cosmetic (echoed back, not applied) — there's still no real passband-width setting to apply it to. Mode selects both the onboard demodulator and the TX audio source (`06_api.md`, "The radio model") |
+| `l` / `L <level> <value>` | get / set a hamlib "level" — `AF` (audio/volume, 0.0-1.0), wired to `rx_audio.c`'s `rx_audio_get_volume()`/`rx_audio_set_volume()`; `STRENGTH` (S-meter, read-only); and the `MICGAIN` extension (`sound.c`'s mic_tx_gain); every other hamlib level (`RF`, `SQL`, preamp, ...) gets an error reply, same as an unknown command |
+| `u` / `U <func> <0\|1>` | get / set a hamlib "function" — `NARROW` toggles `rx_audio.c`'s stage-3 narrow (~300Hz) post-demod CW filter on/off via `rx_audio_get_narrow_filter()`/`rx_audio_set_narrow_filter()`, and `FFTFILT` picks its implementation (elliptic or FFT). `NARROW` isn't a name real Hamlib ships in its own function table — this server only ever talks to `tools/rigctl_panel.py`, not stock `rigctl`, so there's no compatibility reason to hunt for a closer standard name. Everything else gets an error reply. |
 | `chk_vfo` | always reports "not in VFO mode" (single-VFO radio) |
 | `dump_state` | minimal capability dump for client negotiation — advertises a real `max_rit` (`RIT_MAX_HZ`) now that `j`/`J` are backed by something; TX ranges come from the `[tx_band]` entries in `hw_settings.ini` (1.8–30 MHz if none loaded) at a flat 5 W, and mode masks list only CW/USB/LSB/PKTUSB; still deliberately reports no XIT/IF-shift/preamp/attenuator/onboard-filter support. The TX ranges are advertisement only — PTT isn't refused outside them |
 | `q` / `Q` / `quit` | disconnect |
@@ -127,7 +131,7 @@ only bare "get" queries do):
 | `RU` / `RD` | step RIT up/down by a fixed 10 Hz per call (`CAT_RIT_STEP_HZ`), clamped to `+/-RIT_MAX_HZ`, no reply — implicitly re-enables RIT via `radio_set_rit()`, same as turning a real RIT knob does regardless of the ON/OFF button's last state. A real rig's optional step-count suffix (`RU005;`) is accepted but ignored — minibitx has no configured step size to multiply it against |
 | `TX` / `RX` | bare, immediate PTT, no reply — calls `radio_set_tx()`, same "local CW key wins" guard as Hamlib's `T` |
 | `TQ` | get / set PTT (0/1) — another way to ask for the same thing as `TX`/`RX` |
-| `MD` | get / set mode — real now, same `radio_get_mode()`/`radio_set_mode()` Hamlib's `M`/`m` use, translated to/from single-digit Kenwood codes (`1`/`2`/`3`/`9` = LSB/USB/CW/DIGITAL — `9` for `RADIO_MODE_DIGITAL` is this project's own best-effort guess at a real QMX's DATA-mode digit, not yet confirmed against a packet capture). An unrecognized digit is silently ignored, same convention as any other command this surface doesn't recognize — not Hamlib's `RPRT -1`, this protocol has no error-reply concept. Defaults to `3` (CW), the one mode minibitx can actually transmit |
+| `MD` | get / set mode — real now, same `radio_get_mode()`/`radio_set_mode()` Hamlib's `M`/`m` use, translated to/from single-digit Kenwood codes (`1`/`2`/`3` = LSB/USB/CW). DIGITAL reports as `2` (USB) and can't be selected over CAT; an `MD2` while already in DIGITAL is a no-op (`ARCHITECTURE.md` §10 step 12). An unrecognized digit is silently ignored, same convention as any other command this surface doesn't recognize — not Hamlib's `RPRT -1`, this protocol has no error-reply concept. Defaults to `3` (CW), the one mode minibitx can actually transmit |
 | `IF` | get only — combined status string (frequency, RIT, TX/RX, mode). RIT's 5-char signed offset and on/off digit are real now (`radio_get_rit()`/`radio_rit_enabled()`); XIT/memory/scan/split/tone are still reported as off/zero — minibitx has none of those. The field width for the RIT portion is unchanged from the all-zero version this replaced — see `usb_gadget.c`'s own comment on this command for the layout's confidence level (reconstructed from general convention, not confirmed against a packet capture) |
 | `AG` | get / set AF (volume) gain, Kenwood format (1-digit VFO selector, ignored — single VFO — + 3-digit level 000-255) — calls the same `rx_audio_set_volume()`/`rx_audio_get_volume()` `hamlib.c`'s `l`/`L AF` already uses, just reached over the CAT wire format instead of rigctld's. FLRig's volume slider sends a continuous stream of `AG0nnn;` sets while dragged (not just on release); each one is just applied directly. |
 
@@ -166,7 +170,11 @@ and handles both directions of that link:
 **Inbound (EP2):** frequency and mode control live entirely in the
 rigctld server above — the *only* thing `hpsdr_p1.c` reads from the
 inbound stream is the MOX (PTT) bit, since some SDR apps key PTT through
-the I/Q link's C0 byte even while using CAT for everything else. When it
+the I/Q link's C0 byte even while using CAT for everything else. (Since
+then it also follows the app's RX1 frequency, C&C addr 0x02, while
+receiving, and retunes to its TX frequency, addr 0x01, when MOX is set -
+see `06_api.md`'s HPSDR section. The transmit I/Q samples are still
+ignored.) When it
 sees that bit change, it calls `radio_set_tx()` — the same entry point
 Hamlib uses, never a separate path — and echoes it to the console as
 `hpsdr: MOX -> TX on` / `hpsdr: MOX -> TX off`, tagged `hpsdr:` rather
@@ -269,8 +277,8 @@ place: real, already-demodulated 16-bit/48kHz PCM audio, genuinely
 bidirectional, meant for a control-surface app like WSJT-X to decode/
 encode from directly, the same way it would talk to a real radio's own
 USB audio codec - see
-[`10_external_digital_modes_wsjtx.md`](10_external_digital_modes_wsjtx.md)
-for the operator-facing setup steps.
+[`06_api.md`](06_api.md)'s "Using it with WSJT-X" for the
+operator-facing setup steps.
 
 Mono, both directions (`ARCHITECTURE.md` §10 step 11) - an earlier
 revision advertised 2 channels per direction with the same sample
