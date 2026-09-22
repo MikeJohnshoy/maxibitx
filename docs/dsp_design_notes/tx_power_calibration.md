@@ -33,8 +33,9 @@ passband on both mixing products - genuine DSB) to a carrier shifted up
 by `TX_IF_OFFSET_HZ` (~23.3kHz), deliberately landing the wanted product
 at the crystal filter's real measured center - its point of *least*
 attenuation, with the unwanted image out on its skirt (full mechanism in
-[`../03_tx_processing_pipeline.md`](../03_tx_processing_pipeline.md)'s
-"Mixer 2" section). 
+[`tx_direct_to_dac_cw_history.md`](tx_direct_to_dac_cw_history.md)'s
+"Mixer 2" section; the current pipeline is
+[`../03_tx_processing_pipeline.md`](../03_tx_processing_pipeline.md)). 
 
 ## 3. Test frequencies - one popular QRP CW frequency per band
 
