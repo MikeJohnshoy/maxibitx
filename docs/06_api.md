@@ -100,9 +100,12 @@ source is fixed by the mode:
 | CW | The radio's straight key (700 Hz tone, shaped) | The key only |
 | USB / LSB | The radio's mic jack | The mic PTT switch (the same key line) |
 | DIGITAL | USB gadget audio from the host (WSJT-X) | Any: rigctld `T`, CAT `TX`, HPSDR MOX |
+| Any, with the test-tone generator on | 1 kHz tone, or 700 + 1900 Hz two-tone | Any |
 
 Remote PTT in CW, USB or LSB switches the radio to transmit but sends
-silence - there is no network or USB audio path in those modes.
+silence - there is no network or USB audio path in those modes - unless
+the test-tone generator is on (`U TONE`). The generator turns itself
+off and drops PTT after 30 s in transmit.
 
 **Precedence rules:**
 
@@ -152,13 +155,14 @@ connected.
 | `L MICGAIN <value>` | `RPRT 0` | Clamped to 0-64 (extension) |
 | `u NARROW` / `U NARROW <0\|1>` | `0` / `RPRT 0` | Narrow CW filter on/off (extension) |
 | `u FFTFILT` / `U FFTFILT <0\|1>` | `0` / `RPRT 0` | Narrow filter type: 0 elliptic, 1 FFT (extension) |
+| `u TONE` / `U TONE <0\|1\|2>` | `0` / `RPRT 0` | TX test-tone generator: 0 off, 1 single 1 kHz, 2 two-tone 700 + 1900 Hz. Doesn't key the radio; any PTT does. Off after 30 s in TX. Out of range: `RPRT -1` (extension) |
 | `v` / `V <vfo>` | `VFOA` / `RPRT 0` | Single VFO; any `V` is accepted. |
 | `chk_vfo` | `0` | Not in VFO mode - send commands without a VFO argument. |
 | `dump_state` | capability block | Protocol 0. TX ranges come from `data/hw_settings.ini`'s `[tx_band]` entries at 5 W; modes CW/USB/LSB/PKTUSB; max RIT 9999. |
 | `q`, `Q`, `quit` | (connection closes) | |
 
 Anything else replies `RPRT -1`. The extensions (`MICGAIN`, `NARROW`,
-`FFTFILT`) aren't Hamlib names, so a stock Hamlib client won't use them,
+`FFTFILT`, `TONE`) aren't Hamlib names, so a stock Hamlib client won't use them,
 but they follow the same syntax.
 
 ## iq_stream (UDP 4536)
