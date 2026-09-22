@@ -26,7 +26,7 @@ int xtal_filter_center = 40012400;
 // the wanted difference product on xtal_filter_center and the sum product
 // in the crystal filter's stopband ("BFO at the filter's edge", as in
 // sbitx). ~xtal_filter_center + 22.6kHz by calibration, not enforced in
-// code: changing it means re-deriving tx_pipeline.h's TX_IF_SHIFT_HZ. RX
+// code: changing it means re-deriving tx_pipeline.h's IF shifts. RX
 // doesn't use it. Overridable in hw_settings.ini.
 int bfo_freq = 40035000;
 struct vfo lo;
