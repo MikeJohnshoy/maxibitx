@@ -20,10 +20,9 @@ of the plan, bench-verified against a synthetic stand-in for `cw.c`'s
 sidetone. **Step 5 wired it in live**: `cw.c`'s old direct-to-DAC path
 (`cw_tx_carrier`/`TX_IF_OFFSET_HZ`) and `radio_tx_apply()`'s matching
 clk2 correction are gone - CW TX now runs on the shared FFT pipeline for
-real, not just on the bench. `docs/03_tx_processing_pipeline.md` (and
-the "Transmit" line below) describes the *old*, now-replaced scheme;
-see that doc's own updated intro and `ARCHITECTURE.md` §10 step 5 for
-what actually runs today and its bench provenance. **Dial accuracy is
+real, not just on the bench. `docs/03_tx_processing_pipeline.md`
+describes the current TX chain; the old scheme is kept in
+`docs/dsp_design_notes/tx_direct_to_dac_cw_history.md`. **Dial accuracy is
 now confirmed on air**: the first real CW transmission on this pipeline
 was copied by a remote receiver exactly on frequency, and a real
 wattmeter check across all nine bands confirmed transmitted power too -
@@ -303,7 +302,7 @@ architecture and roadmap:
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | **maxibitx's own design rationale and build order** — why this is a fresh repo, the shared FFT TX/RX pipeline decision, what's still open |
 | [`docs/01_hardware_init_and_control.md`](docs/01_hardware_init_and_control.md) | GPIO, si5351/I2C, WM8731 codec bring-up |
 | [`docs/02_rx_processing_pipeline.md`](docs/02_rx_processing_pipeline.md) | Antenna to baseband I/Q, stage by stage |
-| [`docs/03_tx_processing_pipeline.md`](docs/03_tx_processing_pipeline.md) | What TX support exists today (still minibitx's) and what's planned (`ARCHITECTURE.md`) |
+| [`docs/03_tx_processing_pipeline.md`](docs/03_tx_processing_pipeline.md) | The TX chain: audio source per mode, keying/PTT, `tx_pipeline.c`, analog mixers, power levels, known limitations |
 | [`docs/04_remote_control_and_iq_output.md`](docs/04_remote_control_and_iq_output.md) | rigctld, HPSDR control/IQ, USB Audio Class output |
 | [`docs/05_process_and_threading_model.md`](docs/05_process_and_threading_model.md) | Startup sequence and thread structure |
 | [`docs/dsp_design_notes/`](docs/dsp_design_notes/) | DSP work (e.g. the anti-alias FIR) and other design docs |
