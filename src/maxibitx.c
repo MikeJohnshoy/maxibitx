@@ -15,6 +15,7 @@
 #include "hw_settings.h"
 #include "cw.h"
 #include "rx_audio.h"
+#include "tone_gen.h"
 #include <stdio.h>
 #include <unistd.h>
 #include <signal.h>
@@ -165,8 +166,25 @@ int main(int argc, char **argv) {
   // maxiBitx idle loop: keep the program alive until asked to shut down.
   // Operational state changes (tuning, PTT) are reported as they're
   // processed by one of the interfaces, not polled here.
+  // The loop also enforces the test-tone generator's safety timeout
+  // (tone_gen.h): here rather than in the audio thread, so the log line
+  // and the PTT change stay off the real-time path.
+  int tone_tx_seconds = 0;
   while (!shutdown_requested) {
     sleep(1);
+    if (in_tx && tone_gen_get_mode() != TONE_GEN_OFF) {
+      if (++tone_tx_seconds >= TONE_GEN_TIMEOUT_S) {
+        tone_gen_set_mode(TONE_GEN_OFF);
+        int release = !cw_tx_active(); // the local key keeps its own TX
+        if (release)
+          radio_set_tx(0);
+        printf("tone: %d s in TX - test tone off%s\n", TONE_GEN_TIMEOUT_S,
+               release ? ", PTT released" : "");
+        tone_tx_seconds = 0;
+      }
+    } else {
+      tone_tx_seconds = 0;
+    }
   }
  
   // Graceful shutdown - roughly the reverse of bring-up
