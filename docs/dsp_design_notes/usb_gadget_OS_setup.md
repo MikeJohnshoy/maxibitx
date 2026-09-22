@@ -8,7 +8,7 @@ The gadget itself has since been replaced end-to-end: it now carries
 real, already-demodulated 16-bit/48kHz PCM audio, genuinely bidirectional,
 and enumerates as "sBitx Audio" - see `usb_gadget.h`,
 `dsp_design_notes/usb_uac_decimation_design.md`'s own update note, and
-`10_external_digital_modes_wsjtx.md` for the current design and setup
+[`../06_api.md`](../06_api.md) for the current design and setup
 steps. The gadget bring-up mechanics this document covers (configfs
 layout, UDC binding/self-heal, the two kernel shutdown-hang workarounds
 in §14, FLRig/CAT setup in §13) are unaffected by that change and remain
