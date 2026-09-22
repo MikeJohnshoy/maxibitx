@@ -311,9 +311,8 @@ station yet.
 4. **PTT:** CAT. The radio's key line is ignored in DIGITAL.
 5. **Split:** off. `FR`/`FT`/split aren't implemented.
 
-Transmit power in DIGITAL hasn't been calibrated on a wattmeter, and
-USB, LSB and DIGITAL currently put the carrier about 700 Hz off the
-dial - see [`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md),
+Transmit power in DIGITAL hasn't been calibrated on a wattmeter - see
+[`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md),
 "Known limitations".
 
 ## Not available yet
