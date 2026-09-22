@@ -96,7 +96,7 @@ re-swept on the bench, per `cw.c`'s comment).
 Net effect: TX's actual clk1/clk2 values, and therefore its transmitted
 frequency and image suppression, are unchanged (verified algebraically
 identical to the pre-split formulas for today's constants - see
-[`../03_tx_processing_pipeline.md`](../03_tx_processing_pipeline.md)'s
+[`tx_direct_to_dac_cw_history.md`](tx_direct_to_dac_cw_history.md)'s
 "Known limitations"). RX gets a small, intentional correction (its
 mixed signal now lands exactly on `xtal_filter_center` instead of
 1,400 Hz low) that's unlikely to be measurable given the filter's ~35
