@@ -5,7 +5,7 @@ rigctl_panel.py - a small standalone control panel for maxibitx.
 Talks the same plain-text rigctld protocol WSJT-X/Thetis/etc. already use
 against maxibitx's hamlib.c server (default TCP 4532 - see
 docs/04_remote_control_and_iq_output.md) - nothing here is maxibitx-specific
-beyond the two commands it actually exercises:
+beyond the commands it actually exercises:
 
     f  / F <hz>            get / set frequency (F also clears RIT, below)
     j  / J <hz>            get / set RIT - a receive-only tuning offset,
@@ -22,6 +22,9 @@ beyond the two commands it actually exercises:
                             same as a real rig's S-meter)
     u NARROW / U NARROW <0|1>  get / set the narrow (~300Hz) post-demod
                                 CW filter (rx_audio.c stage 3) on/off
+    t  / T <0|1>           get / set PTT (the TX Test section)
+    u TONE / U TONE <0|1|2>  get / set the TX test-tone generator: off,
+                              1 kHz, or two-tone 700 + 1900 Hz
     u FFTFILT / U FFTFILT <0|1>  get / set WHICH stage-3 implementation
                                   NARROW's "on" state uses - 0 = the
                                   original elliptic IIR (default), 1 =
@@ -355,6 +358,9 @@ class Panel(tk.Tk):
         self._syncing_fftfilt = False
         # Same guard, same reasoning, for the mode selector below.
         self._syncing_mode = False
+        # Same guard, same reasoning, for the TX test controls below.
+        self._syncing_tone = False
+        self._syncing_ptt = False
 
         cfg = load_config()
 
@@ -406,10 +412,8 @@ class Panel(tk.Tk):
         # the PTT/key line in the wrong mode is a real, easy way to key
         # TX with no audible result (e.g. still in CW while trying to
         # talk), which is exactly the kind of mixup this control exists
-        # to make obvious and quick to fix. DIGITAL is included for
-        # completeness (a real, settable value on the wire) even though
-        # nothing generates TX audio for it yet - see radio.h's enum
-        # comment.
+        # to make obvious and quick to fix. DIGITAL transmits the USB
+        # gadget's audio (WSJT-X).
         mode = ttk.LabelFrame(self, text="Mode", padding=8)
         mode.grid(row=2, column=0, sticky="ew", padx=8, pady=4)
         self.mode_var = tk.StringVar(value="CW")
@@ -536,6 +540,25 @@ class Panel(tk.Tk):
         self.spectrum_status_var = tk.StringVar(value="no spectrum data yet")
         ttk.Label(spec, textvariable=self.spectrum_status_var).pack(anchor="w", pady=(4, 0))
 
+        # --- TX test ---
+        # rigctld's u/U TONE (the test-tone generator, tone_gen.h) and t/T
+        # (PTT). With a tone selected, Transmit keys the radio and sends it
+        # in any mode; the sideband follows the mode. maxibitx turns the
+        # tone off and drops PTT after TONE_GEN_TIMEOUT_S (30 s).
+        # docs/dsp_design_notes/tx_test_tones_and_alc.md.
+        txt = ttk.LabelFrame(self, text="TX Test - dummy load or low power", padding=8)
+        txt.grid(row=9, column=0, sticky="ew", padx=8, pady=(0, 8))
+        self.tone_var = tk.IntVar(value=0)
+        for i, (label, val) in enumerate((("Off", 0), ("1 kHz tone", 1),
+                                          ("Two-tone 700 + 1900 Hz", 2))):
+            ttk.Radiobutton(txt, text=label, value=val, variable=self.tone_var,
+                             command=self.on_tone_changed).grid(row=0, column=i, padx=(0 if i == 0 else 10, 0))
+        self.ptt_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(txt, text="Transmit", variable=self.ptt_var,
+                         command=self.on_ptt_toggled).grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(txt, text="auto-off after 30 s").grid(row=1, column=1, columnspan=2,
+                                                        sticky="w", pady=(6, 0))
+
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     # ---- connection handling ----
@@ -625,9 +648,12 @@ class Panel(tk.Tk):
         narrow_reply = self.client.query("u NARROW")
         fftfilt_reply = self.client.query("u FFTFILT")
         strength_reply = self.client.query("l STRENGTH")
+        tone_reply = self.client.query("u TONE")
+        ptt_reply = self.client.query("t")
         if freq_reply is None or rit_reply is None or vol_reply is None \
                 or micgain_reply is None or mode_reply is None or narrow_reply is None \
-                or fftfilt_reply is None or strength_reply is None:
+                or fftfilt_reply is None or strength_reply is None \
+                or tone_reply is None or ptt_reply is None:
             self.after(0, self.disconnect)
             return
         self.after(0, lambda: self.apply_freq(freq_reply))
@@ -638,6 +664,8 @@ class Panel(tk.Tk):
         self.after(0, lambda: self.apply_narrow(narrow_reply))
         self.after(0, lambda: self.apply_fftfilt(fftfilt_reply))
         self.after(0, lambda: self.apply_strength(strength_reply))
+        self.after(0, lambda: self.apply_tone(tone_reply))
+        self.after(0, lambda: self.apply_ptt(ptt_reply))
 
     def apply_freq(self, reply):
         try:
@@ -784,6 +812,24 @@ class Panel(tk.Tk):
         self.fftfilt_var.set(use_fft)
         self._syncing_fftfilt = False
 
+    def apply_tone(self, reply):
+        try:
+            val = int(reply)
+        except ValueError:
+            return  # an older maxibitx without u TONE replies RPRT -1
+        self._syncing_tone = True
+        self.tone_var.set(val)
+        self._syncing_tone = False
+
+    def apply_ptt(self, reply):
+        try:
+            on = int(reply) != 0
+        except ValueError:
+            return
+        self._syncing_ptt = True
+        self.ptt_var.set(on)
+        self._syncing_ptt = False
+
     # ---- user actions ----
 
     def on_tune_clicked(self):
@@ -878,6 +924,20 @@ class Panel(tk.Tk):
             return
         enable = 1 if self.narrow_var.get() else 0
         threading.Thread(target=lambda: self.client.query(f"U NARROW {enable}"),
+                          daemon=True).start()
+
+    def on_tone_changed(self):
+        if self._syncing_tone or not self.client.connected():
+            return
+        val = self.tone_var.get()
+        threading.Thread(target=lambda: self.client.query(f"U TONE {val}"),
+                          daemon=True).start()
+
+    def on_ptt_toggled(self):
+        if self._syncing_ptt or not self.client.connected():
+            return
+        on = 1 if self.ptt_var.get() else 0
+        threading.Thread(target=lambda: self.client.query(f"T {on}"),
                           daemon=True).start()
 
     def on_fftfilt_toggled(self):
