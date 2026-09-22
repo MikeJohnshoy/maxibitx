@@ -38,17 +38,17 @@ int tx_pipeline_retune(struct tx_pipeline *p, float low_hz, float high_hz, float
 {
 	// filter_tune_real(), not filter_tune(). filter_tune()'s passband is
 	// one-sided (positive frequencies only), which leaves nothing for
-	// TX_PIPELINE_KEEP_LOWER to keep - LSB put out 0W on air until this
-	// changed (ARCHITECTURE.md §10 step 8; tx_pipeline_test.c Case D).
+	// TX_PIPELINE_LSB to keep - LSB put out 0W on air until this changed
+	// (ARCHITECTURE.md §10 step 8; tx_pipeline_test.c Case D).
 	return filter_tune_real(p->filt, low_hz / fs_hz, high_hz / fs_hz, TX_PIPELINE_KAISER_BETA);
 }
 
-// Sideband zero. Bins n <= N/2 are positive frequencies (kept for
-// TX_PIPELINE_KEEP_UPPER); n > N/2 are negative (kept for
-// TX_PIPELINE_KEEP_LOWER), the same convention as filter_tune().
-static void zero_sideband(complex float *freq, int N, enum tx_pipeline_sideband sideband)
+// Sideband zero. Bins n <= N/2 are positive frequencies (kept for CW and
+// USB); n > N/2 are negative (kept for LSB), the same convention as
+// filter_tune().
+static void zero_sideband(complex float *freq, int N, enum tx_pipeline_signal signal)
 {
-	if (sideband == TX_PIPELINE_KEEP_UPPER) {
+	if (signal != TX_PIPELINE_LSB) {
 		for (int i = N / 2 + 1; i < N; i++)
 			freq[i] = 0;
 	} else {
@@ -73,7 +73,7 @@ static void rotate_bins(complex float *freq, int N, int shift_bins, complex floa
 		freq[(i + shift_bins + N) % N] = scratch[i];
 }
 
-void tx_pipeline_process_block(struct tx_pipeline *p, enum tx_pipeline_sideband sideband,
+void tx_pipeline_process_block(struct tx_pipeline *p, enum tx_pipeline_signal signal,
                                 const float *in, float *out)
 {
 	struct filter *f = p->filt;
@@ -84,12 +84,12 @@ void tx_pipeline_process_block(struct tx_pipeline *p, enum tx_pipeline_sideband 
 	for (int i = 0; i < TX_PIPELINE_BLOCK_LEN; i++)
 		in_c[i] = in[i];
 
-	// Each half needs its own rotation to land on the filter center - see
-	// TX_IF_SHIFT_HZ_LSB (tx_pipeline.h).
-	int shift_bins = (sideband == TX_PIPELINE_KEEP_LOWER) ? TX_IF_SHIFT_BINS_LSB : TX_IF_SHIFT_BINS;
+	// CW anchors its tone on the dial, SSB its suppressed carrier - see
+	// the IF placement comment in tx_pipeline.h.
+	int shift_bins = (signal == TX_PIPELINE_CW) ? TX_IF_SHIFT_CW_BINS : TX_IF_SHIFT_SSB_BINS;
 
 	filter_forward(f, in_c);
-	zero_sideband(f->freq, f->N, sideband);
+	zero_sideband(f->freq, f->N, signal);
 	rotate_bins(f->freq, f->N, shift_bins, p->rotate_scratch);
 	filter_inverse(f, out_c);
 
@@ -100,7 +100,8 @@ void tx_pipeline_process_block(struct tx_pipeline *p, enum tx_pipeline_sideband 
 	// (1024/2048) that factor is e^(-j*pi*k*b): +1 unless both k and b are
 	// odd, then -1. Both rotations here are odd (467, 497), so without this
 	// the carrier flips sign every other block (measured: the wanted tone
-	// at -97.75dB, ARCHITECTURE.md §10 step 4). If the block/impulse sizes
+	// at -97.75dB, ARCHITECTURE.md §10 step 4; CW's 467 bins are odd,
+	// SSB's 482 even). If the block/impulse sizes
 	// ever change so that N != 2L, this needs a general phase correction,
 	// not a sign.
 	long b = p->block_count++;
