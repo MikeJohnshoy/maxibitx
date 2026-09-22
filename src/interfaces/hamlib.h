@@ -11,6 +11,7 @@
 //    l/L MICGAIN    get/set TX mic gain (extension, not a Hamlib level)
 //    u/U NARROW     get/set the narrow RX filter (extension)
 //    u/U FFTFILT    get/set its FFT implementation (extension)
+//    u/U TONE       get/set the TX test-tone generator, 0-2 (extension)
 //    v/V, chk_vfo   single VFO
 //    dump_state
 //    q/Q/quit       close the connection
