@@ -40,7 +40,7 @@ CFLAGS  := -O3 -march=native -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces
 LDFLAGS := -lm -lasound -lpthread -ldl -lfftw3f
 SRC := src/maxibitx.c src/radio.c src/radio_hw.c src/interfaces/hpsdr_p1.c src/interfaces/usb_gadget.c src/i2c.c \
      src/si5351v2.c src/sound.c src/vfo.c src/interfaces/hamlib.c src/hw_settings.c src/antialias.c src/decim48k.c src/cw.c \
-     src/rx_audio.c src/gpio.c src/interfaces/iq_stream.c src/fft_filter.c src/tx_pipeline.c src/rx_filter.c src/upsample48k.c
+     src/rx_audio.c src/gpio.c src/interfaces/iq_stream.c src/fft_filter.c src/tx_pipeline.c src/rx_filter.c src/upsample48k.c src/tone_gen.c
 OBJ := $(SRC:.c=.o)
 
 all: maxibitx
@@ -86,8 +86,8 @@ test-fft-filter: src/fft_filter.c src/fft_filter_test.c src/fft_filter.h
 # build" convention as test-fft-filter above. Depends on fft_filter.c/.h
 # (step 2) and cw.h (CW_PITCH_HZ only - NOT cw.c itself, see
 # tx_pipeline_test.c's header comment for why).
-test-tx-pipeline: src/tx_pipeline.c src/tx_pipeline_test.c src/tx_pipeline.h src/fft_filter.c src/fft_filter.h src/cw.h
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/fft_filter.c src/tx_pipeline.c src/tx_pipeline_test.c -o $@ -lfftw3f -lm
+test-tx-pipeline: src/tx_pipeline.c src/tx_pipeline_test.c src/tx_pipeline.h src/fft_filter.c src/fft_filter.h src/cw.h src/tone_gen.c src/tone_gen.h
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/fft_filter.c src/tx_pipeline.c src/tone_gen.c src/tx_pipeline_test.c -o $@ -lfftw3f -lm
 
 # docs/ARCHITECTURE.md step 6: rx_filter.c/.h's own standalone bench
 # harness (rx_filter_test.c) against synthetic tones, standing in for
