@@ -18,7 +18,7 @@ clipping was real and its fix stands, but it was a secondary issue.
 
 ## 1. Why this note exists
 
-On-air report, after `10_external_digital_modes_wsjtx.md`'s audio and
+On-air report, after `10_external_digital_modes_wsjtx.md` (since folded into `06_api.md`)'s audio and
 rig-control setup were both already confirmed working
 (`ARCHITECTURE.md` §10 steps 11/12): *"I have an SparkSDR using IQ
 data via hpsdr_p1, using wsjtx for decodes, and it sees 10x more ft8
@@ -241,7 +241,7 @@ exists purely to pick one sideband of the raw baseband I/Q and reject
 the other (`rx_audio_demod_design.md` §7.5's "which side is wanted").
 Both CW and FT8 want the *identical* selection (upper sideband,
 matching the universal FT8 convention already documented in
-`10_external_digital_modes_wsjtx.md` §2) - there is no real design
+`06_api.md`, "USB audio") - there is no real design
 tradeoff between them here, because CW's narrowing happens downstream,
 in a stage FT8 already needs disabled. And §4's own OFF-state
 measurement already showed stage 1 passing a clean, flat, correctly
