@@ -62,10 +62,8 @@ Blackman-Harris shaping, runs through the shared FFT TX pipeline
 (`tx_pipeline.c`) and has been checked on air — on frequency, image
 suppression as predicted, and a flat ~5 W across the nine bands.
 USB and LSB from the mic use the same pipeline and have been on the
-air (power out, each on its correct side of the dial), though the
-carrier appears to sit ~700 Hz off the dial - see
-[`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md)'s
-"Known limitations". DIGITAL from the USB audio gadget is code-complete
+air (power out, each on its correct side of the dial); their carrier
+placement was measured with the test-tone generator and corrected. DIGITAL from the USB audio gadget is code-complete
 but not yet tested on air, and voice power/ALC calibration is still to
 do (`ARCHITECTURE.md` §10).
 
