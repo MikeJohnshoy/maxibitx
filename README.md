@@ -11,7 +11,7 @@ provide the display and controls, over the network or USB.
 
 **sbitx** is Ashhar Farhan's (VU2ESE) software for his radio. His software was forked
 to https://github.com/drexjj/sbitx/tree/main and greatly refined and extended.  **sbitx**
-is feature-rich, and the codebase and file size has grown. `sbitx.c` and`sbitx_gtk.c`
+now has many new features, and the codebase and file size has grown. `sbitx.c` and`sbitx_gtk.c`
 alone are more than 3,000 and 12,000 lines respectively, with the GTK user interface, DSP and
 hardware initialization and control intertwined. That coupling has real costs.
 It can be difficult for a new developer to find and understand how things work,
@@ -24,9 +24,9 @@ bit-banged I2C to the kernel's I2C driver, and the rest of the DSP and
 all of the UI were left to mature external SDR apps.
 
 **maxibitx** starts from minibitx's hardware and control layer and adds
-back an all-mode transmitter and an onboard demodulator - without
+an all-mode transmitter pipeline and an onboard demodulator - without
 bringing the coupling back. Every job lives in its own small file,
-and no UI runs in the process. Anything a display or controller needs
+and no UI runs in the process. Anything an external display or controller needs
 goes through a narrow, documented interface
 ([`docs/06_api.md`](docs/06_api.md)).
 
@@ -101,6 +101,6 @@ device-mode USB port and a few kernel options - see
 - Ashhar Farhan (VU2ESE) - the sBitx radio and its original software
 - JJ's 64-bit sbitx repository, https://github.com/drexjj/sbitx, which
   the code was based on
-- `hpsdrsim.c` from the piHPSDR project
+- `hpsdrsim.c` protocol details from the piHPSDR project
 - [minibitx](https://github.com/MikeJohnshoy/minibitx), maxibitx's direct
   predecessor
