@@ -232,8 +232,14 @@ ALSA device.
    keeps the upper side too, so it conjugates like USB, then mixes up
    to `CW_PITCH_HZ` (700 Hz): a station on the dial is heard at 700 Hz,
    one 200 Hz above it at 900 Hz, and tuning up lowers the pitch, as on
-   most rigs. CW-reverse isn't offered yet; it would be the same BFO
-   with LSB's conjugation.
+   most rigs. CWR (CW-reverse) is that same BFO with LSB's
+   conjugation - the lower side instead, so it is a station 200 Hz
+   *below* the dial that's heard at 900 Hz. Transmit is unaffected by
+   the choice, since a key-down carrier lands on the dial either way,
+   which is why CWR keys and transmits exactly as CW does
+   ([`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md)).
+   `rx_audio_test.c` case E measures both, each rejecting the other's
+   side by about 40 dB.
 3. An optional narrow filter, about 300 Hz wide around `CW_PITCH_HZ`
    (an elliptic IIR by default, or `rx_filter.c`'s FFT filter),
    switched by rigctld `U NARROW` and `U FFTFILT` or the control panel.
