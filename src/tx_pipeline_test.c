@@ -220,19 +220,28 @@ static double measure_raw(struct filter *f, int apply_zero, double measure_hz,
 #define TONE_GEN_SETTLE_BLOCKS 8
 #define TONE_GEN_MEASURE_BLOCKS 16
 static float tone_gen_capture[TONE_GEN_MEASURE_BLOCKS * TX_PIPELINE_BLOCK_LEN];
+// Case F keeps an unlimited run to compare a limited one against.
+static float limiter_ref[TONE_GEN_MEASURE_BLOCKS * TX_PIPELINE_BLOCK_LEN];
 
+// 'ceiling' goes to tx_pipeline_set_ceiling(); 'in_gain' scales the
+// generator's output on the way in, standing in for sound.c's
+// mic_tx_gain - which is how a real signal comes to exceed full scale
+// and give the limiter something to do. *alc_db receives the
+// gain-reduction meter after the measured blocks.
 static void measure_tone_gen(enum tone_gen_mode m, enum tx_pipeline_signal sig,
-                             const double *hz, double *mags, int n, double *peak)
+                             float ceiling, float in_gain, const double *hz,
+                             double *mags, int n, double *peak, double *alc_db)
 {
 	struct tx_pipeline *p = tx_pipeline_new();
 	float in[TX_PIPELINE_BLOCK_LEN], out[TX_PIPELINE_BLOCK_LEN];
 	const int len = TONE_GEN_MEASURE_BLOCKS * TX_PIPELINE_BLOCK_LEN;
 
+	tx_pipeline_set_ceiling(p, ceiling);
 	*peak = 0.0;
 	tone_gen_set_mode(m);
 	for (int b = 0; b < TONE_GEN_SETTLE_BLOCKS + TONE_GEN_MEASURE_BLOCKS; b++) {
 		for (int i = 0; i < TX_PIPELINE_BLOCK_LEN; i++)
-			in[i] = (float)tone_gen_sample();
+			in[i] = in_gain * (float)tone_gen_sample();
 		tx_pipeline_process_block(p, sig, in, out);
 		if (b < TONE_GEN_SETTLE_BLOCKS)
 			continue;
@@ -243,6 +252,7 @@ static void measure_tone_gen(enum tone_gen_mode m, enum tx_pipeline_signal sig,
 				*peak = fabs(out[i]);
 	}
 	tone_gen_set_mode(TONE_GEN_OFF);
+	*alc_db = tx_pipeline_alc_db(p);
 	tx_pipeline_free(p);
 
 	for (int k = 0; k < n; k++) {
@@ -387,8 +397,8 @@ int main(void)
 		printf("\nD. LSB placement (same SSB shift as USB, mirrored content)\n");
 
 		double hz[2] = { lsb_wanted, lsb_wrong_side };
-		double m[2], peak;
-		measure_tone_gen(TONE_GEN_SINGLE, TX_PIPELINE_LSB, hz, m, 2, &peak);
+		double m[2], peak, alc;
+		measure_tone_gen(TONE_GEN_SINGLE, TX_PIPELINE_LSB, 1.0f, 1.0f, hz, m, 2, &peak, &alc);
 		printf("   1000 Hz tone at IF %.3f Hz (carrier - 1000): %.2f dB (want ~0 dB)\n",
 		       lsb_wanted, to_db(m[0], 1.0));
 		printf("   Same signal at IF %.3f Hz (carrier + 1000, the USB side): %.1f dB (want: very negative)\n",
@@ -404,14 +414,14 @@ int main(void)
 	{
 		float shift_ssb = TX_IF_SHIFT_SSB_BINS * TX_PIPELINE_BIN_HZ;
 		double hz1[1] = { shift_ssb + TONE_GEN_SINGLE_HZ };
-		double m1[1], peak1;
-		measure_tone_gen(TONE_GEN_SINGLE, TX_PIPELINE_USB, hz1, m1, 1, &peak1);
+		double m1[1], peak1, alc;
+		measure_tone_gen(TONE_GEN_SINGLE, TX_PIPELINE_USB, 1.0f, 1.0f, hz1, m1, 1, &peak1, &alc);
 
 		double lo = TONE_GEN_TWO_LOW_HZ, hi = TONE_GEN_TWO_HIGH_HZ;
 		double hz2[4] = { shift_ssb + lo, shift_ssb + hi,
 		                  shift_ssb + 2 * lo - hi, shift_ssb + 2 * hi - lo };
 		double m2[4], peak2;
-		measure_tone_gen(TONE_GEN_TWO, TX_PIPELINE_USB, hz2, m2, 4, &peak2);
+		measure_tone_gen(TONE_GEN_TWO, TX_PIPELINE_USB, 1.0f, 1.0f, hz2, m2, 4, &peak2, &alc);
 
 		printf("\nE. Test-tone generator (tone_gen.c), upper sideband\n");
 		printf("   Single %.0f Hz at IF %.3f Hz: %.2f dB (want ~0 dB), peak %.4f\n",
@@ -422,6 +432,78 @@ int main(void)
 		       to_db(peak2, peak1));
 		printf("   IMD3 at carrier %+.0f Hz: %.1f dB, at carrier %+.0f Hz: %.1f dB (want: numerical floor)\n",
 		       2 * lo - hi, to_db(m2[2], 1.0), 2 * hi - lo, to_db(m2[3], 1.0));
+	}
+
+	// --- Case F: the peak limiter (ALC) ----------------------------------
+	// The normal configuration: the ceiling sits at full scale, so a
+	// correctly-driven signal passes untouched and an overdriven one is
+	// pulled back to it. The limiter's working range comes from the drive
+	// side (mic gain, host audio level), not from reserving output power -
+	// rated power is rated power in every mode.
+	//
+	// A single tone has a constant envelope, so a correct limiter settles
+	// on one gain and holds it: the output should be the undriven output
+	// times that gain, sample for sample. A clipper would flatten the
+	// peaks and that comparison would fall apart.
+	// docs/dsp_design_notes/tx_test_tones_and_alc.md.
+	{
+		float shift_ssb = TX_IF_SHIFT_SSB_BINS * TX_PIPELINE_BIN_HZ;
+		double hz[1] = { shift_ssb + TONE_GEN_SINGLE_HZ };
+		double m_ref[1], peak_ref, alc_ref;
+		double m_hot[1], peak_hot, alc_hot;
+		double m_low[1], peak_low, alc_low;
+		const float overdrive = 2.0f;  // mic gain 6 dB too high
+		const float half_power = 0.707f; // POWER at 50% - ceiling, not headroom
+
+		// Reference: at the ceiling, nothing to do.
+		measure_tone_gen(TONE_GEN_SINGLE, TX_PIPELINE_USB, 1.0f, 1.0f, hz, m_ref, 1,
+		                 &peak_ref, &alc_ref);
+		memcpy(limiter_ref, tone_gen_capture, sizeof(limiter_ref));
+
+		// Overdriven into the same ceiling: the everyday ALC case.
+		measure_tone_gen(TONE_GEN_SINGLE, TX_PIPELINE_USB, 1.0f, overdrive, hz, m_hot, 1,
+		                 &peak_hot, &alc_hot);
+
+		// The limiter should have undone the overdrive exactly, leaving the
+		// same waveform as the reference run.
+		double worst = 0.0, worst_clip = 0.0;
+		for (int i = 0; i < TONE_GEN_MEASURE_BLOCKS * TX_PIPELINE_BLOCK_LEN; i++) {
+			double err = fabs(tone_gen_capture[i] - limiter_ref[i]);
+			if (err > worst)
+				worst = err;
+			// What truncating at the ceiling would have produced instead,
+			// so the number above has something to be compared against.
+			double clipped = limiter_ref[i] * overdrive;
+			if (clipped > 1.0)
+				clipped = 1.0;
+			if (clipped < -1.0)
+				clipped = -1.0;
+			double clip_err = fabs(clipped - limiter_ref[i]);
+			if (clip_err > worst_clip)
+				worst_clip = clip_err;
+		}
+
+		// A lower ceiling is running at reduced power, not headroom for
+		// the limiter - POWER at 50% is 3 dB down.
+		measure_tone_gen(TONE_GEN_SINGLE, TX_PIPELINE_USB, half_power, 1.0f, hz, m_low, 1,
+		                 &peak_low, &alc_low);
+
+		printf("\nF. Peak limiter (ALC), single tone, upper sideband\n");
+		printf("   At the ceiling, drive 1.0: peak %.4f, tone %.2f dB, ALC %.2f dB\n"
+		       "     (want: untouched, ALC ~0 dB)\n",
+		       peak_ref, to_db(m_ref[0], 1.0), alc_ref);
+		printf("   Drive x%.1f (%.2f dB too hot), same ceiling: peak %.4f, tone %.2f dB,\n"
+		       "     ALC %.2f dB (want: peak <= 1.0, ALC ~%.2f dB)\n",
+		       overdrive, to_db(overdrive, 1.0), peak_hot, to_db(m_hot[0], 1.0),
+		       alc_hot, to_db(overdrive, 1.0));
+		printf("   Overdriven output vs. the reference: worst deviation %.2e (%.1f dB\n"
+		       "     down) - the limiter gave back exactly what the drive added\n",
+		       worst, -to_db(worst, 1.0));
+		printf("   For comparison, truncating at the ceiling instead: %.2e (%.1f dB)\n",
+		       worst_clip, -to_db(worst_clip, 1.0));
+		printf("   POWER at 50%% (ceiling %.3f), drive 1.0: peak %.4f, tone %.2f dB,\n"
+		       "     ALC %.2f dB (want -3.01 dB out, 3.01 dB of reduction)\n",
+		       half_power, peak_low, to_db(m_low[0], 1.0), alc_low);
 	}
 
 	return 0;
