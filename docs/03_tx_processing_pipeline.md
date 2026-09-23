@@ -76,7 +76,7 @@ hands the slow hardware sequence to a dedicated worker thread (see
 for why). Who calls it:
 
 - **The key/PTT line** (`CW_KEY`, BCM4), polled once per audio block by
-  `cw_poll_key()` (`cw.c`). In CW it's a straight key with semi
+  `cw_poll_key()` (`cw.c`). In CW and CWR it's a straight key with semi
   break-in: a hang timer (`CW_HANG_POLLS`, ~300 ms) holds TX through
   the gaps between elements so the relay doesn't chatter. In USB and
   LSB the same line is a mic PTT switch - TX follows the switch, no hang
@@ -86,6 +86,22 @@ for why). Who calls it:
   (`hpsdr_p1.c`, which first retunes to the client's TX frequency if
   it differs). While the local key/PTT line holds TX, remote
   requests to change it are ignored - the local key wins.
+
+**Band limits.** `radio_set_tx()` refuses to transmit when the dial
+sits outside every `[tx_band]` range in `data/hw_settings.ini`, which
+covers all of those sources at once rather than each having to check
+for itself. Returning to receive is never refused. rigctld's `T`
+answers `RPRT -1`; the other surfaces have no error reply, so the
+refusal is reported on the console instead — by `maxibitx.c`'s idle
+loop rather than at the point of refusal, because the straight key's
+path runs on the real-time audio thread and may not do I/O. A key held
+down out of band therefore logs once a second, not once per poll.
+
+If no `[tx_band]` entries were loaded at all — no `hw_settings.ini`, or
+one without them — nothing is refused. An empty table means nothing is
+calibrated, not that nothing is allowed; refusing everything would
+leave an uncalibrated board unable to transmit at all, which is the
+worse failure.
 
 Which audio actually reaches the exciter is decided in `audio_loop()`:
 it transmits when the key/PTT line has TX asserted
@@ -154,7 +170,17 @@ For the example, the input is a 700 Hz tone.
    (22,593.8 Hz, `TX_IF_SHIFT_SSB_BINS`), putting the suppressed carrier
    there, so audio at `a` Hz goes out at dial ± `a`. Both sidebands use
    the same SSB rotation and extend from that carrier point in opposite
-   directions.
+   directions. Both rotations are derived at startup from the
+   `bfo_freq` and `xtal_filter_center` actually loaded from
+   `data/hw_settings.ini` - `sound.c` calls
+   `tx_pipeline_set_if_placement()` once, after `hw_settings_load()`,
+   so a board whose IF differs transmits on frequency rather than off
+   by the difference. `tx_pipeline.h`'s `TX_IF_SHIFT_*_BINS` remain as
+   the starting values and as what the bench harness uses, since that
+   links no hardware code and has no settings file to read. A placement
+   that isn't physical (a non-positive difference, or one past Nyquist)
+   is rejected, leaving the defaults and logging it: transmitting at a
+   wrong IF is worse than transmitting at the default one.
 4. **Inverse FFT, real part, ×2.** Taking the real part of the
    one-sided spectrum produces the real IF waveform the DAC needs; the
    ×2 restores the half of the tone's amplitude that the sideband zero
@@ -361,17 +387,6 @@ peak, not the average.
   remote receiver used for the transmit tests is itself about 1.5 ppm
   low - see
   [`01_hardware_init_and_control.md`](01_hardware_init_and_control.md).
-- **The IF shift doesn't follow `hw_settings.ini`.** `tx_pipeline.h`
-  computes its rotations from compiled-in copies of `bfo_freq` and
-  `xtal_filter_center` (`TX_PIPELINE_BENCH_BFO_FREQ_HZ`/
-  `_XTAL_CENTER_HZ`), not from the values loaded at startup. They match
-  this board's `hw_settings.ini` today; on a board with different
-  values, TX frequency would be off by the difference.
-- **No band limits.** Nothing refuses PTT outside the `[tx_band]`
-  ranges; rigctld's `dump_state` advertises them, but only as
-  information.
-- **CW-reverse isn't a TX mode yet**, matching RX. For a pure CW tone
-  the kept sideband doesn't change the carrier frequency anyway.
 - **Remote PTT in CW sends no carrier** (see "Keying and PTT") unless
   the test-tone generator is on. Keying CW from a computer needs a real
   key or a future remote keying path.
