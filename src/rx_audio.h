@@ -95,6 +95,9 @@ int rx_audio_get_narrow_filter_impl(void);
 //   USB  upper side, no BFO: audio Hz == RF - dial, the convention WSJT-X
 //        and other SSB-based apps assume. Also used for DIGITAL.
 //   LSB  lower side, no BFO: audio Hz == dial - RF.
+//   CWR  CW-reverse - CW's BFO with LSB's side, so a station d Hz BELOW
+//        dial is heard at CW_PITCH_HZ + d. Only the demodulator changes;
+//        transmit is identical to CW (radio.h).
 // Sideband selection accounts for the spectrally inverted I/Q (rx_audio.c's
 // RX_IQ_SPECTRUM_INVERTED). History: docs/dsp_design_notes/
 // rx_uac_out_digital_mode_bandwidth.md §10.
@@ -102,6 +105,7 @@ enum rx_demod {
     RX_DEMOD_CW = 0,
     RX_DEMOD_USB,      // also used for DIGITAL (FT8 etc. are USB by convention)
     RX_DEMOD_LSB,
+    RX_DEMOD_CWR,
 };
 
 // Called by radio.c's radio_set_mode() - the one place every mode change
