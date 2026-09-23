@@ -421,7 +421,10 @@ class Panel(tk.Tk):
         mode = ttk.LabelFrame(self, text="Mode", padding=8)
         mode.grid(row=2, column=0, sticky="ew", padx=8, pady=4)
         self.mode_var = tk.StringVar(value="CW")
-        for i, name in enumerate(("CW", "USB", "LSB", "DIGITAL")):
+        # CWR is CW-reverse: the same key and the same transmitted
+        # carrier as CW, listening on the other side of the BFO to move
+        # away from an interfering signal (radio.h).
+        for i, name in enumerate(("CW", "CWR", "USB", "LSB", "DIGITAL")):
             ttk.Radiobutton(mode, text=name, value=name, variable=self.mode_var,
                              command=self.on_mode_changed).grid(row=0, column=i, padx=(0 if i == 0 else 10, 0))
 
@@ -844,7 +847,7 @@ class Panel(tk.Tk):
         # an alias on the way in, is hamlib.c's name_to_mode().)
         if name == "PKTUSB":
             name = "DIGITAL"
-        if name not in ("CW", "USB", "LSB", "DIGITAL"):
+        if name not in ("CW", "CWR", "USB", "LSB", "DIGITAL"):
             return
         self._syncing_mode = True
         self.mode_var.set(name)
