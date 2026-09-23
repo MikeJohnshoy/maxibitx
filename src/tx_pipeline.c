@@ -4,6 +4,7 @@
 // file adds the two steps fft_filter.c doesn't provide: the sideband
 // zero and the bin rotate.
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include "tx_pipeline.h"
@@ -31,6 +32,14 @@ struct tx_pipeline *tx_pipeline_new(void)
 	// so FFTW's alignment isn't needed.
 	p->rotate_scratch = malloc(p->filt->N * sizeof(complex float));
 	p->block_count = 0;
+
+	// Limiter at unity until someone sets a ceiling: output is the
+	// delayed signal, unchanged.
+	p->ceiling = 1.0f;
+	p->gain = 1.0f;
+	memset(p->delay, 0, sizeof(p->delay));
+	p->delay_pos = 0;
+	p->meter_db = 0.0f;
 	return p;
 }
 
@@ -73,6 +82,62 @@ static void rotate_bins(complex float *freq, int N, int shift_bins, complex floa
 		freq[(i + shift_bins + N) % N] = scratch[i];
 }
 
+// Applies the peak limiter and writes the block's real output. See
+// tx_pipeline.h, "Peak limiter (ALC)", for why this works on the complex
+// signal's magnitude and why the output is delayed.
+//
+// 'scale' carries both the x2 for the discarded sideband and the
+// per-block sign flip, so out_c is read once per sample.
+static void limit_and_emit(struct tx_pipeline *p, const complex float *out_c,
+                            float scale, float *out)
+{
+	const float ceiling = p->ceiling;
+	// Crossing the whole gain range in exactly the look-ahead window is
+	// what bounds the overshoot: however far the target drops, the gain
+	// can get there before the sample that needs it is emitted.
+	const float attack_step = 1.0f / (float)TX_ALC_LOOKAHEAD_SAMPLES;
+	const float release_step = 1.0f / (TX_ALC_RELEASE_S * TX_PIPELINE_FS_HZ);
+	float gain = p->gain;
+	float min_gain = 1.0f;
+
+	for (int i = 0; i < TX_PIPELINE_BLOCK_LEN; i++) {
+		// The envelope of the real signal below: out_c is analytic here
+		// (the sideband zero left a one-sided spectrum), so its magnitude
+		// is what the exciter will radiate.
+		float env = 2.0f * cabsf(out_c[i]);
+		float target = (env > ceiling) ? ceiling / env : 1.0f;
+
+		if (target < gain) {
+			gain -= attack_step;
+			if (gain < target)
+				gain = target;
+		} else {
+			gain += release_step;
+			if (gain > target)
+				gain = target;
+		}
+		if (gain < min_gain)
+			min_gain = gain;
+
+		// Emit the sample that entered the delay line
+		// TX_ALC_LOOKAHEAD_SAMPLES ago, at the gain reached by now, then
+		// put this sample in its place.
+		out[i] = p->delay[p->delay_pos] * gain;
+		p->delay[p->delay_pos] = scale * crealf(out_c[i]);
+		p->delay_pos = (p->delay_pos + 1) % TX_ALC_LOOKAHEAD_SAMPLES;
+	}
+	p->gain = gain;
+
+	// Peak-hold for the meter: jump to this block's deepest reduction,
+	// otherwise fall at TX_ALC_METER_RANGE_DB per TX_ALC_METER_DECAY_S.
+	float reduction_db = (min_gain < 1.0f) ? -20.0f * log10f(min_gain) : 0.0f;
+	float held = p->meter_db - TX_ALC_METER_RANGE_DB * (float)TX_PIPELINE_BLOCK_LEN /
+	                                (TX_ALC_METER_DECAY_S * TX_PIPELINE_FS_HZ);
+	if (held < 0.0f)
+		held = 0.0f;
+	p->meter_db = (reduction_db > held) ? reduction_db : held;
+}
+
 void tx_pipeline_process_block(struct tx_pipeline *p, enum tx_pipeline_signal signal,
                                 const float *in, float *out)
 {
@@ -113,8 +178,19 @@ void tx_pipeline_process_block(struct tx_pipeline *p, enum tx_pipeline_signal si
 	// and -f and the sideband zero discarded one half; without it the
 	// output is -6.02dB. Keeps the pipeline unity-gain, so power
 	// calibration (sound.c's TX_GAIN_CORRECTION) doesn't have to absorb it.
-	for (int i = 0; i < TX_PIPELINE_BLOCK_LEN; i++)
-		out[i] = (flip ? -2.0f : 2.0f) * crealf(out_c[i]);
+	limit_and_emit(p, out_c, flip ? -2.0f : 2.0f, out);
+}
+
+void tx_pipeline_set_ceiling(struct tx_pipeline *p, float ceiling)
+{
+	if (!(ceiling > 0.0f) || ceiling > 1.0f)
+		ceiling = 1.0f;
+	p->ceiling = ceiling;
+}
+
+float tx_pipeline_alc_db(const struct tx_pipeline *p)
+{
+	return p->meter_db;
 }
 
 void tx_pipeline_free(struct tx_pipeline *p)
