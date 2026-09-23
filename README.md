@@ -11,7 +11,7 @@ provide the display and controls, over the network or USB.
 
 **sbitx** is Ashhar Farhan's (VU2ESE) software for his radio. His software was forked
 to https://github.com/drexjj/sbitx/tree/main and greatly refined and extended.  **sbitx**
-is featue-rich, and the codebase and file size has grown. `sbitx.c` and`sbitx_gtk.c`
+is feature-rich, and the codebase and file size has grown. `sbitx.c` and`sbitx_gtk.c`
 alone are more than 3,000 and 12,000 lines respectively, with the GTK user interface, DSP and
 hardware initialization and control intertwined. That coupling has real costs.
 It can be difficult for a new developer to find and understand how things work,
