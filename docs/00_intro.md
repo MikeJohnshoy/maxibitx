@@ -63,9 +63,12 @@ Blackman-Harris shaping, runs through the shared FFT TX pipeline
 suppression as predicted, and a flat ~5 W across the nine bands.
 USB and LSB from the mic use the same pipeline and have been on the
 air (power out, each on its correct side of the dial); their carrier
-placement was measured with the test-tone generator and corrected. DIGITAL from the USB audio gadget is code-complete
-but not yet tested on air, and voice power/ALC calibration is still to
-do (`ARCHITECTURE.md` §10).
+placement was measured with the test-tone generator and corrected.
+DIGITAL from the USB audio gadget is confirmed on the air: a two-way
+FT8 contact with WSJT-X on 2026-09-23, so the host's audio reached
+another operator's decoder and their reply came back through the
+receive chain. Voice power and ALC calibration are still to do
+(`ARCHITECTURE.md` §10).
 
 ## How the rest of these docs are organized
 
