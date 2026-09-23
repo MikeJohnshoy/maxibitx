@@ -792,14 +792,17 @@ static void *audio_loop(void *arg) {
           // follows the mode (tone_gen.h).
           for (int i = 0; i < n; i++)
             tx_audio_buf[i] = tone_gen_sample();
-          signal = (tx_mode == RADIO_MODE_LSB)  ? TX_PIPELINE_LSB
-                   : (tx_mode == RADIO_MODE_CW) ? TX_PIPELINE_CW
-                                                : TX_PIPELINE_USB;
-        } else if (tx_mode == RADIO_MODE_CW) {
+          signal = (tx_mode == RADIO_MODE_LSB) ? TX_PIPELINE_LSB
+                   : (tx_mode == RADIO_MODE_CW || tx_mode == RADIO_MODE_CWR)
+                       ? TX_PIPELINE_CW
+                       : TX_PIPELINE_USB;
+        } else if (tx_mode == RADIO_MODE_CW || tx_mode == RADIO_MODE_CWR) {
           // cw_get_sample() owns the envelope advance for this sample -
           // must be called exactly once per real audio sample (its
           // envelope timing depends on elapsed samples, not on how the
           // pipeline below batches them).
+          // CWR transmits exactly as CW: a key-down carrier lands on the
+          // dial whichever side the pipeline keeps (radio.h).
           for (int i = 0; i < n; i++)
             tx_audio_buf[i] = cw_get_sample();
           signal = TX_PIPELINE_CW;
@@ -933,6 +936,20 @@ int sound_thread_start(const char *device_name) {
 
   // Create the TX pipeline before priming playback below - see there.
   cw_tx_pipeline = tx_pipeline_new();
+
+  // Place the TX IF from this board's own values, which hw_settings_load()
+  // has already read (maxibitx.c runs it before any of this). Without
+  // this the pipeline keeps tx_pipeline.h's compiled-in defaults, which
+  // are right for this board but wrong for one whose ini differs.
+  if (tx_pipeline_set_if_placement(cw_tx_pipeline, bfo_freq, xtal_filter_center) < 0) {
+    fprintf(stderr,
+            "sound: bfo_freq (%d) and xtal_filter_center (%d) don't give a "
+            "usable TX IF - keeping the compiled-in placement\n",
+            bfo_freq, xtal_filter_center);
+  } else {
+    printf("sound: TX IF placed from bfo_freq - xtal_filter_center = %d Hz\n",
+           bfo_freq - xtal_filter_center);
+  }
 
   if (pcm_playback) {
     // Prime playback with a full buffer of silence immediately before the
