@@ -7,6 +7,7 @@
 #include "si5351.h"
 #include "sound.h"
 #include "rx_audio.h" // rx_audio_set_demod() - radio_set_mode() below
+#include "hw_settings.h" // hw_settings_tx_allowed() - radio_set_tx() below
 #include <pthread.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -95,11 +96,14 @@ static enum radio_mode current_mode = RADIO_MODE_CW;
 void radio_set_mode(enum radio_mode m) {
   current_mode = m;
   // Keep rx_audio.c's demodulator in step. DIGITAL receives as USB, the
-  // FT8/digital convention (sound.c transmits it as USB too).
+  // FT8/digital convention (sound.c transmits it as USB too). CWR is the
+  // only mode whose demodulator differs from its transmit behavior - it
+  // transmits exactly as CW (radio.h).
   switch (m) {
   case RADIO_MODE_USB:
   case RADIO_MODE_DIGITAL: rx_audio_set_demod(RX_DEMOD_USB); break;
   case RADIO_MODE_LSB:     rx_audio_set_demod(RX_DEMOD_LSB); break;
+  case RADIO_MODE_CWR:     rx_audio_set_demod(RX_DEMOD_CWR); break;
   case RADIO_MODE_CW:
   default:                 rx_audio_set_demod(RX_DEMOD_CW);  break;
   }
@@ -176,8 +180,24 @@ static void radio_tx_worker_start(void) {
   pthread_create(&worker, NULL, radio_tx_worker, NULL);
 }
 
+// Set by radio_set_tx() when it refuses, drained by
+// radio_tx_refused_hz() - see radio.h for why it isn't logged in place.
+static volatile int tx_refused_hz = 0;
+
+int radio_tx_refused_hz(void) {
+  int hz = tx_refused_hz;
+  tx_refused_hz = 0;
+  return hz;
+}
+
 // switch between RX and TX
-void radio_set_tx(int tx_on) {
+int radio_set_tx(int tx_on) {
+  // Only transmitting is gated; returning to receive always proceeds.
+  if (tx_on && !hw_settings_tx_allowed(freq_hdr)) {
+    tx_refused_hz = freq_hdr;
+    return -1;
+  }
+
   pthread_once(&tx_worker_once, radio_tx_worker_start);
 
   in_tx = tx_on ? 1 : 0; // set synchronously so other threads' guards
@@ -189,4 +209,5 @@ void radio_set_tx(int tx_on) {
   tx_pending = 1;
   pthread_cond_signal(&tx_cond);
   pthread_mutex_unlock(&tx_mutex);
+  return 0;
 }
