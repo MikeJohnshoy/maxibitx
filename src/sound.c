@@ -124,6 +124,28 @@ static volatile int g_running = 0;
 // audio_loop()).
 static struct tx_pipeline *cw_tx_pipeline = NULL;
 
+// The operator's POWER setting, a fraction of hw_settings.ini's max_power
+// (see sound.h). Same no-lock treatment as mic_tx_gain: written by
+// rigctld's thread, read once per block. It moves the *limiter's ceiling*,
+// never a gain after the limiter - a gain downstream could walk past
+// max_power, which is the one thing that value exists to prevent.
+static double tx_power_fraction = 1.0;
+
+void sound_set_tx_power(double fraction) {
+  if (fraction < 0.0) fraction = 0.0;
+  if (fraction > 1.0) fraction = 1.0;
+  tx_power_fraction = fraction;
+}
+
+double sound_get_tx_power(void) {
+  return tx_power_fraction;
+}
+
+// Gain reduction the limiter is applying, in dB, peak-held for a meter.
+double sound_get_alc_db(void) {
+  return cw_tx_pipeline ? (double)tx_pipeline_alc_db(cw_tx_pipeline) : 0.0;
+}
+
 /* ------------------------------------------------------------------ */
 /*  ALSA mixer helper                                                 */
 /* ------------------------------------------------------------------ */
@@ -741,6 +763,14 @@ static void *audio_loop(void *arg) {
         // sample, since freq_hdr doesn't change mid-block.
         double band_scale = hw_settings_tx_scale(freq_hdr);
         double amp = TX_SAMPLE_HEADROOM * TX_DRIVE * band_scale * TX_GAIN_CORRECTION;
+
+        // The limiter's ceiling, as an amplitude: POWER's fraction of
+        // max_power, against full_scale_power (hw_settings.h, "TX power
+        // ceiling"). sqrt because power goes as amplitude squared. Set
+        // per block - one sqrt at block rate - so a POWER change takes
+        // effect without any handshake with this thread.
+        tx_pipeline_set_ceiling(cw_tx_pipeline,
+                                (float)(sqrt(tx_power_fraction) * hw_settings_power_ratio()));
 
         // This block's TX audio: tx_pipeline.c's input, and the local
         // sidetone/monitor below. The pipeline needs exactly TX_PIPELINE_BLOCK_LEN
