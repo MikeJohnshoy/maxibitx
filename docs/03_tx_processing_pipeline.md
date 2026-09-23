@@ -12,11 +12,11 @@ Status: CW is on-air verified - on frequency, image suppression as
 predicted, and a flat ~5 W across all nine bands. USB and LSB from the
 mic have been on the air: both put out power and each lands on the
 correct side of the dial. Their carrier placement was measured with the
-test-tone generator on 2026-09-22 and corrected
-([`dsp_design_notes/tx_test_tones_and_alc.md`](dsp_design_notes/tx_test_tones_and_alc.md));
-the corrected placement hasn't been re-checked on air yet. DIGITAL
-(WSJT-X over the USB gadget) is code-complete and not yet tested on
-air.
+test-tone generator on 2026-09-22, corrected, and the correction read
+back on air the same day
+([`dsp_design_notes/tx_test_tones_and_alc.md`](dsp_design_notes/tx_test_tones_and_alc.md)).
+DIGITAL (WSJT-X over the USB gadget) is confirmed by a two-way FT8
+contact on 2026-09-23 - see "What the FT8 contact proves" below.
 
 The earlier CW-only scheme this pipeline replaced (a second, IF-shifted
 oscillator in `cw.c` plus a matching clk2 correction in `radio.c`) is
@@ -29,17 +29,36 @@ The derivations and bench numbers behind the current design are
 
 ```
   TX audio source, by mode (sound.c's audio_loop())
-     CW:      cw.c's 700 Hz sidetone x keying envelope
+     CW/CWR:  cw.c's 700 Hz sidetone x keying envelope (fixed full scale)
      USB/LSB: mic (WM8731 right capture channel) x mic_tx_gain
-     DIGITAL: WSJT-X audio from the USB gadget, 48 -> 96 kHz (upsample48k.c)
-     |
-     v
+     DIGITAL: WSJT-X audio from the USB gadget, 48 -> 96 kHz
+              (upsample48k.c), at whatever level the host sends
+     |            mic_tx_gain and the host's level are THE DRIVE - how hard
+     |            the signal is pushed into the ceiling below. They can
+     v            exceed full scale by 20 dB, which is the limiter's work.
   tx_pipeline.c, one 1024-sample block at a time (96 kHz):
      FFT -> 300-3000 Hz bandpass -> zero one sideband -> rotate bins
-     (the IF shift) -> inverse FFT -> real part
-     |            result: a real IF near 22.6 kHz
+     (the IF shift) -> inverse FFT -> peak limiter (ALC) -> real part
+     |                                     ^
+     |                                     |
+     |    ceiling, per block from sound.c -+
+     |      = sqrt(POWER x max_power / full_scale_power)
+     |        POWER: the operator's control, rigctld l/L RFPOWER
+     |        max_power, full_scale_power: watts, from hw_settings.ini
+     |
+     |    The limiter holds the envelope 2*|out_c| at or below that
+     |    ceiling by applying a GAIN - min(1, ceiling/envelope) - never
+     |    by clipping. It only reduces, so quiet audio stays quiet. A
+     |    constant envelope at or below the ceiling (CW key-down, a
+     |    steady tone) doesn't move the gain at all. Costs 2 ms of
+     |    look-ahead delay; reports its gain reduction as l ALC.
+     |
+     |            result: a real IF near 22.6 kHz, envelope <= the ceiling
      v
-  WM8731 DAC, right channel = exciter feed (at the calibrated TX level),
+  WM8731 DAC, right channel = exciter feed
+     |          x band scale x TX_GAIN_CORRECTION  <--- the calibration
+     |            that turns an amplitude into watts. Fixed, and the one
+     |            thing downstream of the limiter, so the ceiling holds.
      |        left channel = local sidetone/mic monitor (never reaches the PA)
      v
   Mixer 2  <---  clk1 = bfo_freq (40,035,000 Hz) while transmitting
@@ -64,8 +83,16 @@ The derivations and bench numbers behind the current design are
 Everything from the DAC onward is analog. maxibitx's code sets two
 things: the waveform written to the DAC's right channel, and the
 sequencing that switches the path in and out (`radio_tx_apply()`,
-below). Output power is set entirely by the amplitude of that
-waveform - see "Adjusting power levels".
+below). Output power is set entirely by the amplitude of that waveform.
+
+The limiter is the dividing line in that chain. Everything above it —
+mic gain, the host's audio level — decides how hard the signal is
+driven; everything below it is fixed calibration that turns an
+amplitude into watts. Nothing an operator or a CAT client can change
+may sit below the limiter, or the ceiling stops being a ceiling, which
+is why `POWER` moves the threshold rather than scaling the output and
+why `TX_MASTER_VOL` stays a mute rather than becoming a level control.
+"Setting power" has the whole account.
 
 ## Keying and PTT
 
@@ -107,8 +134,8 @@ Which audio actually reaches the exciter is decided in `audio_loop()`:
 it transmits when the key/PTT line has TX asserted
 (`cw_tx_active()`), when `in_tx` is set in DIGITAL, or when `in_tx` is
 set with the test-tone generator on (below). Otherwise remote PTT in
-CW, USB or LSB keys the radio but sends silence - there's no remote
-audio source in those modes, so a CAT or HPSDR MOX in CW doesn't
+CW, CWR, USB or LSB keys the radio but sends silence - there's no
+remote audio source in those modes, so a CAT or HPSDR MOX in CW doesn't
 produce a carrier.
 
 `radio_tx_apply(1)` then runs, in order: mute RX capture
@@ -154,19 +181,19 @@ For the example, the input is a 700 Hz tone.
 
 **`tx_pipeline.c`.** One shared instance serves every mode. Each
 1024-sample block goes through an overlap-save FFT filter (N = 2048,
-46.875 Hz per bin) in five steps:
+46.875 Hz per bin) in six steps:
 
 1. **Bandpass**, 300-3000 Hz (`filter_tune_real()`, Kaiser β = 5). It
    keeps both the positive- and negative-frequency images of that band,
    so either sideband is available to the next step.
 2. **Sideband zero.** A real audio tone has energy at both +f and −f;
    zeroing one half of the spectrum is what makes the result
-   single-sideband. CW, USB and DIGITAL keep the upper half, LSB the
-   lower.
+   single-sideband. CW, CWR, USB and DIGITAL keep the upper half, LSB
+   the lower.
 3. **Bin rotate** - the IF shift, done in the frequency domain instead
-   of with an oscillator. What it aims at depends on the signal: CW
-   rotates by 467 bins (21,890.6 Hz, `TX_IF_SHIFT_CW_BINS`), putting its
-   700 Hz tone on the dial; USB, LSB and DIGITAL rotate by 482 bins
+   of with an oscillator. What it aims at depends on the signal: CW and
+   CWR rotate by 467 bins (21,890.6 Hz, `TX_IF_SHIFT_CW_BINS`), putting
+   the 700 Hz tone on the dial; USB, LSB and DIGITAL rotate by 482 bins
    (22,593.8 Hz, `TX_IF_SHIFT_SSB_BINS`), putting the suppressed carrier
    there, so audio at `a` Hz goes out at dial ± `a`. Both sidebands use
    the same SSB rotation and extend from that carrier point in opposite
@@ -181,13 +208,21 @@ For the example, the input is a 700 Hz tone.
    that isn't physical (a non-positive difference, or one past Nyquist)
    is rejected, leaving the defaults and logging it: transmitting at a
    wrong IF is worse than transmitting at the default one.
-4. **Inverse FFT, real part, ×2.** Taking the real part of the
+4. **Inverse FFT.** Back to the time domain, still complex.
+5. **Peak limiter (ALC).** The signal is still complex at this point,
+   so `2*|out_c[i]|` is the envelope the exciter will radiate - the
+   right quantity, where the input audio's own peak is not, because the
+   bandpass and the sideband zero both change it. The limiter applies
+   `min(1, ceiling/envelope)`, a gain rather than a clip, and only ever
+   reduces. See "Setting power" for the ceiling, the 2 ms look-ahead
+   and the `ALC` reading.
+6. **Real part, ×2, and phase correction.** Taking the real part of the
    one-sided spectrum produces the real IF waveform the DAC needs; the
    ×2 restores the half of the tone's amplitude that the sideband zero
-   discarded, so the pipeline has unity gain for a steady tone.
-5. **Phase correction.** Rotating by an odd number of bins flips the
-   carrier's sign on every other block; the output is negated on those
-   blocks to keep it continuous.
+   discarded, so the pipeline has unity gain for a steady tone. Rotating
+   by an odd number of bins also flips the carrier's sign on every other
+   block, so the output is negated on those blocks to keep it
+   continuous.
 
 For the example: the 700 Hz tone comes out at 700 + 21,890.6 =
 22,590.6 Hz. The other half of the tone, which step 2 zeroed, would
@@ -374,6 +409,32 @@ calibration carries over from the old scheme. Speech and FT8 audio have
 different peak-to-average ratios, so their average power at a given
 setting still needs checking with a wattmeter — the limiter fixes the
 peak, not the average.
+
+## What the FT8 contact proves
+
+On 2026-09-23 a two-way FT8 contact was completed with WSJT-X driving
+maxibitx over the USB gadget. It is the strongest single piece of
+evidence the transmit chain has, because a contact only happens when
+every link works at once and a stranger's decoder is the judge.
+
+It confirms, end to end: WSJT-X's generated audio crossing the gadget
+(`uac_reader_thread()`), the 48 kHz to 96 kHz upsample
+(`upsample48k.c`), the whole of `tx_pipeline.c` — bandpass, sideband
+zero, the 482-bin carrier-anchored rotate, inverse FFT and the
+per-block sign flip — the DAC, both mixers, the crystal filter keeping
+the wanted product, the PA and the LPF. It also confirms that PTT
+through the Kenwood CAT surface keys and unkeys inside WSJT-X's 15
+second cycle, that the sideband is right (a mirrored signal decodes as
+nothing), and that ~5 W is enough. The reply arriving and decoding
+exercises the receive chain in the same cycle.
+
+What it does *not* establish: carrier placement to within a few Hz.
+FT8 decoders search a wide window and report the offset they found, so
+a contact tolerates an error far larger than the 6.25 Hz of bin
+quantization. That figure comes from the test-tone measurements above,
+not from this. Nor does it say anything about DIGITAL's power being
+calibrated — that is still an open item — or about whether
+`UAC_RX_AUDIO_SCALE` puts the decoder in its best input range.
 
 ## Known limitations
 
