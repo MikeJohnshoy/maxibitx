@@ -151,19 +151,34 @@ connected.
 | `l AF` | `0.670000` | Volume, 0.0-1.0 |
 | `L AF <0.0-1.0>` | `RPRT 0` | |
 | `l STRENGTH` | `-12` | S-meter, integer dB relative to S9 (−54 to +60). Uncalibrated - relative readings only. |
-| `l MICGAIN` | `1.000000` | Mic gain (extension) |
+| `l MICGAIN` | `1.000000` | Mic gain - the TX drive control, USB/LSB only (extension) |
 | `L MICGAIN <value>` | `RPRT 0` | Clamped to 0-64 (extension) |
+| `l RFPOWER` | `1.000000` | TX power, 0.0-1.0 of `max_power` in `data/hw_settings.ini` |
+| `L RFPOWER <0.0-1.0>` | `RPRT 0` | Moves the ALC limiter's ceiling. Clamped; it cannot exceed `max_power`. |
+| `l ALC` | `0.00` | ALC gain reduction in **dB**, not Hamlib's 0.0-1.0. Peak-held ~1 s so it reads as a meter. Read-only (extension) |
 | `u NARROW` / `U NARROW <0\|1>` | `0` / `RPRT 0` | Narrow CW filter on/off (extension) |
 | `u FFTFILT` / `U FFTFILT <0\|1>` | `0` / `RPRT 0` | Narrow filter type: 0 elliptic, 1 FFT (extension) |
 | `u TONE` / `U TONE <0\|1\|2>` | `0` / `RPRT 0` | TX test-tone generator: 0 off, 1 single 1 kHz, 2 two-tone 700 + 1900 Hz. Doesn't key the radio; any PTT does. Off after 30 s in TX. Out of range: `RPRT -1` (extension) |
 | `v` / `V <vfo>` | `VFOA` / `RPRT 0` | Single VFO; any `V` is accepted. |
 | `chk_vfo` | `0` | Not in VFO mode - send commands without a VFO argument. |
-| `dump_state` | capability block | Protocol 0. TX ranges come from `data/hw_settings.ini`'s `[tx_band]` entries at 5 W; modes CW/USB/LSB/PKTUSB; max RIT 9999. |
+| `dump_state` | capability block | Protocol 0. TX ranges come from `data/hw_settings.ini`'s `[tx_band]` entries at 5 W; modes CW/USB/LSB/PKTUSB; max RIT 9999. `has_get_level` is `AF\|RFPOWER\|STRENGTH`, `has_set_level` is `AF\|RFPOWER`. |
 | `q`, `Q`, `quit` | (connection closes) | |
 
-Anything else replies `RPRT -1`. The extensions (`MICGAIN`, `NARROW`,
-`FFTFILT`, `TONE`) aren't Hamlib names, so a stock Hamlib client won't use them,
-but they follow the same syntax.
+Anything else replies `RPRT -1`. The extensions (`MICGAIN`, `ALC`,
+`NARROW`, `FFTFILT`, `TONE`) aren't Hamlib names or aren't in Hamlib's
+units, so a stock Hamlib client won't use them, but they follow the same
+syntax. `AF`, `RFPOWER` and `STRENGTH` are real Hamlib levels and are
+advertised in `dump_state`.
+
+Two of these are easy to confuse. `RFPOWER` sets a ceiling: it lowers
+the limiter's threshold, so turning it up can never exceed `max_power`.
+`MICGAIN` is drive: it decides how hard the signal is pushed into
+whatever ceiling is in force, so past the ceiling it moves `ALC` rather
+than output power. To set a voice level, advance `MICGAIN` until speech
+peaks read a couple of dB on `ALC`. In DIGITAL there is no radio-side
+drive at all - set the host's output level while watching `ALC`.
+[`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md),
+"Setting power", has the whole chain.
 
 ## iq_stream (UDP 4536)
 
