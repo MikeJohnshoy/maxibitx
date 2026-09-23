@@ -157,6 +157,41 @@ int main(void)
 		return 1;
 	}
 
+	// --- Case E: CW vs CWR sideband ------------------------------------
+	// The point of CW-reverse: same dial, the other side of the BFO. The
+	// raw I/Q is spectrally inverted (rx_audio.c's
+	// RX_IQ_SPECTRUM_INVERTED), so a station d Hz ABOVE the dial arrives
+	// at baseband -d and one BELOW at +d. CW should hear the first and
+	// reject the second; CWR the reverse. Run in bypass (Case D left it
+	// there) so this measures the sideband choice rather than stage 3's
+	// 700 Hz-tuned response - a 500 Hz offset reaches it as 1200 Hz audio,
+	// well off that peak.
+	{
+		const double offset = 500.0;
+		double cw_above, cw_below, cwr_above, cwr_below;
+
+		rx_audio_set_demod(RX_DEMOD_CW);
+		cw_above = run_tone(RX_FILTER_BLOCK_LEN, 8, -offset);
+		cw_below = run_tone(RX_FILTER_BLOCK_LEN, 8, offset);
+
+		rx_audio_set_demod(RX_DEMOD_CWR);
+		cwr_above = run_tone(RX_FILTER_BLOCK_LEN, 8, -offset);
+		cwr_below = run_tone(RX_FILTER_BLOCK_LEN, 8, offset);
+
+		printf("\nE. CW vs CWR sideband, a station %.0f Hz off the dial (bypass)\n", offset);
+		printf("   CW : above dial RMS=%.1f, below dial RMS=%.1f (want above >> below)\n",
+		       cw_above, cw_below);
+		printf("   CWR: above dial RMS=%.1f, below dial RMS=%.1f (want below >> above)\n",
+		       cwr_above, cwr_below);
+		printf("   Unwanted side rejected by: CW %.1f dB, CWR %.1f dB\n",
+		       -20.0 * log10(cw_below / cw_above), -20.0 * log10(cwr_above / cwr_below));
+		if (!(cw_above > cw_below) || !(cwr_below > cwr_above)) {
+			fprintf(stderr, "   FAIL: CW and CWR don't favour opposite sides of the dial\n");
+			return 1;
+		}
+		rx_audio_set_demod(RX_DEMOD_CW); // leave the default in place
+	}
+
 	printf("\nAll cases completed without a crash or out-of-range sample.\n");
 	return 0;
 }
