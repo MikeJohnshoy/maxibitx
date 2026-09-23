@@ -441,7 +441,8 @@ cost than one interface that has to be all things.
 
 **SparkSDR** and **SDR Console** over HPSDR Protocol 1 for I/Q
 reception; **WSJT-X** for FT8 over the USB gadget's audio and CAT,
-decoding on par with SparkSDR on the same I/Q in a side-by-side;
+decoding on par with SparkSDR on the same I/Q in a side-by-side and
+confirmed in both directions by a two-way contact on 2026-09-23;
 **FLDigi** over that same gadget audio path; and **FLRig** for control.
 
 Two setup details that cost real time to find, both in
