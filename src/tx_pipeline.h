@@ -45,14 +45,17 @@
 // half up onto the carrier point, LSB its kept negative half, and each
 // band then extends from that same point in its own direction.
 //
-// A rotate moves whole bins, so each is rounded to the nearest one: 467
-// bins (21,890.625 Hz) for CW and 482 (22,593.750 Hz) for SSB, leaving
-// the carrier 9.4 Hz and 6.3 Hz low respectively.
+// A rotate moves whole bins, so each is rounded to the nearest one: on
+// this board's values that is 467 bins (21,890.625 Hz) for CW and 482
+// (22,593.750 Hz) for SSB, leaving the carrier 9.4 Hz and 6.3 Hz low
+// respectively.
 //
-// Caveat: bfo_freq and xtal_filter_center below are compiled-in copies
-// of radio.c's defaults, not the values hw_settings.ini loads at
-// startup. They match this board's ini today; on a board with different
-// values the TX frequency moves by the difference.
+// The two frequencies below are radio.c's compiled-in defaults, used as
+// the pipeline's starting placement and by the bench harness (which
+// links no hardware code and so has no hw_settings.ini to read). On the
+// real radio, sound.c calls tx_pipeline_set_if_placement() with the
+// values actually loaded at startup, so a board whose ini differs
+// transmits on frequency rather than off by the difference.
 #define TX_PIPELINE_BENCH_BFO_FREQ_HZ 40035000          // radio.c's bfo_freq default
 #define TX_PIPELINE_BENCH_XTAL_CENTER_HZ 40012400       // radio.c's xtal_filter_center default
 
@@ -100,6 +103,11 @@ struct tx_pipeline {
 	long block_count; // blocks processed - drives the phase correction in
 	                   // tx_pipeline_process_block()
 
+	// Bin rotations for this board, from tx_pipeline_set_if_placement();
+	// the TX_IF_SHIFT_*_BINS defaults until then.
+	int cw_shift_bins;
+	int ssb_shift_bins;
+
 	// Limiter state, all in the audio thread except ceiling (written by
 	// whoever sets power) and meter_db (read by whoever reports ALC).
 	volatile float ceiling;    // amplitude, (0, 1]; 1.0 = limiter at unity
@@ -129,6 +137,18 @@ int tx_pipeline_retune(struct tx_pipeline *p, float low_hz, float high_hz, float
 // correction both depend on it.
 void tx_pipeline_process_block(struct tx_pipeline *p, enum tx_pipeline_signal signal,
                                 const float *in, float *out);
+
+// Sets the two bin rotations from this board's actual IF frequencies,
+// replacing the compiled-in defaults above. sound.c calls it once, after
+// hw_settings_load() has read bfo_freq and xtal_filter_center, before
+// any block is processed. Takes plain Hz rather than reading radio.c, so
+// tx_pipeline.c keeps linking without any hardware code.
+//
+// Rejects a placement that isn't physical - the difference must be
+// positive and inside the 0-Fs/2 the rotate can express - leaving the
+// previous values in place and returning -1, since transmitting at a
+// wrong IF is worse than transmitting at the default one.
+int tx_pipeline_set_if_placement(struct tx_pipeline *p, int bfo_hz, int xtal_center_hz);
 
 // Sets the limiter's ceiling as an amplitude in (0, 1], where 1.0 is the
 // full-scale signal the per-band calibration turns into
