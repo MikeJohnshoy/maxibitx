@@ -71,12 +71,44 @@ enum tx_pipeline_signal {
 	TX_PIPELINE_LSB, // lower half, carrier on the dial
 };
 
+// ---------------------------------------------------------------------
+// Peak limiter (ALC). Applies gain min(1, ceiling/envelope) to hold the
+// transmit envelope at or below tx_pipeline_set_ceiling()'s value. It
+// only ever reduces, so quiet audio transmits quietly; raising the
+// average would be a speech compressor, which belongs upstream of this
+// file. Envelope means 2*|out_c[i]|, the magnitude of the still-complex
+// signal, not the input audio's peak. A constant-envelope signal at or
+// below the ceiling - CW key-down, a steady tone - never moves the gain.
+// Why each of those: docs/03_tx_processing_pipeline.md, "Setting power".
+//
+// The output is delayed by TX_ALC_LOOKAHEAD_SAMPLES while the gain is
+// computed from the undelayed signal, and attack is rate-limited to
+// cross the whole gain range in exactly that window - so the gain has
+// reached its target before the peak that needs it is emitted. That
+// delay is also the TX path's added latency: 2ms, which shifts the
+// transmitted envelope (CW element timing included) without changing
+// its shape.
+#define TX_ALC_LOOKAHEAD_SAMPLES 192  // 2ms at 96kHz; also the attack time
+#define TX_ALC_RELEASE_S 0.25f        // slow enough not to pump in a syllable
+#define TX_ALC_METER_DECAY_S 1.0f     // peak-hold decay for the ALC readout
+#define TX_ALC_METER_RANGE_DB 20.0f   // dB the meter falls in one decay time
+
 struct tx_pipeline {
 	struct filter *filt;
 	complex float *rotate_scratch; // N-point scratch for the bin rotate, so
 	                                // the audio path never mallocs
 	long block_count; // blocks processed - drives the phase correction in
 	                   // tx_pipeline_process_block()
+
+	// Limiter state, all in the audio thread except ceiling (written by
+	// whoever sets power) and meter_db (read by whoever reports ALC).
+	volatile float ceiling;    // amplitude, (0, 1]; 1.0 = limiter at unity
+	float gain;                 // current limiter gain, (0, 1]
+	float delay[TX_ALC_LOOKAHEAD_SAMPLES]; // output samples awaiting their gain
+	int delay_pos;              // next slot to use; persists across blocks,
+	                             // since the block length isn't a multiple
+	                             // of the look-ahead
+	volatile float meter_db;   // gain reduction in dB, peak-held
 };
 
 // Allocates the pipeline and tunes its filter to 300-3000Hz, keeping both
@@ -97,6 +129,19 @@ int tx_pipeline_retune(struct tx_pipeline *p, float low_hz, float high_hz, float
 // correction both depend on it.
 void tx_pipeline_process_block(struct tx_pipeline *p, enum tx_pipeline_signal signal,
                                 const float *in, float *out);
+
+// Sets the limiter's ceiling as an amplitude in (0, 1], where 1.0 is the
+// full-scale signal the per-band calibration turns into
+// full_scale_power watts. sound.c derives it from hw_settings.ini's
+// full_scale_power and max_power and the operator's POWER setting; see
+// hw_settings.h, "TX power ceiling". Out-of-range values clamp to 1.0.
+// Safe to call from another thread between blocks.
+void tx_pipeline_set_ceiling(struct tx_pipeline *p, float ceiling);
+
+// Current gain reduction in dB (0.0 = not limiting), peak-held and
+// decaying over TX_ALC_METER_DECAY_S so a meter can read it. Raw
+// per-block values change far faster than anyone can follow.
+float tx_pipeline_alc_db(const struct tx_pipeline *p);
 
 void tx_pipeline_free(struct tx_pipeline *p);
 
