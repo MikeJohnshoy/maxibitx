@@ -3,7 +3,8 @@
 Status: in progress. Step 1 (the test-tone generator) is built and
 bench-tested; step 2 (the carrier-offset check and fix) is measured,
 fixed and confirmed on air, and the reference-frequency question it
-raised is settled. Steps 3-5 are proposed.
+raised is settled. Step 4's limiter is built and bench-tested and is
+live at its normal setting. Steps 3 and 5 are open.
 
 ## Why
 
@@ -32,12 +33,12 @@ A mic can't answer any of these precisely. A generated tone can.
 3. **Two-tone calibration.** Measure average power per band and look at
    the IMD products on a remote SDR's spectrum, to find the highest
    clean peak envelope power (PEP).
-4. **Digital ALC.** A peak limiter on the transmit envelope inside
-   `tx_pipeline.c`, with its ceiling set from step 3. Because output
-   power in this design is set only by the DAC amplitude, which is
-   already calibrated per band, the limiter can hold PEP without a
-   feedback loop. Exposed as Hamlib's standard `RFPOWER` (the ceiling)
-   and `ALC` (gain reduction) levels.
+4. **Digital ALC** (built; see below). A peak limiter on the transmit
+   envelope inside `tx_pipeline.c`, with its ceiling set from step 3.
+   Because output power in this design is set only by the DAC amplitude,
+   which is already calibrated per band, the limiter can hold PEP
+   without a feedback loop. Exposed as `RFPOWER` (the ceiling) and `ALC`
+   (gain reduction).
 5. **Closed-loop trim on sBitx v2.** v2 boards have a forward/reflected
    power bridge that maxibitx doesn't read yet. A slow loop on it could
    trim for temperature and supply drift, protect against high SWR, and
@@ -213,6 +214,89 @@ receive) from above - they have opposite signs. Re-check after a big
 temperature change; a TCXO drifts far less than a plain crystal, but
 not to zero.
 
+## The limiter (step 4)
+
+**Two numbers, not one.** The ceiling people mean by "ALC setting" is
+really two separate facts. `full_scale_power` is what a full-scale
+signal produces — a measurement, the thing the `[tx_band]` scales
+encode, and the board's rated output. `max_power` is where the operator
+chooses to run — a policy. Both live in `hw_settings.ini`; the runtime
+`POWER` control rides underneath `max_power` and cannot exceed it, which
+is why the protective number is in the file and not in a CAT command.
+
+**The limiter needs no output-power headroom**, and an earlier draft of
+this note was wrong to suggest it did. A 100 W rig makes 100 W on CW and
+100 W PEP on SSB; its ALC isn't holding SSB down to a fraction of the
+PA, it's stopping the *drive* from pushing past rated output. The same
+applies here. Equal values put the ceiling at 1.0, and that is the
+normal configuration: rated power in every mode, with the limiter
+holding it.
+
+The working range comes from the drive side instead, where it is
+plentiful. `mic_tx_gain` reaches 64×, and in DIGITAL the level is the
+host's entirely, so the signal arriving at the limiter can exceed full
+scale by 20 dB or more. Before the limiter existed, that overshoot
+reached `TX_SAMPLE_CLAMP` and was hard-clipped; now it is pulled back to
+the ceiling as a gain. CW is the easy case: its envelope is constant at
+exactly full scale, so the gain never moves and no headroom is wanted or
+used.
+
+Setting `max_power` below `full_scale_power` therefore means one thing
+only — running below rated power, as when a board capable of more is
+deliberately held at 5 W. It is the same operation as turning `POWER`
+down, made persistent.
+
+**Where it acts.** On `2*|out_c[i]|` in `tx_pipeline.c`, just before the
+real part is taken — the magnitude of the still-complex signal, which is
+the envelope the exciter will radiate. The input audio's peak is the
+wrong quantity twice over: the 300–3000 Hz bandpass and the sideband
+zero both change it, and an SSB envelope peak can exceed the audio peak
+that produced it. The pipeline is complex at exactly that point anyway,
+so the right quantity costs nothing.
+
+**A gain, not a clipper.** The limiter multiplies by
+`min(1, ceiling/envelope)`; a sine times a constant is still a sine.
+This is the difference between holding 5 W cleanly and flat-topping the
+waveform into harmonics, and it's what Case F measures.
+
+**Look-ahead.** The output is delayed 192 samples (2 ms) while the gain
+is computed from the undelayed signal, and attack is rate-limited to
+cross the whole gain range in exactly that window — so however far the
+target drops, the gain arrives before the sample that needs it. A
+feedback design would have to choose between reacting fast enough to
+distort and reacting slowly enough to let overshoots through; look-ahead
+avoids the choice. Release is 250 ms, slow enough not to pump inside a
+syllable. The 2 ms is real added TX latency: it shifts the whole
+envelope, CW element timing included, without changing its shape.
+
+**Downward only.** Gain never exceeds unity, so quiet speech transmits
+quietly. An upward-acting control would raise room noise between words
+to full power, which is why transmitters limit and receivers AGC.
+Raising the average to meet the ceiling is a speech compressor — a
+separate thing, belonging upstream of the pipeline, deliberately not
+built here.
+
+**Bench results.** `tx_pipeline_test.c` Case F, a single tone through
+the real pipeline. The first three rows are the everyday case: the
+ceiling at full scale, the drive 6 dB too hot.
+
+| Check | Result | Expected |
+|---|---|---|
+| At the ceiling, drive 1.0: peak / tone / ALC | 1.0000 / −0.00 dB / 0.00 dB | untouched |
+| Drive ×2, same ceiling: peak / tone / ALC | 1.0000 / −0.00 dB / 6.02 dB | held at rated power, 6.02 dB of reduction |
+| Overdriven output vs. the reference | 7.70e−05, 82 dB down | the limiter gave back exactly what the drive added |
+| What truncating at the ceiling would cost | 4.99e−01, 6.0 dB down | — |
+| `POWER` 50% (ceiling 0.707), drive 1.0 | 0.7070 / −3.01 dB / 3.01 dB | running 3 dB below rated |
+
+The middle two rows answer "will it clip my CW?": the limiter's
+departure from a pure gain is 76 dB smaller than a clipper's would be.
+Re-run with `make test-tx-pipeline && ./test-tx-pipeline`.
+
+**Not yet radio-tested.** The rigctld `RFPOWER`/`ALC` commands and the
+panel's slider and meter are written but haven't been exercised against
+a running daemon — the bench harness links `tx_pipeline.c` without any
+of the hardware code.
+
 ## Doing the measurements
 
 - **Where to look.** maxibitx can't watch its own transmission - RX
@@ -227,3 +311,13 @@ not to zero.
 - **IMD.** On the remote spectrum, compare the products at −500 and
   +3100 Hz (relative to the carrier) with the two tones. Record the
   level in dB below each tone at a few drive levels per band.
+- **Setting `full_scale_power`.** The IMD measurement is what justifies
+  the number: the highest PEP at which the products are still
+  acceptable is what the board's rated output should be. Raise the
+  `[tx_band]` scales by the square root of the power ratio, confirm each
+  band on a wattmeter, then set `full_scale_power` to the confirmed
+  figure. This is about how much power the radio makes, not about giving
+  the limiter room - it already has all it needs on the drive side. The
+  reason to keep the rating honest is that the limiter sees only its own
+  envelope, never the PA's compression: rate it too high and the digital
+  chain politely holds a number the PA stopped honoring.
