@@ -88,6 +88,10 @@ OLD_CONFIG_PATH = os.path.expanduser("~/.minibitx_panel.json")
 DEFAULT_PORT = 4532
 POLL_INTERVAL_S = 1.0
 SOCKET_TIMEOUT_S = 2.0
+# Full scale for the ALC bar. Correctly-set mic gain reads a couple of dB
+# on peaks, so the useful part of the scale is its bottom third; anything
+# past this is deep limiting either way.
+ALC_METER_MAX_DB = 15.0
 
 # --- Spectrum (iq_stream.c) ---
 IQ_STREAM_PORT = 4536          # src/interfaces/iq_stream.h's IQ_STREAM_PORT
@@ -559,6 +563,36 @@ class Panel(tk.Tk):
         ttk.Label(txt, text="auto-off after 30 s").grid(row=1, column=1, columnspan=2,
                                                         sticky="w", pady=(6, 0))
 
+        # --- TX power and ALC ---
+        # Power is rigctld's l/L RFPOWER: a percentage of hw_settings.ini's
+        # max_power, which moves tx_pipeline.c's limiter ceiling rather
+        # than adding a gain after it, so max_power stays unreachable from
+        # here. ALC is the limiter's gain reduction in dB (this server's
+        # extension, not Hamlib's 0.0-1.0), and it's the instrument for
+        # setting Mic Gain above: advance mic gain until speech peaks read
+        # a couple of dB and no further. Turning Power down lowers output;
+        # turning Mic Gain up drives harder into the ceiling and shows up
+        # here instead. docs/03_tx_processing_pipeline.md, "Setting power".
+        pw = ttk.LabelFrame(self, text="TX Power", padding=8)
+        pw.grid(row=10, column=0, sticky="ew", padx=8, pady=(0, 8))
+        self.power_var = tk.DoubleVar(value=100.0)
+        self.power_scale = ttk.Scale(pw, from_=0, to=100, orient="horizontal",
+                                      variable=self.power_var, length=280,
+                                      command=self.on_power_dragged)
+        self.power_scale.grid(row=0, column=0, padx=(0, 8))
+        # Same "only send on release" pattern as Volume and Mic Gain.
+        self.power_scale.bind("<ButtonRelease-1>", self.on_power_released)
+        self.power_label = ttk.Label(pw, text="100%", width=6)
+        self.power_label.grid(row=0, column=1)
+
+        ttk.Label(pw, text="ALC (gain reduction):").grid(row=1, column=0, sticky="w",
+                                                          pady=(6, 0))
+        self.alc_bar = ttk.Progressbar(pw, orient="horizontal", length=280,
+                                        mode="determinate", maximum=ALC_METER_MAX_DB)
+        self.alc_bar.grid(row=2, column=0, padx=(0, 8))
+        self.alc_label = ttk.Label(pw, text="0.0 dB", width=8)
+        self.alc_label.grid(row=2, column=1)
+
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     # ---- connection handling ----
@@ -650,10 +684,13 @@ class Panel(tk.Tk):
         strength_reply = self.client.query("l STRENGTH")
         tone_reply = self.client.query("u TONE")
         ptt_reply = self.client.query("t")
+        power_reply = self.client.query("l RFPOWER")
+        alc_reply = self.client.query("l ALC")
         if freq_reply is None or rit_reply is None or vol_reply is None \
                 or micgain_reply is None or mode_reply is None or narrow_reply is None \
                 or fftfilt_reply is None or strength_reply is None \
-                or tone_reply is None or ptt_reply is None:
+                or tone_reply is None or ptt_reply is None \
+                or power_reply is None or alc_reply is None:
             self.after(0, self.disconnect)
             return
         self.after(0, lambda: self.apply_freq(freq_reply))
@@ -666,6 +703,8 @@ class Panel(tk.Tk):
         self.after(0, lambda: self.apply_strength(strength_reply))
         self.after(0, lambda: self.apply_tone(tone_reply))
         self.after(0, lambda: self.apply_ptt(ptt_reply))
+        self.after(0, lambda: self.apply_power(power_reply))
+        self.after(0, lambda: self.apply_alc(alc_reply))
 
     def apply_freq(self, reply):
         try:
@@ -710,6 +749,27 @@ class Panel(tk.Tk):
             return
         self.micgain_var.set(gain)
         self.micgain_label.configure(text=f"{gain:.2f}x")
+
+    def apply_power(self, reply):
+        # rigctld reports RFPOWER as a 0.0-1.0 fraction of max_power; the
+        # slider is the same thing as a percentage. No _syncing guard, for
+        # the same reason as apply_micgain above.
+        try:
+            fraction = float(reply)
+        except ValueError:
+            return
+        self.power_var.set(fraction * 100.0)
+        self.power_label.configure(text=f"{fraction * 100.0:.0f}%")
+
+    def apply_alc(self, reply):
+        # Read-only meter: dB of gain reduction, peak-held by the daemon
+        # so it's legible at this poll rate (sound.h's sound_get_alc_db()).
+        try:
+            db = float(reply)
+        except ValueError:
+            return
+        self.alc_bar.configure(value=min(db, ALC_METER_MAX_DB))
+        self.alc_label.configure(text=f"{db:.1f} dB")
 
     def apply_strength(self, reply):
         try:
@@ -906,6 +966,17 @@ class Panel(tk.Tk):
             return
         gain = self.micgain_var.get()
         threading.Thread(target=lambda: self.client.query(f"L MICGAIN {gain:.3f}"),
+                          daemon=True).start()
+
+    def on_power_dragged(self, _value):
+        # Live label update while dragging; on_power_released sends it.
+        self.power_label.configure(text=f"{self.power_var.get():.0f}%")
+
+    def on_power_released(self, _event):
+        if not self.client.connected():
+            return
+        fraction = self.power_var.get() / 100.0
+        threading.Thread(target=lambda: self.client.query(f"L RFPOWER {fraction:.3f}"),
                           daemon=True).start()
 
     def on_mode_changed(self):
