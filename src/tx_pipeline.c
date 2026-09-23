@@ -33,6 +33,11 @@ struct tx_pipeline *tx_pipeline_new(void)
 	p->rotate_scratch = malloc(p->filt->N * sizeof(complex float));
 	p->block_count = 0;
 
+	// This board's values replace these once sound.c has read
+	// hw_settings.ini - see tx_pipeline_set_if_placement().
+	p->cw_shift_bins = TX_IF_SHIFT_CW_BINS;
+	p->ssb_shift_bins = TX_IF_SHIFT_SSB_BINS;
+
 	// Limiter at unity until someone sets a ceiling: output is the
 	// delayed signal, unchanged.
 	p->ceiling = 1.0f;
@@ -151,7 +156,7 @@ void tx_pipeline_process_block(struct tx_pipeline *p, enum tx_pipeline_signal si
 
 	// CW anchors its tone on the dial, SSB its suppressed carrier - see
 	// the IF placement comment in tx_pipeline.h.
-	int shift_bins = (signal == TX_PIPELINE_CW) ? TX_IF_SHIFT_CW_BINS : TX_IF_SHIFT_SSB_BINS;
+	int shift_bins = (signal == TX_PIPELINE_CW) ? p->cw_shift_bins : p->ssb_shift_bins;
 
 	filter_forward(f, in_c);
 	zero_sideband(f->freq, f->N, signal);
@@ -179,6 +184,22 @@ void tx_pipeline_process_block(struct tx_pipeline *p, enum tx_pipeline_signal si
 	// output is -6.02dB. Keeps the pipeline unity-gain, so power
 	// calibration (sound.c's TX_GAIN_CORRECTION) doesn't have to absorb it.
 	limit_and_emit(p, out_c, flip ? -2.0f : 2.0f, out);
+}
+
+int tx_pipeline_set_if_placement(struct tx_pipeline *p, int bfo_hz, int xtal_center_hz)
+{
+	// The SSB shift is the whole difference; CW's is that less the pitch
+	// it anchors on the dial (tx_pipeline.h).
+	double ssb_hz = (double)bfo_hz - (double)xtal_center_hz;
+	double cw_hz = ssb_hz - (double)CW_PITCH_HZ;
+	double nyquist = TX_PIPELINE_FS_HZ / 2.0;
+
+	if (!(cw_hz > 0.0) || ssb_hz >= nyquist)
+		return -1;
+
+	p->cw_shift_bins = (int)(cw_hz / TX_PIPELINE_BIN_HZ + 0.5);
+	p->ssb_shift_bins = (int)(ssb_hz / TX_PIPELINE_BIN_HZ + 0.5);
+	return 0;
 }
 
 void tx_pipeline_set_ceiling(struct tx_pipeline *p, float ceiling)
