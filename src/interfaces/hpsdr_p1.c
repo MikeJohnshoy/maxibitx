@@ -77,7 +77,7 @@ static double iq_buf_i[SAMPLES_PER_PACKET];
 static double iq_buf_q[SAMPLES_PER_PACKET];
 static double hpsdr_iq_gain = 1.0; // <<<<< add gain to I and Q data going out
 
-extern void radio_set_tx(int tx_on);
+extern int radio_set_tx(int tx_on);
 extern void radio_tune_to(uint32_t f); // same call hamlib.c "F" command uses
 extern int
     freq_hdr; // hamlib.c "F" command and this file's EP2 handler both retune via radio_tune_to()
