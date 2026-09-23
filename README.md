@@ -14,7 +14,7 @@ to https://github.com/drexjj/sbitx/tree/main and greatly refined and extended.  
 full of features, and the codebase and file size has grown. `sbitx.c` and`sbitx_gtk.c`
 alone are more than 3,000 and 12,000 lines respectively, with the GTK user interface, DSP and
 hardware initialization and control intertwined. That coupling has real costs.
-It's difficult for a new developer to find and understand how things work,
+It can be difficult for a new developer to find and understand how things work,
 and changes carry a risk of unintended impacts.
 
 **minibitx** asked how little code it takes to run the sBitx hardware
@@ -31,8 +31,8 @@ goes through a narrow, documented interface
 ([`docs/06_api.md`](docs/06_api.md)).
 
 The whole daemon is about 6,300 lines of C in 21 files; a big part of that is 
-in the external interfaces.  The largest,
-the USB gadget providing an audio connection and CAT control interface, is about 1,300.
+in the external interfaces.  The largest is
+the USB gadget providing an audio connection and CAT control interface (~ 1,300 lines).
 
 | Job | Files |
 |---|---|
