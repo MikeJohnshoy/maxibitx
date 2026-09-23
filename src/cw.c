@@ -98,16 +98,19 @@ void cw_poll_key(void) {
     enum radio_mode mode = radio_get_mode();
 
     // One line, two uses: CW_KEY (BCM4) is the same pin sbitx calls PTT,
-    // read as a straight key in CW and as a mic PTT switch in USB/LSB.
+    // read as a straight key in CW/CWR and as a mic PTT switch in USB/LSB.
     // History: ARCHITECTURE.md §10 step 8.
-    if (mode == RADIO_MODE_CW) {
+    if (mode == RADIO_MODE_CW || mode == RADIO_MODE_CWR) {
         // Straight key, semi break-in: CW_HANG_POLLS holds TX through
-        // the gaps between elements.
+        // the gaps between elements. CWR keys identically; it differs
+        // only in which side of the BFO rx_audio.c demodulates.
         if (key_down) {
-            if (!tx_active) {
+            // A refused TX (dial outside the calibrated bands) leaves
+            // tx_active clear, so this retries on the next poll rather
+            // than believing it is transmitting. maxibitx.c's idle loop
+            // does the reporting - nothing here may do I/O.
+            if (!tx_active && radio_set_tx(1) == 0) {
                 tx_active = 1;
-                radio_set_tx(1);
-                //printf("key down!\n");
             }
             hang_counter = CW_HANG_POLLS;
         } else if (tx_active) {
@@ -122,9 +125,8 @@ void cw_poll_key(void) {
         // Mic PTT: TX follows the switch, no hang timer (as sbitx does on
         // the same GPIO).
         if (key_down) {
-            if (!tx_active) {
+            if (!tx_active && radio_set_tx(1) == 0) {
                 tx_active = 1;
-                radio_set_tx(1);
             }
         } else if (tx_active) {
             radio_set_tx(0);
