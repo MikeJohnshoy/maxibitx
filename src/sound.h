@@ -55,4 +55,23 @@ void sound_set_tx_drive(int percent);
 void sound_set_mic_tx_gain(double gain);
 double sound_get_mic_tx_gain(void);
 
+/* The operator's POWER setting, 0.0-1.0 of hw_settings.ini's max_power.
+   It moves tx_pipeline.c's limiter ceiling, so the limiter holds whatever
+   power is selected and max_power stays unreachable from here. Starts at
+   1.0. Reached via rigctld's l/L RFPOWER (hamlib.c) and
+   tools/rigctl_panel.py's Power slider.
+
+   Not to be confused with sound_set_tx_drive() above, which is the
+   codec's analog output - mute sequencing, not a power control. MICGAIN
+   is what drives the signal into this ceiling. The whole chain:
+   docs/03_tx_processing_pipeline.md, "Setting power". */
+void sound_set_tx_power(double fraction);
+double sound_get_tx_power(void);
+
+/* Limiter gain reduction in dB, 0.0 when not limiting. Peak-held so it
+   reads as a meter (rigctld's l ALC); the raw per-block value changes
+   far faster than anyone can follow. This is the instrument for setting
+   MICGAIN - a couple of dB on speech peaks is right. */
+double sound_get_alc_db(void);
+
 #endif /* SOUND_H */
