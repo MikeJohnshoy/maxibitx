@@ -1,13 +1,14 @@
 # 10 — using maxibitx with external digital comm applications (WSJT-X, ...)
 
-Status: **on-air confirmed (2026-09), audio and rig control both;
-RX decode performance on par with a raw-I/Q SDR app (2026-09-21)** —
-Windows 11 + WSJT-X decodes FT8 from this gadget's audio, and frequency
+Status: **fully proven on the air — a two-way FT8 contact on
+2026-09-23.** Windows 11 + WSJT-X decodes FT8 from this gadget's audio,
+with performance on par with a raw-I/Q SDR app (2026-09-21); frequency
 control works end to end either through FLrig acting as a relay or with
 WSJT-X's own Hamlib client talking directly to this gadget's serial
-Kenwood CAT (see "Setting it up" below). Still open: whether WSJT-X's
-own generated TX tone round-trips cleanly enough for another station to
-actually decode it — see "What's still genuinely open."
+Kenwood CAT (see "Setting it up" below); and WSJT-X's own generated TX
+audio now has another operator's decoder to vouch for it. That last
+item was the one thing standing between `DIGITAL` and "fully proven".
+What remains open is smaller, and listed below.
 
 This doc previously described the inherited, minibitx-era behavior (raw
 I/Q for an external SDR-console app to demodulate, no TX audio path at
@@ -146,17 +147,6 @@ there's nothing for a physical switch to mean here.
 
 ## What's still genuinely open
 
-- **WSJT-X's own generated TX tone reaching another station
-  intelligibly** — audio flows both directions and RX decodes are
-  confirmed on air, but whether the full round trip
-  (`uac_reader_thread()` → `upsample48k_apply()` → `tx_pipeline.c` → the
-  exciter) produces a signal some *other* operator can actually decode
-  is still untested. Bench numbers confirm the DSP math is sound (unity
-  gain, deep imaging rejection); that's necessary, not sufficient. This
-  is the one remaining item before `DIGITAL` mode can be called fully
-  proven — held off deliberately as of this writing, a reasonable point
-  to pause at given everything before it required three rounds of real
-  debugging to reach.
 - **`hamlib.c`'s rigctld surface (TCP 4532)** as WSJT-X's `NET rigctl`
   rig type — untested, with or without FLrig in the picture, since
   direct serial CAT already covers the need. Low priority unless a
@@ -167,8 +157,18 @@ there's nothing for a physical switch to mean here.
   closed.
 - Whether `usb_gadget.c`'s `UAC_RX_AUDIO_SCALE` compile-time constant
   lands WSJT-X's decoder in a comfortable input range, or needs
-  retuning — not flagged as a problem by the on-air test so far, but
-  never independently measured either.
+  retuning — decodes and a completed contact say it is good enough, but
+  it has never been independently measured.
+- **How far off frequency the transmission actually is.** The contact
+  doesn't settle this: FT8 decoders search a wide window and report the
+  offset they find, so one tolerates an error far larger than the
+  6.25 Hz of bin quantization. The placement figure comes from the
+  test-tone measurements in
+  `../03_tx_processing_pipeline.md`, not from the QSO.
+- **Transmit level from the host.** There is no radio-side drive
+  control in `DIGITAL` — `mic_tx_gain` touches only the mic branch — so
+  WSJT-X's own output level sets it, and should be set by watching
+  rigctld's `l ALC` reading.
 - Real wattmeter/ALC calibration for `DIGITAL`'s own TX power — a
   separate, still-open item tracked in `ARCHITECTURE.md` §9, unaffected
   by whether the audio itself arrives correctly.
