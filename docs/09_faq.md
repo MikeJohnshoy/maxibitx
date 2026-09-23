@@ -515,7 +515,7 @@ The recorded reason in [`ARCHITECTURE.md`](ARCHITECTURE.md) §8 is short:
 "AM/FM — not relevant to this HF hardware," alongside onboard digital
 mode encode/decode as explicitly deferred. v1 scope was SSB and CW
 sharing one pipeline, plus DIGITAL as a mode value for host-generated
-audio.
+audio, and CW-reverse, which has since become a mode of its own (`CWR`).
 
 That reason is sound for transmit and for NBFM generally — this is an HF
 SSB radio, its crystal filter is about 2.4 kHz wide, and nothing about
@@ -579,9 +579,7 @@ The current list, from
 design notes: two-tone power and IMD measurements to establish this
 board's honest rated output; voice power never checked on a wattmeter;
 `POWER` and `ALC` bench-tested but not yet exercised against a running
-daemon; CW-reverse not a mode of its own; remote keying and remote voice
-audio absent; the TX IF shift computed from compiled-in copies of
-`bfo_freq` and `xtal_filter_center` rather than the loaded values;
-carrier placement a few Hz low from whole-bin rotation (6.25 Hz on SSB,
-9.4 Hz on CW); and nothing refusing PTT outside the calibrated band
-ranges.
+daemon; remote keying and remote voice audio absent; carrier placement a
+few Hz low from whole-bin rotation (6.25 Hz on SSB, 9.4 Hz on CW); and
+the pipeline carrying about a block of the previous transmission in its
+overlap-save history, with nothing resetting it between bursts.
