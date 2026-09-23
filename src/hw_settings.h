@@ -41,6 +41,18 @@ extern int tx_band_scale_count;
                                       // TX_SAMPLE_HEADROOM anchor in sound.c
 double hw_settings_tx_scale(int freq_hz);
 
+// 1 if freq_hz lies inside one of the loaded [tx_band] entries, so
+// transmitting there is calibrated and permitted. radio_set_tx() refuses
+// PTT when this is 0, which covers every PTT source at once - the key,
+// rigctld, CAT and HPSDR MOX.
+//
+// Returns 1 for every frequency when no [tx_band] entries were loaded at
+// all (no hw_settings.ini, or one with no [tx_band] sections). An empty
+// table means "nothing is calibrated", not "nothing is allowed" -
+// refusing everything would leave a board with no ini unable to
+// transmit at all, which is a worse failure than an uncalibrated one.
+int hw_settings_tx_allowed(int freq_hz);
+
 // ---- TX power ceiling ---------------------------------------------------
 //
 // Two top-level watt values in hw_settings.ini, both about this board:
