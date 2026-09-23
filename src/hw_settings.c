@@ -172,3 +172,13 @@ double hw_settings_tx_scale(int freq_hz) {
   }
   return HW_DEFAULT_TX_SCALE;
 }
+
+int hw_settings_tx_allowed(int freq_hz) {
+  if (tx_band_scale_count == 0)
+    return 1; // nothing calibrated, so nothing to enforce - hw_settings.h
+  for (int i = 0; i < tx_band_scale_count; i++) {
+    if (freq_hz >= tx_band_scales[i].f_start && freq_hz <= tx_band_scales[i].f_stop)
+      return 1;
+  }
+  return 0;
+}
