@@ -34,7 +34,23 @@ void radio_tune_to(uint32_t f);
 // (radio.c) then sequences the capture mute, clocks, PTT and relay with
 // their settling delays. Never blocks, so it's safe to call from the
 // real-time audio thread.
-void radio_set_tx(int tx_on);
+//
+// Returns 0 when the state was accepted and -1 when a request to
+// transmit was refused because the dial is outside every calibrated
+// [tx_band] range (hw_settings_tx_allowed()). Doing the check here
+// covers every PTT source at once - the key, rigctld's T, Kenwood TX;
+// and HPSDR MOX. Refusal leaves the radio in receive.
+//
+// tx_on = 0 is never refused: stopping transmitting must always work.
+int radio_set_tx(int tx_on);
+
+// The dial frequency of the most recent refusal, or 0 if there hasn't
+// been one since the last call. Reading it clears it.
+//
+// Refusals are reported this way rather than logged where they happen
+// because cw_poll_key() calls radio_set_tx() from the real-time audio
+// thread, which may not do I/O. maxibitx.c's idle loop drains this.
+int radio_tx_refused_hz(void);
 
 // Sets the RX-only tuning offset (Hz). It's added to RX's clk2 only, so it
 // never moves the transmit frequency. Also sets the enabled state: on for
@@ -63,8 +79,14 @@ int radio_rit_enabled(void);
 // audio source and sideband (sound.c) and RX's demodulator (rx_audio.c,
 // via radio_set_mode()). DIGITAL is external audio - WSJT-X etc. over the
 // USB audio gadget - transmitted and received as USB.
+//
+// CWR is CW-reverse: the same key, hang timer and transmitted carrier as
+// CW, receiving the other side of the BFO. Transmit is identical because
+// a key-down carrier lands on the dial whichever side is kept; the mode
+// exists to move away from an interfering signal on the side CW hears.
 enum radio_mode {
   RADIO_MODE_CW,
+  RADIO_MODE_CWR,
   RADIO_MODE_USB,
   RADIO_MODE_LSB,
   RADIO_MODE_DIGITAL,
