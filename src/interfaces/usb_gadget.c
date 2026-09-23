@@ -855,8 +855,8 @@ static volatile int cat_running = 0;
 static int cat_fd = -1;
 static pthread_t cat_thread_tid;
 
-// Mode <-> Kenwood MD digit: 1/2/3 = LSB/USB/CW, the standard TS-480
-// convention.
+// Mode <-> Kenwood MD digit: 1/2/3 = LSB/USB/CW and 7 = CW-Reverse, the
+// standard TS-480 convention.
 //
 // DIGITAL reports as '2' (USB), deliberately. A TS-480 has no data-mode
 // digit ('9' is FSK-Reverse in both the QMX CAT manual and Hamlib's
@@ -867,6 +867,7 @@ static const struct { enum radio_mode mode; char digit; } mode_digits[] = {
   { RADIO_MODE_LSB,     '1' },
   { RADIO_MODE_USB,     '2' },
   { RADIO_MODE_CW,      '3' },
+  { RADIO_MODE_CWR,     '7' },
   { RADIO_MODE_DIGITAL, '2' }, // reports as USB - see comment above
 };
 #define MODE_DIGITS_COUNT (sizeof(mode_digits) / sizeof(mode_digits[0]))
