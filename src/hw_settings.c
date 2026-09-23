@@ -11,6 +11,7 @@
 #include "si5351.h" // si5351_set_calibration() - the "cal" key below
 #include "radio.h"
 #include <ctype.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -19,10 +20,22 @@
 struct tx_band_scale tx_band_scales[HW_MAX_TX_BANDS];
 int tx_band_scale_count = 0;
 
+double tx_full_scale_power = HW_DEFAULT_FULL_SCALE_POWER;
+double tx_max_power = HW_DEFAULT_MAX_POWER;
+
 // Section state while scanning the file - only [tx_band] sections are
 // acted on today; [tcxo] and any others are recognized (so their key=value
 // lines aren't mistaken for top-level keys) but not yet applied.
 enum hw_section { HW_SECTION_TOP, HW_SECTION_TCXO, HW_SECTION_TX_BAND, HW_SECTION_OTHER };
+
+double hw_settings_power_ratio(void) {
+  if (tx_full_scale_power <= 0.0 || tx_max_power <= 0.0)
+    return 1.0;
+  double ratio = tx_max_power / tx_full_scale_power;
+  if (ratio >= 1.0)
+    return 1.0; // a ceiling above full scale is just full scale
+  return sqrt(ratio);
+}
 
 void hw_settings_load(void) {
   tx_band_scale_count = 0;
@@ -90,6 +103,18 @@ void hw_settings_load(void) {
         xtal_filter_center = (int)value;
         printf("init: xtal_filter_center loaded from %s: %d Hz\n",
                HW_SETTINGS_PATH, xtal_filter_center);
+      } else if (!strcmp(key, "full_scale_power") || !strcmp(key, "max_power")) {
+        // Watts, and fractional on a real board (5.5) - re-parse as a
+        // double, the %ld above only captured the integer truncation.
+        // What each one means: hw_settings.h, "TX power ceiling".
+        double watts;
+        if (sscanf(p, "%63[^=]=%lf", key, &watts) == 2 && watts > 0.0) {
+          if (!strcmp(key, "full_scale_power"))
+            tx_full_scale_power = watts;
+          else
+            tx_max_power = watts;
+          printf("init: %s loaded from %s: %.2f W\n", key, HW_SETTINGS_PATH, watts);
+        }
       }
       // ssb_val and any other top-level keys: read past, not applied yet.
     } else if (section == HW_SECTION_TX_BAND && tx_band_scale_count < HW_MAX_TX_BANDS) {
@@ -121,6 +146,22 @@ void hw_settings_load(void) {
   if (tx_band_scale_count > 0) {
     printf("init: %d TX band scale entries loaded from %s\n", tx_band_scale_count,
            HW_SETTINGS_PATH);
+  }
+
+  if (tx_max_power > tx_full_scale_power) {
+    printf("init: max_power (%.2f W) is above full_scale_power (%.2f W) - "
+           "the limiter can only reduce, so the ceiling is rated output\n",
+           tx_max_power, tx_full_scale_power);
+  }
+  double ratio = hw_settings_power_ratio();
+  if (ratio >= 1.0) {
+    printf("init: TX ceiling is rated output, %.2f W - the limiter holds full "
+           "scale and pulls back anything driven past it\n",
+           tx_full_scale_power);
+  } else {
+    printf("init: TX ceiling %.2f W of %.2f W rated (limiter at %.3f of full "
+           "amplitude, %.1f dB below rated)\n",
+           tx_max_power, tx_full_scale_power, ratio, -20.0 * log10(ratio));
   }
 }
 
