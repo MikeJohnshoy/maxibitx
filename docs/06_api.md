@@ -85,7 +85,7 @@ through any of them is seen by all the others; the last write wins.
 | State | Values | Notes |
 |---|---|---|
 | Frequency | Hz, integer | The dial. Changing it clears RIT. |
-| Mode | CW, USB, LSB, DIGITAL | Selects both the onboard demodulator and the TX audio source (below). Starts in CW. |
+| Mode | CW, CWR, USB, LSB, DIGITAL | Selects both the onboard demodulator and the TX audio source (below). Starts in CW. CWR is CW-reverse: the other side of the BFO on receive, identical to CW on transmit. |
 | PTT | RX / TX | |
 | RIT | −9999 to +9999 Hz, plus an on/off flag | Receive only; never moves the transmit frequency. Survives TX; cleared by a frequency change. |
 | Volume | 0-100 % | The radio's own speaker (log taper). Doesn't affect USB audio. |
@@ -97,12 +97,12 @@ source is fixed by the mode:
 
 | Mode | TX audio source | PTT that produces RF |
 |---|---|---|
-| CW | The radio's straight key (700 Hz tone, shaped) | The key only |
+| CW / CWR | The radio's straight key (700 Hz tone, shaped) | The key only |
 | USB / LSB | The radio's mic jack | The mic PTT switch (the same key line) |
 | DIGITAL | USB gadget audio from the host (WSJT-X) | Any: rigctld `T`, CAT `TX`, HPSDR MOX |
 | Any, with the test-tone generator on | 1 kHz tone, or 700 + 1900 Hz two-tone | Any |
 
-Remote PTT in CW, USB or LSB switches the radio to transmit but sends
+Remote PTT in CW, CWR, USB or LSB switches the radio to transmit but sends
 silence - there is no network or USB audio path in those modes - unless
 the test-tone generator is on (`U TONE`). The generator turns itself
 off and drops PTT after 30 s in transmit.
@@ -118,6 +118,10 @@ off and drops PTT after 30 s in transmit.
   the app, so with an HPSDR app connected, tune from that app.
 - **PTT is not released automatically.** If a client sets TX and then
   disconnects or crashes, the radio stays in TX. There's no timeout.
+- **Transmit is refused outside the calibrated bands.** PTT only takes
+  effect when the dial is inside one of the `[tx_band]` ranges
+  `dump_state` advertises; outside them rigctld answers `RPRT -1` and
+  the radio stays in receive. Returning to receive is never refused.
 
 **No notifications.** Nothing is pushed to clients. To stay in sync with
 changes made elsewhere (the key, another app), poll - `rigctl_panel.py`
@@ -143,9 +147,9 @@ connected.
 | `f` | `7074000` | Frequency, Hz |
 | `F <Hz>` | `RPRT 0` | Tunes. `RPRT -1` if ≤ 0. Clears RIT. |
 | `m` | `PKTUSB` then `2400` | Mode, then passband (two lines). DIGITAL reads as `PKTUSB`. |
-| `M <mode> <passband>` | `RPRT 0` | Mode: `CW`, `USB`, `LSB`, `PKTUSB` or `DIGITAL`. Passband is stored and echoed by `m` but not applied. Unknown mode: `RPRT -1`. |
+| `M <mode> <passband>` | `RPRT 0` | Mode: `CW`, `CWR`, `USB`, `LSB`, `PKTUSB` or `DIGITAL`. Passband is stored and echoed by `m` but not applied. Unknown mode: `RPRT -1`. |
 | `t` | `0` or `1` | PTT |
-| `T <0\|1>` | `RPRT 0` | Any nonzero value means TX. Also `RPRT 0` when ignored because the local key holds TX. |
+| `T <0\|1>` | `RPRT 0` | Any nonzero value means TX. Also `RPRT 0` when ignored because the local key holds TX. `RPRT -1` when the dial is outside every `[tx_band]` range - those ranges are enforced, not just advertised. |
 | `j` | `-150` | RIT offset, Hz. The stored value: CAT `RT0;` can switch RIT off without zeroing it. |
 | `J <Hz>` | `RPRT 0` | −9999 to 9999; `J 0` turns RIT off. Out of range: `RPRT -1`. |
 | `l AF` | `0.670000` | Volume, 0.0-1.0 |
@@ -279,7 +283,7 @@ commands are silently ignored (Kenwood convention).
 | `ID;` | `ID020;` | TS-480 |
 | `FA;` / `FA00007074000;` | `FA00007074000;` / — | Frequency, 11 digits Hz |
 | `FB;` / `FB…;` | mirrors `FA` / ignored | Single VFO |
-| `MD;` / `MD2;` | `MD2;` / — | 1 LSB, 2 USB, 3 CW |
+| `MD;` / `MD2;` | `MD2;` / — | 1 LSB, 2 USB, 3 CW, 7 CW-Reverse |
 | `TX;` / `RX;` | — | PTT on / off |
 | `TQ;` / `TQ1;` | `TQ0;` / — | PTT get / set |
 | `RT;` / `RT1;` | `RT0;` / — | RIT on/off (offset kept) |
@@ -349,8 +353,9 @@ What an application can't do today without changes to the daemon:
 - **Change notifications.** State is poll-only. Kenwood `AI` is
   answered but not honored.
 - **A PTT safety timeout.** A client that sets TX and disappears
-  leaves the radio transmitting.
-- **Split and a second VFO**, **CW-reverse**, a variable receive
-  passband, AGC settings, and a calibrated S-meter.
+  leaves the radio transmitting. (Transmit *is* refused outside the
+  calibrated bands - that check is on the frequency, not on time.)
+- **Split and a second VFO**, a variable receive passband, AGC
+  settings, and a calibrated S-meter.
 - **HPSDR sample rates other than 96 kHz**, and more than one HPSDR
   client.
