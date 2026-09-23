@@ -30,6 +30,7 @@ static pthread_t accept_thread;
 // checked against a stock Hamlib client over this server.
 static const struct { enum radio_mode mode; const char *name; } mode_names[] = {
     { RADIO_MODE_CW,      "CW"     },
+    { RADIO_MODE_CWR,     "CWR"    },
     { RADIO_MODE_USB,     "USB"    },
     { RADIO_MODE_LSB,     "LSB"    },
     { RADIO_MODE_DIGITAL, "PKTUSB" },
@@ -149,7 +150,15 @@ static int handle_line(int fd, char *line)
             printf("rigctl: T %ld -> ignored, local CW key holds TX\n", v);
             return 0;
        }
-        radio_set_tx(tx_on);
+        if (radio_set_tx(tx_on) < 0) {
+            // Outside every calibrated [tx_band] range (radio.h) - the
+            // same ranges dump_state advertises, so a client that
+            // respects them never sees this reply.
+            send_rprt(fd, -1);
+            printf("rigctl: T %ld -> refused, %d Hz is outside the calibrated "
+                   "TX bands\n", v, freq_hdr);
+            return 0;
+        }
         send_rprt(fd, 0);
         printf("rigctl: T %ld -> %s\n", v, tx_on ? "TX on" : "TX off");
         return 0;
@@ -387,30 +396,32 @@ static int handle_line(int fd, char *line)
         // has_get_func/set_func stay 0: NARROW/FFTFILT aren't RIG_FUNC bits.
         //
         // Mode masks carry the modes m/M actually handle: CW (0x2), USB
-        // (0x4), LSB (0x8) and PKTUSB (0x800, DIGITAL) = 0x80e. RX covers
-        // 0-30MHz. TX ranges are the [tx_band] entries from hw_settings.ini,
-        // or 1.8-30MHz if none were loaded; power is advertised as a flat 5W
-        // (docs/dsp_design_notes/tx_power_calibration.md). This is
-        // advertisement only - nothing refuses PTT outside these ranges.
+        // (0x4), LSB (0x8), CWR (0x80) and PKTUSB (0x800, DIGITAL) =
+        // 0x88e. RX covers 0-30MHz. TX ranges are the [tx_band] entries
+        // from hw_settings.ini, or 1.8-30MHz if none were loaded; power
+        // is advertised as a flat 5W
+        // (docs/dsp_design_notes/tx_power_calibration.md). When a
+        // [tx_band] table is loaded these are also enforced: radio.c
+        // refuses PTT outside them (hw_settings_tx_allowed()).
         send_line(fd, "0\n");                        // protocol version
         send_line(fd, "1\n");                        // rig model (1 = RIG_MODEL_DUMMY)
         send_line(fd, "2\n");                         // ITU region (best-effort default)
-        send_line(fd, "0 30000000 0x80e -1 -1 0x1 0x0\n"); // RX range: 0-30MHz, RX-only, VFO A
+        send_line(fd, "0 30000000 0x88e -1 -1 0x1 0x0\n"); // RX range: 0-30MHz, RX-only, VFO A
         send_line(fd, "0 0 0 0 0 0 0\n");             // RX range list terminator
         {
             char buf[80];
             if (tx_band_scale_count > 0) {
                 for (int i = 0; i < tx_band_scale_count; i++) {
-                    snprintf(buf, sizeof(buf), "%d %d 0x80e 5000 5000 0x1 0x0\n",
+                    snprintf(buf, sizeof(buf), "%d %d 0x88e 5000 5000 0x1 0x0\n",
                              tx_band_scales[i].f_start, tx_band_scales[i].f_stop);
                     send_line(fd, buf);                // TX range: one [tx_band], 5W, VFO A
                 }
             } else {
-                send_line(fd, "1800000 30000000 0x80e 5000 5000 0x1 0x0\n"); // TX range: HF fallback
+                send_line(fd, "1800000 30000000 0x88e 5000 5000 0x1 0x0\n"); // TX range: HF fallback
             }
         }
         send_line(fd, "0 0 0 0 0 0 0\n");             // TX range list terminator
-        send_line(fd, "0x80e 1\n");                   // one tuning step: 1 Hz, all modes
+        send_line(fd, "0x88e 1\n");                   // one tuning step: 1 Hz, all modes
         send_line(fd, "0 0\n");                       // tuning step list terminator
         send_line(fd, "0 0\n");                       // empty filter list
         {
