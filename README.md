@@ -56,8 +56,9 @@ The DSP is bench-tested on its own (`make test-fft-filter`,
   speaker and a USB sound card for WSJT-X or FLDigi. FT8 decodes over USB audio
   match SparkSDR on the same I/Q.
 - **Transmit:** CW from a straight key, on frequency, ~5 W on all nine
-  bands. USB/LSB from the mic have been on the air, and DIGITAL from
-  WSJT-X is code-complete. Current limitations are listed in
+  bands. USB/LSB from the mic have been on the air, and DIGITAL is
+  confirmed by a two-way FT8 contact made with WSJT-X through the USB
+  gadget. Current limitations are listed in
   [`docs/03_tx_processing_pipeline.md`](docs/03_tx_processing_pipeline.md).
 - **Control:** rigctld-compatible TCP (port 4532), Kenwood TS-480 CAT
   over USB serial, HPSDR, and `tools/rigctl_panel.py` (tuning, mode,
