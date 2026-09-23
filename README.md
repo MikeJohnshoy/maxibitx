@@ -52,8 +52,8 @@ The DSP is bench-tested on its own (`make test-fft-filter`,
 ## What works
 
 - **Receive:** baseband I/Q to SDR apps over HPSDR Protocol 1 (e.g.
-  SparkSDR). An onboard CW/USB/LSB demodulator feeds the radio's own
-  speaker and a USB sound card for WSJT-X. FT8 decodes over USB audio
+  SDRConsole or SparkSDR). An onboard CW/USB/LSB demodulator feeds the radio's own
+  speaker and a USB sound card for WSJT-X or FLDigi. FT8 decodes over USB audio
   match SparkSDR on the same I/Q.
 - **Transmit:** CW from a straight key, on frequency, ~5 W on all nine
   bands. USB/LSB from the mic have been on the air, and DIGITAL from
