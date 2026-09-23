@@ -485,9 +485,8 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
     // sideband means choosing whether to conjugate the input first. With the
     // I/Q inverted, the upper side (above dial) sits at negative baseband and
     // needs it; the lower side doesn't. CW and USB keep the upper side, LSB
-    // the lower. (A CW-reverse mode would be CW's BFO with LSB's
-    // conjugation.)
-    int upper = (demod != RX_DEMOD_LSB);
+    // and CWR the lower - CWR is CW's BFO on LSB's side (rx_audio.h).
+    int upper = (demod != RX_DEMOD_LSB && demod != RX_DEMOD_CWR);
     int conjugate = upper ? RX_IQ_SPECTRUM_INVERTED : !RX_IQ_SPECTRUM_INVERTED;
 
     for (int k = 0; k < n; k++) {
@@ -496,7 +495,7 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
         double q_in = conjugate ? -q_samples[k] : q_samples[k];
         ssb_filter_apply(&ssb_state, i_samples[k], q_in, &fi, &fq);
 
-        // Stage 2: demod. CW mixes up to CW_PITCH_HZ:
+        // Stage 2: demod. CW and CWR mix up to CW_PITCH_HZ:
         //   Re[(fi + j*fq)(cos + j*sin)] = fi*cos - fq*sin
         // USB/LSB take the real part directly, so audio Hz == |RF - dial|,
         // which is what WSJT-X assumes. The BFO advances every sample
@@ -504,7 +503,7 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
         int bfo_cos, bfo_sin;
         vfo_read_iq(&bfo, &bfo_cos, &bfo_sin);
         double audio;
-        if (demod == RX_DEMOD_CW) {
+        if (demod == RX_DEMOD_CW || demod == RX_DEMOD_CWR) {
             double c = (double)bfo_cos / 1073741824.0;
             double s = (double)bfo_sin / 1073741824.0;
             audio = fi * c - fq * s;
