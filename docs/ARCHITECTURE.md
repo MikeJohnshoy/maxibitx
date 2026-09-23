@@ -896,7 +896,9 @@ for keying an external accessory's PTT, not this input line.)
    CW cutover (step 5 below), or retuning/reusing this module for SSB's
    mic-audio `i_sample` source (`tx_pipeline_retune()` exists for LSB's
    mirrored passband but is untested — nothing has called it yet).
-5. **Done, code-complete — on-air re-verification still outstanding.**
+5. **Done, confirmed on air** - CW through this path is on frequency,
+   with image suppression as predicted and a flat ~5 W across the nine
+   bands.
    Wired `tx_pipeline.c` into `cw.c`/`sound.c` for CW only: the actual
    live cutover from `cw.c`'s direct-to-DAC path to step 4's
    bench-proven module.
@@ -1069,7 +1071,12 @@ for keying an external accessory's PTT, not this input line.)
    conditions" (§9's skirt-quality check) is a listening-quality
    judgment only the user can make on his own hardware, not something
    this bench harness can settle on synthetic tones alone.
-7. **Done, code-complete — on-air listening comparison still outstanding.**
+7. **Done; the on-air comparison has since been made** - the FFT
+   filter sounded worse than the elliptic on real signals (wideband
+   hiss, far-off-centre signals audible), which no bench measurement
+   could reproduce, so the elliptic stays the default and both remain
+   selectable. Full record:
+   [`dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md`](dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md).
    Wired `rx_filter.c` into `rx_audio.c`'s stage 3, keeping the existing
    elliptic filter selectable (not a hard cutover like step 5's TX
    decision — §10 step 6's own build-order text always planned for an
@@ -1568,7 +1575,7 @@ for keying an external accessory's PTT, not this input line.)
      itself transmits, not what it receives), but a meaningful data point
      in its own right, and good independent evidence that nothing in
      steps 6/7's RX changes disturbed tuning.
-8. **Done, code-complete — on-air test still outstanding.** Wired real
+8. **Done, confirmed on air.** Wired real
    mic-audio TX for USB/LSB into `cw.c`/`sound.c`, reusing the exact
    same shared `tx_pipeline.c` instance CW already uses (step 5) rather
    than a second one — `tx_pipeline_process_block()`'s `sideband`
@@ -1843,7 +1850,7 @@ for keying an external accessory's PTT, not this input line.)
      real, live risk (double-conversion superhet designs are a classic
      place for exactly this kind of inversion to hide) that turned out
      not to be a bug.
-9. **Done, code-complete — on-air test still outstanding.** WSJT-X TX
+9. **Done, confirmed on air (2026-09-23 FT8 contact).** WSJT-X TX
    audio bridge: replaced `usb_gadget.c`'s UAC2 gadget end to end, from
    raw baseband I/Q (for an external SDR-console app to demodulate
    itself) to genuinely bidirectional, already-demodulated 16-bit/48kHz
@@ -2044,11 +2051,14 @@ for keying an external accessory's PTT, not this input line.)
      §10.
 
 10. Power/ALC calibration for voice, per §9. Planned in
-    [`dsp_design_notes/tx_test_tones_and_alc.md`](dsp_design_notes/tx_test_tones_and_alc.md);
-    its first piece, a TX test-tone generator (`tone_gen.c`, rigctld
-    `U TONE`), is built and bench-tested.
+    [`dsp_design_notes/tx_test_tones_and_alc.md`](dsp_design_notes/tx_test_tones_and_alc.md).
+    Built and bench-tested so far: the TX test-tone generator
+    (`tone_gen.c`, rigctld `U TONE`), the carrier-placement fix it
+    measured, and the peak limiter with its `RFPOWER`/`ALC` controls.
+    Still to do: the two-tone power and IMD measurements that set this
+    board's honest rated output, and a wattmeter check of real speech.
 
-11. **Done, code-complete — on-air test still outstanding.** Simplified
+11. **Done, confirmed on air (2026-09-23 FT8 contact).** Simplified
     step 9's UAC2 gadget audio from stereo-duplicated to genuinely mono,
     both directions, prompted by the operator's own real-world bring-up:
     initial Windows/WSJT-X testing of step 9's build got no further than
@@ -2158,7 +2168,7 @@ for keying an external accessory's PTT, not this input line.)
       replugging could never clear it. Step 11's own "not yet
       bench-verified" caveat is closed for the RX/audio half.
 
-12. **Done, code-complete — on-air test still outstanding.** Fixed the
+12. **Done, confirmed on air (2026-09-23 FT8 contact).** Fixed the
     Kenwood `IF` reply's field layout, which was silently breaking
     Hamlib-based rig control. With audio working (step 11), WSJT-X moved
     on to its next complaint: "Rig Control Error" when configuring rig
