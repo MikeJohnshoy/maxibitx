@@ -185,8 +185,18 @@ int main(int argc, char **argv) {
     } else {
       tone_tx_seconds = 0;
     }
+
+    // Report a PTT that radio_set_tx() turned down. Done from here, not
+    // where the refusal happens: the straight key's path runs on the
+    // real-time audio thread, which may not do I/O (radio.h). Draining
+    // once a second also means a held key logs once, not at poll rate.
+    int refused_hz = radio_tx_refused_hz();
+    if (refused_hz) {
+      printf("tx: PTT refused - %d Hz is outside every calibrated [tx_band] "
+             "range\n", refused_hz);
+    }
   }
- 
+
   // Graceful shutdown - roughly the reverse of bring-up
   // still running above it.
   printf("\nmaxiBitx: shutting down now!\n");
