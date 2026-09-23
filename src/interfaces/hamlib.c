@@ -16,7 +16,7 @@
 #include "cw.h"
 #include "radio.h"    // freq_hdr, in_tx, tuning, PTT, RIT, mode
 #include "rx_audio.h"
-#include "sound.h"    // sound_set_mic_tx_gain()/sound_get_mic_tx_gain() - l/L MICGAIN below
+#include "sound.h"    // mic gain, TX power and the ALC reading - l/L below
 #include "tone_gen.h" // u/U TONE below
 #include "hw_settings.h" // tx_band_scales[] - dump_state TX ranges
 
@@ -214,9 +214,10 @@ static int handle_line(int fd, char *line)
     }
 
     if (cmd[0] == 'l' && (cmd[1] == '\0' || cmd[1] == ' ')) {
-        // get_level <name>. AF and STRENGTH are real Hamlib levels (see
-        // dump_state); MICGAIN is this server's extension. Anything else
-        // (RF, SQL, preamp, ...) has no equivalent here.
+        // get_level <name>. AF, RFPOWER and STRENGTH are real Hamlib
+        // levels (see dump_state); MICGAIN and ALC are this server's
+        // extensions, in their own units. Anything else (SQL, preamp,
+        // ...) has no equivalent here.
         char level_name[32] = "";
         sscanf(cmd + 1, "%31s", level_name);
         if (strcmp(level_name, "AF") == 0) {
@@ -238,6 +239,19 @@ static int handle_line(int fd, char *line)
             snprintf(buf, sizeof(buf), "%.6f\n", sound_get_mic_tx_gain());
             send_line(fd, buf);
             printf("rigctl: l MICGAIN -> %.6f\n", sound_get_mic_tx_gain());
+        } else if (strcmp(level_name, "RFPOWER") == 0) {
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%.6f\n", sound_get_tx_power());
+            send_line(fd, buf);
+            printf("rigctl: l RFPOWER -> %.6f of max_power\n", sound_get_tx_power());
+        } else if (strcmp(level_name, "ALC") == 0) {
+            // Extension, like MICGAIN: gain reduction in dB rather than
+            // Hamlib's 0.0-1.0, because dB is the unit mic gain is set by
+            // (sound.h). Read-only - nothing sets how hard a limiter works.
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%.2f\n", sound_get_alc_db());
+            send_line(fd, buf);
+            printf("rigctl: l ALC -> %.2f dB of gain reduction\n", sound_get_alc_db());
         } else {
             send_rprt(fd, -1);
             printf("rigctl: l %s -> unsupported level\n", level_name);
@@ -261,6 +275,11 @@ static int handle_line(int fd, char *line)
             sound_set_mic_tx_gain(val);  // clamps to [0, SOUND_MIC_TX_GAIN_MAX] itself
             send_rprt(fd, 0);
             printf("rigctl: L MICGAIN %.6f -> mic_tx_gain %.6f\n", val, sound_get_mic_tx_gain());
+        } else if (sscanf(cmd + 1, "%31s %lf", level_name, &val) == 2 &&
+                   strcmp(level_name, "RFPOWER") == 0) {
+            sound_set_tx_power(val); // clamps to [0, 1] itself
+            send_rprt(fd, 0);
+            printf("rigctl: L RFPOWER %.6f -> %.6f of max_power\n", val, sound_get_tx_power());
         } else {
             send_rprt(fd, -1);
             printf("rigctl: L %s -> unsupported level or bad args\n", cmd + 1);
@@ -360,8 +379,11 @@ static int handle_line(int fd, char *line)
         // Minimal, spec-shaped dump_state (format checked against Hamlib's
         // rigctl_parse.c). Advertises only what exists: no XIT/IF shift, no
         // preamp/attenuator, no filter list; max_rit is real (RIT_MAX_HZ).
-        // has_get_level = RIG_LEVEL_AF (0x8) | RIG_LEVEL_STRENGTH (1<<30) =
-        // 0x40000008; has_set_level is AF only (an S-meter can't be set).
+        // has_get_level = RIG_LEVEL_AF (0x8) | RIG_LEVEL_RFPOWER (1<<12) |
+        // RIG_LEVEL_STRENGTH (1<<30) = 0x40001008; has_set_level drops
+        // STRENGTH (an S-meter can't be set) = 0x1008. ALC isn't
+        // advertised: this server reports it in dB rather than Hamlib's
+        // 0.0-1.0, so it's an extension like MICGAIN.
         // has_get_func/set_func stay 0: NARROW/FFTFILT aren't RIG_FUNC bits.
         //
         // Mode masks carry the modes m/M actually handle: CW (0x2), USB
@@ -403,8 +425,8 @@ static int handle_line(int fd, char *line)
         send_line(fd, "\n");                          // attenuator list (empty)
         send_line(fd, "0x0\n");                       // has_get_func
         send_line(fd, "0x0\n");                       // has_set_func
-        send_line(fd, "0x40000008\n");                // has_get_level (RIG_LEVEL_AF | RIG_LEVEL_STRENGTH)
-        send_line(fd, "0x8\n");                       // has_set_level (RIG_LEVEL_AF only)
+        send_line(fd, "0x40001008\n");                // has_get_level (AF | RFPOWER | STRENGTH)
+        send_line(fd, "0x1008\n");                    // has_set_level (AF | RFPOWER)
         send_line(fd, "0x0\n");                       // has_get_parm
         send_line(fd, "0x0\n");                       // has_set_parm
         printf("rigctl: dump_state -> sent\n");
