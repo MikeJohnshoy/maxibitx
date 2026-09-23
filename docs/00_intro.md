@@ -100,6 +100,10 @@ code:
   maxibitx and the kernel/OS pieces it depends on.
 - [`08_troubleshooting_and_bringup.md`](08_troubleshooting_and_bringup.md)
   — hardware bring-up gotchas that don't fit neatly elsewhere.
+- [`09_faq.md`](09_faq.md) — common questions, each pointing at the doc
+  that carries the full story: where the project came from, why the
+  design is the way it is, how ALC works, why there are four external
+  interfaces, and what isn't done.
 - [`12_simple_cw_transceiver.md`](12_simple_cw_transceiver.md) — a
   simple CW transceiver built around maxibitx (stub).
 
