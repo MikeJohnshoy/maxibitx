@@ -410,6 +410,36 @@ different peak-to-average ratios, so their average power at a given
 setting still needs checking with a wattmeter — the limiter fixes the
 peak, not the average.
 
+## Starting a transmission from silence
+
+The pipeline carries state from one block to the next, by design:
+overlap-save keeps about a block of history so the filter sees the
+signal's own past, and the limiter keeps a 192-sample delay line plus
+its current gain. Between two transmissions that continuity is wrong —
+the previous burst is not this one's past.
+
+`tx_pipeline_reset()` clears exactly the state that describes the
+signal: the overlap-save history, the limiter's delay line, its gain,
+the ALC meter, and the block counter the per-block sign flip is derived
+from. What describes the radio survives — the filter's passband, the IF
+placement, the limiter's ceiling.
+
+`sound.c` calls it on the transition *into* transmit, never during one.
+Two memsets once per burst is nothing on the audio thread, but calling
+it mid-transmission would destroy the overlap-save continuity it exists
+to protect.
+
+The limiter's gain turned out to be the part that mattered. The filter
+history is near-silence in practice, because CW ramps down and PTT
+release follows the audio — which is why this was first written up as a
+tidiness item. The gain is not: `tx_pipeline_test.c` Case G drives a
+burst 18 dB into limiting, and without the reset a following
+transmission opens still holding that reduction and needs the full 250 ms
+release to recover. Case G measures it by running the same quiet burst
+through a reset pipeline and a brand-new one: identical to the last bit
+(worst sample difference 0.00e+00) with the reset, and 5.26e−01 without
+it.
+
 ## What the FT8 contact proves
 
 On 2026-09-23 a two-way FT8 contact was completed with WSJT-X driving
@@ -458,10 +488,8 @@ calibrated — that is still an open item — or about whether
   proves the limiter's arithmetic without hardware, but the rigctld
   commands and the panel's slider and meter haven't been exercised
   against a running daemon.
-- **The pipeline carries state between transmissions.** Overlap-save's
-  filter history already held about a block of the previous burst, and
-  the limiter's 192-sample delay line adds 2 ms to that. Both are
-  near-silence in practice, because CW ramps down and PTT release
-  follows the audio, but nothing explicitly resets the pipeline at the
-  start of a transmission. A single `tx_pipeline_reset()` clearing both
-  would be the tidy fix if it ever matters.
+- **~~The pipeline carries state between transmissions.~~** Fixed.
+  `tx_pipeline_reset()` now clears the overlap-save history, the
+  limiter's delay line and gain, the ALC meter and the block counter,
+  and `sound.c` calls it on the transition into transmit — see
+  "Starting a transmission from silence" above.
