@@ -133,6 +133,17 @@ void filter_forward(struct filter *f, const complex float *in);
 // filter itself knowing anything about modes.
 void filter_inverse(struct filter *f, complex float *out);
 
+// Clears the overlap-save history, so the next filter_forward() sees
+// silence behind its block instead of the tail of whatever ran last.
+// history is the only state carried between calls - time and freq are
+// scratch, rewritten every block, and fir_coeff is the design.
+//
+// A filter that runs continuously never wants this. It is for one that
+// stops and restarts, where the gap means the old tail isn't the
+// signal's own past: tx_pipeline_reset() calls it when a transmission
+// begins.
+void filter_reset(struct filter *f);
+
 // Releases everything filter_new() allocated, including the FFTW plans.
 void filter_free(struct filter *f);
 
