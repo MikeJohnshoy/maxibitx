@@ -88,8 +88,8 @@ code:
 - [`04_remote_control_and_iq_output.md`](04_remote_control_and_iq_output.md)
   — how the external interfaces are implemented.
 - [`05_process_and_threading_model.md`](05_process_and_threading_model.md)
-  — how `main()` brings all of the above up, and the thread structure
-  that keeps it running.
+  — how `main()` brings all of the above up, the thread structure that
+  keeps it running, and a map for reading `sound.c`.
 - [`06_api.md`](06_api.md) — the reference for external software: every
   interface's commands and formats, the shared radio state, WSJT-X
   setup, and what isn't available yet.
