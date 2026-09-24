@@ -9,6 +9,7 @@
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <linux/i2c-dev.h>
@@ -16,6 +17,23 @@
 #include "i2c.h"
 
 static int i2c_fd = -1;
+
+// One bus, several callers: radio_tune_to() reaches si5351v2.c from the
+// rigctld, CAT and HPSDR threads while radio.c's TX worker does the same
+// on every T/R transition. Selecting the slave and running the transfer
+// are two separate ioctls on one shared fd, so without this they can
+// interleave - thread A sets the address, thread B changes it, and A's
+// transfer goes to B's device. Everything at runtime happens to address
+// the si5351 today, which hides the worst of it, but that stops being
+// true the moment anything reads the power/SWR bridge at 0x8 while
+// transmitting (dsp_design_notes/tx_test_tones_and_alc.md, step 5).
+//
+// A mutex rather than I2C_RDWR messages, which carry their own address
+// and would be atomic by construction: the SMBus block-read length
+// semantics are handled for us here, and re-deriving them by hand is
+// more risk than this costs. Nothing on the real-time audio path calls
+// into this file, so waiting here can't stall audio.
+static pthread_mutex_t i2c_lock = PTHREAD_MUTEX_INITIALIZER;
 
 void i2c_init(int i2c_bus_number) {
 	char path[32];
@@ -31,13 +49,12 @@ void i2c_init(int i2c_bus_number) {
 // Minimal SMBus ioctl wrapper - see <linux/i2c-dev.h> for the protocol.
 // addr is set per-call via I2C_SLAVE since each public function here
 // already takes its own i2c_address argument (multiple devices share
-// one open fd/bus, same as the old bit-banged API allowed). */
+// one open fd/bus, same as the old bit-banged API allowed). The two
+// ioctls are one indivisible operation and are locked as such - see
+// i2c_lock above for what interleaving them would do. */
 static int i2c_smbus_xfer(uint8_t addr, uint8_t read_write, uint8_t command,
                            int size, union i2c_smbus_data *data) {
 	if (i2c_fd < 0)
-		return -1;
-
-	if (ioctl(i2c_fd, I2C_SLAVE, addr) < 0)
 		return -1;
 
 	struct i2c_smbus_ioctl_data args;
@@ -45,7 +62,13 @@ static int i2c_smbus_xfer(uint8_t addr, uint8_t read_write, uint8_t command,
 	args.command = command;
 	args.size = size;
 	args.data = data;
-	return ioctl(i2c_fd, I2C_SMBUS, &args);
+
+	pthread_mutex_lock(&i2c_lock);
+	int rc = ioctl(i2c_fd, I2C_SLAVE, addr);
+	if (rc >= 0)
+		rc = ioctl(i2c_fd, I2C_SMBUS, &args);
+	pthread_mutex_unlock(&i2c_lock);
+	return rc;
 }
 
 // This executes the SMBus "write byte" protocol, returning negative errno else zero on success.
