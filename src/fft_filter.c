@@ -232,6 +232,13 @@ void filter_inverse(struct filter *f, complex float *out)
 		out[i] = f->time[f->N - f->L + i];
 }
 
+// See fft_filter.h. history is the only carried state, so clearing it is
+// the whole job.
+void filter_reset(struct filter *f)
+{
+	memset(f->history, 0, (f->M - 1) * sizeof(complex float));
+}
+
 void filter_free(struct filter *f)
 {
 	fftwf_destroy_plan(f->plan_fwd);
