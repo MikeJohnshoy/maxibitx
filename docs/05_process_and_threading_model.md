@@ -1,6 +1,8 @@
 # 05 — process and threading model
 
-Status: stub.
+Status: current. Covers the startup sequence, the threads once running,
+TX transitions, shutdown and startup failure handling, plus a map for
+reading `sound.c`.
 
 ## Scope
 
@@ -85,3 +87,53 @@ Status: stub.
   separately), Kenwood CAT, the INA260 power monitor, and audio
   playback (without it there's no local audio and no TX). A missing
   `hw_settings.ini` falls back to compiled-in defaults.
+
+## Reading sound.c
+
+`sound.c` is the second-largest file in the project, and it looks more
+forbidding than it is: roughly a third of it is ALSA plumbing and
+diagnostics that the audio thread never executes. It's divided by
+banner comments, and those are the reliable way to navigate it — search
+for the title rather than a line number.
+
+| Banner | What's there | Audio thread runs it? |
+|---|---|---|
+| Constants | Sample rate, block size, channel layout | — |
+| TX sample scaling | The amplitude constants, with the calibration story in [`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md) | — |
+| Module state | The PCM handles, the TX pipeline instance, mic gain / TX power / ALC accessors | Reads only |
+| ALSA mixer helper | Generic "find a mixer element and set it" helpers | No |
+| Codec hardware setup | `setup_audio_codec()`, which calls those helpers about a dozen times to bring up the WM8731 | No |
+| ALSA PCM helpers | `open_pcm()`'s hardware-parameter negotiation, and `xrun_recover()` | Recovery only |
+| xrun flood tracking | Rate-limiting and the one-time hint when xruns are caused by missing `cap_sys_nice` | Yes, cheaply |
+| IQ mixing | `sound_process()` - the receive path: VFO mix, antialias, hand-off to the demodulator and the I/Q consumers | Yes |
+| Per-block compute timing | Opt-in instrumentation (`MAXIBITX_LOOP_TIMING`) | Yes, cheaply |
+| Audio thread | `audio_loop()` - capture, process, the transmit branch, playback | Yes, all of it |
+| Public API | `sound_thread_start()` / `sound_thread_stop()` | No |
+
+**Where the complexity actually is.** The mixer helpers and the codec
+setup together are the single largest block, but they run once during
+bring-up and can't affect keying or audio. The timing counters are
+diagnostics. What's genuinely intricate is `audio_loop()`, and inside
+it the transmit branch — mode dispatch across the four audio sources,
+the pipeline call, the limiter ceiling, the DAC scaling and the
+sidetone — is more than half of the function. For most questions the
+answer is in one of `sound_process()`, the transmit branch, or
+`setup_audio_codec()`, and the rest can be skipped.
+
+**Why it deserves more caution than the DSP files.** `sound.c` is the
+one substantial file with no bench test. `tx_pipeline.c`,
+`rx_audio.c`, `fft_filter.c`, `rx_filter.c` and `upsample48k.c` can
+each be proven numerically with no hardware attached, so a change to
+them is checked before it ever reaches the radio. `sound.c` needs the
+codec, the GPIO and an antenna, which means the only verification is
+building it and operating. Treat "it compiles" as the start of testing
+here, not the end of it.
+
+**If it is ever split up**, the order that keeps the risk lowest is to
+move the parts the audio thread doesn't touch first: the mixer helpers
+and `setup_audio_codec()` into their own file, then the timing
+instrumentation, and only then consider lifting the transmit branch out
+of `audio_loop()` into a function of its own — that last one is the
+only step that changes code on the real-time path. Each is separately
+verifiable by keying up once. None of it is worth doing for tidiness
+alone.
