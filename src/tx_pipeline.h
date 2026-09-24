@@ -138,6 +138,23 @@ int tx_pipeline_retune(struct tx_pipeline *p, float low_hz, float high_hz, float
 void tx_pipeline_process_block(struct tx_pipeline *p, enum tx_pipeline_signal signal,
                                 const float *in, float *out);
 
+// Puts the pipeline back to the state a freshly created one is in, so a
+// transmission starts from silence rather than from the tail of the last
+// one. Clears the overlap-save history (about a block of the previous
+// burst), the limiter's look-ahead delay line and its gain, the ALC
+// meter, and the block counter the per-block sign flip is derived from.
+//
+// Keeps the things that describe the radio rather than the signal: the
+// filter's passband, the IF placement and the limiter's ceiling all
+// survive.
+//
+// sound.c calls this on the transition into transmit. Cheap enough for
+// the audio thread - two memsets, once per burst, not per block - but it
+// must not be called mid-transmission, since dropping the history
+// mid-stream would break the overlap-save continuity it exists to
+// provide.
+void tx_pipeline_reset(struct tx_pipeline *p);
+
 // Sets the two bin rotations from this board's actual IF frequencies,
 // replacing the compiled-in defaults above. sound.c calls it once, after
 // hw_settings_load() has read bfo_freq and xtal_filter_center, before
