@@ -73,10 +73,17 @@ static pthread_t listener_thread_id;
 static pthread_t pacer_thread_id;
 
 // --- Subscriber list -----------------------------------------------------
-// Touched only by iq_stream_listener_thread() (adds/refreshes) and
-// iq_stream_pacer_thread() (reads to know where to send, prunes expired
-// entries) - never by the real-time audio thread, so a plain mutex is
-// fine (see file header).
+// The array and its mutex are touched only by iq_stream_listener_thread()
+// (adds/refreshes) and iq_stream_pacer_thread() (reads to know where to
+// send, prunes expired entries) - never by the real-time audio thread,
+// which is what makes a plain mutex fine (see file header). The pacer
+// holds it across a sendto() and a printf(), so an audio-thread caller
+// waiting on it could block for as long as either takes.
+//
+// iq_stream_send() does run on the audio thread and needs to know only
+// whether anyone is listening at all, so it reads subscriber_count
+// instead - maintained under the lock by the two threads above, read
+// without it.
 struct subscriber {
   int in_use;
   struct sockaddr_in addr;
@@ -84,6 +91,7 @@ struct subscriber {
 };
 static struct subscriber subscribers[MAX_SUBSCRIBERS];
 static pthread_mutex_t subscribers_lock = PTHREAD_MUTEX_INITIALIZER;
+static atomic_int subscriber_count = 0;
 
 static time_t monotonic_now_sec(void) {
   struct timespec ts;
@@ -123,6 +131,8 @@ static void subscriber_touch(const struct sockaddr_in *addr) {
   int slot = (free_slot >= 0) ? free_slot : oldest_slot;
   int was_new_client = !subscribers[slot].in_use || subscribers[slot].addr.sin_addr.s_addr !=
                                                          addr->sin_addr.s_addr;
+  if (!subscribers[slot].in_use)
+    atomic_fetch_add_explicit(&subscriber_count, 1, memory_order_relaxed);
   subscribers[slot].in_use = 1;
   subscribers[slot].addr = *addr;
   subscribers[slot].last_seen = monotonic_now_sec();
@@ -153,12 +163,11 @@ void iq_stream_send(const double *i_samples, const double *q_samples, int n) {
   // subscriber added/expired the instant after this check) costs at
   // most one audio block's worth of samples either dropped or queued
   // for nothing, never a correctness problem.
-  int any_active = 0;
-  pthread_mutex_lock(&subscribers_lock);
-  for (int i = 0; i < MAX_SUBSCRIBERS; i++)
-    any_active |= subscribers[i].in_use;
-  pthread_mutex_unlock(&subscribers_lock);
-  if (!any_active)
+  //
+  // Reads subscriber_count rather than scanning the array: this runs on
+  // the real-time audio thread, which may not wait on subscribers_lock
+  // (see that lock's comment).
+  if (atomic_load_explicit(&subscriber_count, memory_order_relaxed) == 0)
     return;
 
   unsigned head = atomic_load_explicit(&q_head, memory_order_relaxed);
@@ -229,6 +238,7 @@ static void build_and_send_packet(void) {
       printf("iq_stream: subscriber %s:%d timed out\n", inet_ntoa(subscribers[i].addr.sin_addr),
              ntohs(subscribers[i].addr.sin_port));
       subscribers[i].in_use = 0;
+      atomic_fetch_sub_explicit(&subscriber_count, 1, memory_order_relaxed);
       continue;
     }
     sendto(stream_sock, pkt, sizeof(pkt), 0, (struct sockaddr *)&subscribers[i].addr,
