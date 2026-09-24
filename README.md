@@ -87,7 +87,7 @@ device-mode USB port and a few kernel options - see
 | [`docs/02_rx_processing_pipeline.md`](docs/02_rx_processing_pipeline.md) | Antenna to I/Q and audio, stage by stage |
 | [`docs/03_tx_processing_pipeline.md`](docs/03_tx_processing_pipeline.md) | Audio source to antenna: keying/PTT, `tx_pipeline.c`, power, known limitations |
 | [`docs/04_remote_control_and_iq_output.md`](docs/04_remote_control_and_iq_output.md) | How the external interfaces are implemented |
-| [`docs/05_process_and_threading_model.md`](docs/05_process_and_threading_model.md) | Startup sequence and threads |
+| [`docs/05_process_and_threading_model.md`](docs/05_process_and_threading_model.md) | Startup sequence, threads, and a map for reading `sound.c` |
 | [`docs/06_api.md`](docs/06_api.md) | The external interfaces - rigctld, I/Q streams, USB audio and CAT - for building an app on maxibitx, plus WSJT-X setup |
 | [`docs/07_build_and_deployment.md`](docs/07_build_and_deployment.md) | Build, kernel/overlay dependencies, deployment |
 | [`docs/08_troubleshooting_and_bringup.md`](docs/08_troubleshooting_and_bringup.md) | Hardware bring-up gotchas |
