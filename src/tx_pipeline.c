@@ -186,6 +186,18 @@ void tx_pipeline_process_block(struct tx_pipeline *p, enum tx_pipeline_signal si
 	limit_and_emit(p, out_c, flip ? -2.0f : 2.0f, out);
 }
 
+void tx_pipeline_reset(struct tx_pipeline *p)
+{
+	// Everything here is signal state; see tx_pipeline.h for what
+	// deliberately survives.
+	filter_reset(p->filt);
+	p->block_count = 0;
+	p->gain = 1.0f;
+	memset(p->delay, 0, sizeof(p->delay));
+	p->delay_pos = 0;
+	p->meter_db = 0.0f;
+}
+
 int tx_pipeline_set_if_placement(struct tx_pipeline *p, int bfo_hz, int xtal_center_hz)
 {
 	// The SSB shift is the whole difference; CW's is that less the pitch
