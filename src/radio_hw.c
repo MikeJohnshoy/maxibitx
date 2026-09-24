@@ -14,17 +14,15 @@
 #define CURRENT_REGISTER 0x01
 #define CONFIG_DEFAULT 0x6127 // Continuous mode, default averaging
 
-/* ---- Boot-time GPIO setup ----------------------------------------------
- *
- * Each pin gets its own line-request handle from gpio.c, held for the
- * life of the process (there's no radio_hw_gpio_shutdown() - same
- * "opened once, never explicitly torn down" convention i2c.c already
- * uses for its own fd). Every later function in this file writes/reads
- * through these handles rather than a raw pin number - unlike wiringPi,
- * the character-device API has no "just pass the pin number again"
- * shortcut once a line has been requested.
- */
+/* ---- Boot-time GPIO setup ---------------------------------------------- */
 
+// Each pin gets its own line-request handle from gpio.c, held for the
+// life of the process (there's no radio_hw_gpio_shutdown() - same
+// "opened once, never explicitly torn down" convention i2c.c already
+// uses for its own fd). Every later function in this file writes/reads
+//  through these handles rather than a raw pin number - unlike wiringPi,
+// the character-device API has no "just pass the pin number again"
+// shortcut once a line has been requested.
 static int line_tx_line = -1;
 static int line_tx_power = -1;
 static int line_ext_ptt = -1;
@@ -73,17 +71,16 @@ int radio_hw_detect_version(void) {
     return SBITX_V2;
 }
 
-/* ---- Low-pass filter band switching --------------------------------------
- *
- * prev_lpf now tracks the selected BCM pin number (0 meaning "none", for
- * a frequency at or above 30MHz that no band below covers) rather than a
- * wiringPi pin number - same sentinel convention as before, just in the
- * new numbering. Unlike the old digitalWrite(lpf, HIGH) - which could be
- * (and, for out-of-range frequencies, was) called with pin 0 as a
- * harmless no-op against wiringPi's own numbering - there's no line
- * handle behind BCM pin 0 here, so the out-of-range case is now handled
- * explicitly instead of relying on that incidental behavior.
- */
+/* ---- Low-pass filter band switching -------------------------------------- */
+//
+// prev_lpf now tracks the selected BCM pin number (0 meaning "none", for
+// a frequency at or above 30MHz that no band below covers) rather than a
+// wiringPi pin number - same sentinel convention as before, just in the
+// new numbering. Unlike the old digitalWrite(lpf, HIGH) - which could be
+// (and, for out-of-range frequencies, was) called with pin 0 as a
+// harmless no-op against wiringPi's own numbering - there's no line
+// handle behind BCM pin 0 here, so the out-of-range case is now handled
+// explicitly instead of relying on that incidental behavior.
 
 static int prev_lpf = -1;
 void set_lpf_40mhz(int frequency) {
