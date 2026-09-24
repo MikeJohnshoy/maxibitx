@@ -757,7 +757,21 @@ static void *audio_loop(void *arg) {
       // key GPIO there - or with the test-tone generator on, which any PTT
       // source keys.
       int tone_on = tone_gen_get_mode() != TONE_GEN_OFF;
-      if (cw_tx_active() || (in_tx && (radio_get_mode() == RADIO_MODE_DIGITAL || tone_on))) {
+      int tx_audio_active =
+          cw_tx_active() || (in_tx && (radio_get_mode() == RADIO_MODE_DIGITAL || tone_on));
+
+      // Clear the pipeline's carried state when a transmission starts, so
+      // the first block is filtered against silence rather than against
+      // the tail of the previous burst, and the limiter doesn't open a new
+      // burst still holding the last one's gain reduction. Only on the
+      // transition in - calling it mid-transmission would break the
+      // overlap-save continuity it exists to keep (tx_pipeline.h).
+      static int tx_audio_was_active = 0;
+      if (tx_audio_active && !tx_audio_was_active)
+        tx_pipeline_reset(cw_tx_pipeline);
+      tx_audio_was_active = tx_audio_active;
+
+      if (tx_audio_active) {
         // Per-band calibrated scale (see the TX_SAMPLE_HEADROOM
         // comment above) - looked up once per block, not per
         // sample, since freq_hdr doesn't change mid-block.
