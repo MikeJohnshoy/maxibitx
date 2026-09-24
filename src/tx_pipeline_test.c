@@ -506,5 +506,68 @@ int main(void)
 		       half_power, peak_low, to_db(m_low[0], 1.0), alc_low);
 	}
 
+	// --- Case G: tx_pipeline_reset() ------------------------------------
+	// A transmission must not depend on what preceded it. Two pipelines
+	// are given the same quiet burst: one is brand new, the other has
+	// just run a loud burst and been reset. If the reset clears
+	// everything that carries - the overlap-save history, the limiter's
+	// delay line and gain, the block counter the sign flip comes from -
+	// their outputs are identical sample for sample.
+	{
+		const int burst = 6;
+		float in[TX_PIPELINE_BLOCK_LEN];
+		float out_fresh[TX_PIPELINE_BLOCK_LEN], out_reused[TX_PIPELINE_BLOCK_LEN];
+		double phase, phase_inc = 2.0 * M_PI * 1000.0 / TEST_FS;
+
+		struct tx_pipeline *fresh = tx_pipeline_new();
+		struct tx_pipeline *reused = tx_pipeline_new();
+		// A ceiling low enough that the loud burst drives the limiter
+		// well into gain reduction, so there is real state to clear.
+		tx_pipeline_set_ceiling(fresh, 0.5f);
+		tx_pipeline_set_ceiling(reused, 0.5f);
+
+		// 'reused' first runs a loud burst, then gets reset.
+		phase = 0;
+		for (int b = 0; b < burst; b++) {
+			for (int i = 0; i < TX_PIPELINE_BLOCK_LEN; i++) {
+				in[i] = 4.0f * (float)cos(phase);   // hard into the limiter
+				phase += phase_inc;
+			}
+			tx_pipeline_process_block(reused, TX_PIPELINE_USB, in, out_reused);
+		}
+		double alc_before = tx_pipeline_alc_db(reused);
+		tx_pipeline_reset(reused);
+
+		// Now the same quiet burst into both.
+		double worst = 0.0;
+		phase = 0;
+		for (int b = 0; b < burst; b++) {
+			for (int i = 0; i < TX_PIPELINE_BLOCK_LEN; i++) {
+				in[i] = 0.2f * (float)cos(phase);
+				phase += phase_inc;
+			}
+			tx_pipeline_process_block(fresh, TX_PIPELINE_USB, in, out_fresh);
+			tx_pipeline_process_block(reused, TX_PIPELINE_USB, in, out_reused);
+			for (int i = 0; i < TX_PIPELINE_BLOCK_LEN; i++) {
+				double d = fabs((double)out_fresh[i] - (double)out_reused[i]);
+				if (d > worst)
+					worst = d;
+			}
+		}
+
+		printf("\nG. tx_pipeline_reset(): a burst is independent of the last one\n");
+		printf("   Loud burst left the limiter at %.2f dB of reduction; reset, then\n"
+		       "     the same quiet burst into a reset pipeline and a brand new one\n",
+		       alc_before);
+		printf("   Worst sample difference over %d blocks: %.2e (want 0 - identical)\n",
+		       burst, worst);
+		if (worst != 0.0) {
+			fprintf(stderr, "   FAIL: reset left state behind\n");
+			return 1;
+		}
+		tx_pipeline_free(fresh);
+		tx_pipeline_free(reused);
+	}
+
 	return 0;
 }
