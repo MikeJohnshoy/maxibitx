@@ -240,9 +240,23 @@ ALSA device.
    ([`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md)).
    `rx_audio_test.c` case E measures both, each rejecting the other's
    side by about 40 dB.
-3. An optional narrow filter, about 300 Hz wide around `CW_PITCH_HZ`
-   (an elliptic IIR by default, or `rx_filter.c`'s FFT filter),
-   switched by rigctld `U NARROW` and `U FFTFILT` or the control panel.
+3. An optional narrow filter (an elliptic IIR by default, or
+   `rx_filter.c`'s FFT filter), switched by rigctld `U NARROW` and
+   `U FFTFILT` or the control panel. Its pitch and width are selectable at
+   runtime — `L CWPITCH` picks 600, 700 or 800 Hz and `L CWWIDTH` picks
+   150, 300, 450 or 600 Hz, defaulting to 700/300. Changing the pitch moves
+   the stage-2 BFO with it, so the tone you hear moves rather than the
+   filter just detuning off it.
+
+   The elliptic can't design coefficients at runtime, so those twelve
+   combinations are pre-designed offline into `src/narrow_filter_bank.h` by
+   `tools/gen_narrow_filters.py` and switched by loading a set; the FFT
+   filter is retuned to the same passband so the two stay comparable. The
+   FFT one runs a minimum-phase realization by default, which keeps a keyed
+   CW element's attack close to the elliptic's while measuring 30-55 dB
+   deeper in the stopband; `U MINPHASE 0` returns the linear-phase
+   realization for comparison
+   ([`dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md`](dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md)).
 4. AGC, which measures the raw input, not any filtered stage.
 
 The mode is set by `radio_set_mode()` in `radio.c`, which calls
