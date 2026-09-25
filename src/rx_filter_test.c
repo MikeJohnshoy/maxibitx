@@ -40,6 +40,15 @@
 //   replacing (rx_audio.c's own header: ~2.6ms) - block-boundary
 //   continuity itself is a property of the shared fft_filter.c engine
 //   already proven in steps 2/4, not re-tested here.
+// Case E - minimum phase: the three things rx_filter_set_min_phase()
+//   claims, each measured rather than argued. That the magnitude
+//   response really is the same one Case B measured (the whole basis for
+//   calling it the same filter); that the group delay and the attack of
+//   a keyed CW element actually improve, which is the only reason to
+//   want it; and that the minimum-phase impulse still fits inside the
+//   M-1 taps overlap-save discards, since unlike a windowed FIR it
+//   decays rather than ending, and a tail past that point would wrap
+//   into the output instead of being thrown away.
 
 #include <stdio.h>
 #include <math.h>
@@ -200,6 +209,83 @@ static double measure_group_delay_ms(struct rx_filter *r, int settle_blocks)
 	return (double)(peak_index - impulse_global_index) / TEST_FS * 1000.0;
 }
 
+// Case E's attack measurement: settle to silence, then key a tone at the
+// filter's own pitch with a 5ms raised-cosine ramp and hold it, tracking
+// a 2ms running-RMS envelope. Returns the time from key-down to the
+// envelope first reaching -3dB of its own settled level - so this is
+// attack shape, independent of the filter's gain.
+#define ATTACK_HOLD_BLOCKS 24
+static double measure_attack_ms(struct rx_filter *r, double tone_hz, int settle_blocks)
+{
+	float in[RX_FILTER_BLOCK_LEN], out[RX_FILTER_BLOCK_LEN];
+	static double sq[ATTACK_HOLD_BLOCKS * RX_FILTER_BLOCK_LEN];
+	static double env[ATTACK_HOLD_BLOCKS * RX_FILTER_BLOCK_LEN];
+	int total = ATTACK_HOLD_BLOCKS * RX_FILTER_BLOCK_LEN;
+	int window = (int)(0.002 * TEST_FS);
+	int ramp = (int)(0.005 * TEST_FS);
+	double phase = 0, phase_inc = 2.0 * M_PI * tone_hz / TEST_FS;
+
+	for (int b = 0; b < settle_blocks; b++) {
+		memset(in, 0, sizeof(in));
+		rx_filter_process_block(r, in, out);
+	}
+
+	// First pass: the keyed element, storing each output sample's square.
+	for (int b = 0, n = 0; b < ATTACK_HOLD_BLOCKS; b++) {
+		for (int i = 0; i < RX_FILTER_BLOCK_LEN; i++, n++) {
+			double shape = (n < ramp) ? 0.5 - 0.5 * cos(M_PI * n / (double)ramp) : 1.0;
+			in[i] = (float)(shape * cos(phase));
+			phase += phase_inc;
+		}
+		rx_filter_process_block(r, in, out);
+		for (int i = 0; i < RX_FILTER_BLOCK_LEN; i++)
+			sq[b * RX_FILTER_BLOCK_LEN + i] = (double)out[i] * out[i];
+	}
+
+	// Second pass: those squares become the running RMS the threshold
+	// search below needs.
+	double acc = 0;
+	for (int k = 0; k < total; k++) {
+		acc += sq[k];
+		if (k >= window)
+			acc -= sq[k - window];
+		env[k] = sqrt(acc / (k < window ? k + 1 : window));
+	}
+
+	double settled = env[total - 1];
+	for (int k = 0; k < total; k++)
+		if (env[k] >= settled * 0.70710678)
+			return (double)k / TEST_FS * 1000.0;
+	return -1.0;
+}
+
+// Case E's fit check: inverse-transforms the tuned response to its own
+// impulse and reports how much of that impulse's energy lands past tap
+// M-1 - the last tap overlap-save's discard region covers. A windowed FIR
+// is zero there by construction; a minimum-phase one has to be made to
+// fit (fft_filter.c's fade-and-truncate step), and this is what says
+// whether it did.
+static double measure_impulse_tail_db(struct rx_filter *r)
+{
+	struct filter *f = r->filt;
+	complex float *buf = fftwf_alloc_complex(f->N);
+	fftwf_plan rev = fftwf_plan_dft_1d(f->N, buf, buf, FFTW_BACKWARD, FFTW_ESTIMATE);
+	double inside = 0, beyond = 0;
+
+	memcpy(buf, f->fir_coeff, f->N * sizeof(complex float));
+	fftwf_execute(rev);
+	for (int n = 0; n < f->N; n++) {
+		double e = (double)cabsf(buf[n]) * cabsf(buf[n]);
+		if (n < f->M)
+			inside += e;
+		else
+			beyond += e;
+	}
+	fftwf_destroy_plan(rev);
+	fftwf_free(buf);
+	return 10.0 * log10(beyond / (inside + beyond) + 1e-300);
+}
+
 int main(void)
 {
 	printf("rx_filter.c bench - Fs=%.0f Hz, N=%d, M=%d, CW_PITCH_HZ=%d Hz, default width=%.0f Hz "
@@ -279,6 +365,53 @@ int main(void)
 		printf("\nD. Measured group delay (impulse-response peak): %.2f ms "
 		       "(elliptic IIR being replaced: ~2.6ms - see rx_audio.c)\n", delay_ms);
 		rx_filter_free(r);
+	}
+
+	// --- Case E: minimum phase ------------------------------------------
+	{
+		struct rx_filter *lin = rx_filter_new((float)CW_PITCH_HZ, RX_FILTER_DEFAULT_WIDTH_HZ);
+		struct rx_filter *min = rx_filter_new((float)CW_PITCH_HZ, RX_FILTER_DEFAULT_WIDTH_HZ);
+		int rc = rx_filter_set_min_phase(min, 1);
+
+		printf("\nE. Minimum phase (rx_filter_set_min_phase() rc=%d):\n", rc);
+
+		// Same magnitude? Compared against the linear-phase filter at the
+		// same offsets, each normalized to its own gain at pitch, so this
+		// is shape, not level.
+		double ref_lin = measure_offset(lin, CW_PITCH_HZ, 8, 16);
+		double ref_min = measure_offset(min, CW_PITCH_HZ, 8, 16);
+		const double offsets[] = { 50, 100, 150, 200, 300, 600, 1400, 3000 };
+		double worst = 0, worst_off = 0;
+		printf("   offset   linear phase   minimum phase\n");
+		for (unsigned i = 0; i < sizeof(offsets) / sizeof(offsets[0]); i++) {
+			double l = to_db(measure_offset(lin, CW_PITCH_HZ + offsets[i], 8, 16), ref_lin);
+			double m = to_db(measure_offset(min, CW_PITCH_HZ + offsets[i], 8, 16), ref_min);
+			printf("   %+5.0f Hz %11.2f dB %12.2f dB (%+.2f)\n", offsets[i], l, m, m - l);
+			if (fabs(m - l) > worst) { worst = fabs(m - l); worst_off = offsets[i]; }
+		}
+		printf("   largest deviation %.2f dB, at +%.0f Hz (want: small everywhere -\n"
+		       "   'same magnitude' is the claim this case exists to check)\n", worst, worst_off);
+		printf("   gain at pitch: %.2f dB linear phase, %.2f dB minimum phase\n",
+		       to_db(ref_lin, 1.0), to_db(ref_min, 1.0));
+
+		// What it buys.
+		printf("   group delay: %.2f ms -> %.2f ms\n",
+		       measure_group_delay_ms(lin, 8), measure_group_delay_ms(min, 8));
+		printf("   keyed element, key-down to -3dB of settled: %.1f ms -> %.1f ms\n",
+		       measure_attack_ms(lin, CW_PITCH_HZ, 8), measure_attack_ms(min, CW_PITCH_HZ, 8));
+
+		// What it costs, and the thing that would break silently.
+		printf("   impulse energy past tap %d (overlap-save discards M-1): %.1f dB "
+		       "linear phase, %.1f dB minimum phase\n", RX_FILTER_IMPULSE_LEN - 1,
+		       measure_impulse_tail_db(lin), measure_impulse_tail_db(min));
+
+		double max_re, max_im;
+		measure_realness(min, CW_PITCH_HZ, 8, 8, &max_re, &max_im);
+		printf("   real output preserved: imag/real = %.2e (Case A's check, re-run here -\n"
+		       "   the conversion must not make this filter complex)\n", max_im / max_re);
+
+		rx_filter_free(lin);
+		rx_filter_free(min);
 	}
 
 	return 0;
