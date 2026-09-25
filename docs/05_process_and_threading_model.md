@@ -56,6 +56,11 @@ reading `sound.c`.
   pending); the actual slow hardware sequence (`radio_tx_apply()`) is
   handed to the worker thread via a mutex/condvar/pending-flag pair, so
   the calling thread — audio thread included — never blocks.
+  What that sequence actually costs, and which of its delays are real, is
+  budgeted in
+  [`dsp_design_notes/cw_break_in_and_i2c_timing.md`](dsp_design_notes/cw_break_in_and_i2c_timing.md):
+  the 20ms turns out to be external-amplifier sequencing rather than T/R
+  settling, and no I2C reaches the audio thread at all.
 - Graceful shutdown: `main()` installs a `SIGINT`/`SIGTERM` handler
   (Ctrl+C, or a normal `kill`/`systemctl stop` - not `SIGKILL`, which
   can't be caught) that sets a flag; the idle loop notices it, parks
