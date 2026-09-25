@@ -186,6 +186,13 @@ if the si5351 ever stops responding after an OS update.
 SMBus ioctls (byte read/write, block read/write) — nothing sbitx- or
 si5351-specific lives there.
 
+Because that bus is bit-banged by the kernel rather than served by a
+hardware peripheral, I2C traffic is CPU time. One `si5351bx_setfreq()` is
+17 separate transactions, and a T/R transition writes two clocks. What that
+costs, why none of it reaches the real-time audio path, and which half of
+it is redundant when RIT is zero:
+[`dsp_design_notes/cw_break_in_and_i2c_timing.md`](dsp_design_notes/cw_break_in_and_i2c_timing.md).
+
 ## WM8731 audio codec bring-up
 
 `setup_audio_codec()` (`sound.c`) configures the codec entirely through
