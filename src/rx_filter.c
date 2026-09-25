@@ -45,6 +45,7 @@ struct rx_filter *rx_filter_new(float pitch_hz, float width_hz)
 	       flags == FFTW_MEASURE ? " - MAXIBITX_RX_FILTER_FFTW_MEASURE set, expect a slower startup" : "");
 
 	r->filt = filter_new_ex(RX_FILTER_BLOCK_LEN, RX_FILTER_IMPULSE_LEN, flags);
+	r->min_phase = 0;
 	rx_filter_retune(r, pitch_hz, width_hz);
 	return r;
 }
@@ -53,7 +54,26 @@ int rx_filter_retune(struct rx_filter *r, float pitch_hz, float width_hz)
 {
 	float low = (pitch_hz - width_hz / 2.0f) / RX_FILTER_FS_HZ;
 	float high = (pitch_hz + width_hz / 2.0f) / RX_FILTER_FS_HZ;
-	return filter_tune_real(r->filt, low, high, RX_FILTER_KAISER_BETA);
+	int rc = filter_tune_real(r->filt, low, high, RX_FILTER_KAISER_BETA);
+
+	if (rc != 0)
+		return rc;
+	r->pitch_hz = pitch_hz;
+	r->width_hz = width_hz;
+
+	// filter_tune_real() designs a fresh symmetric, linear-phase impulse
+	// every time, so the minimum-phase conversion belongs here, with
+	// tuning, not in a one-off setup step - see
+	// rx_filter_set_min_phase().
+	if (r->min_phase)
+		return filter_min_phase(r->filt);
+	return 0;
+}
+
+int rx_filter_set_min_phase(struct rx_filter *r, int on)
+{
+	r->min_phase = on ? 1 : 0;
+	return rx_filter_retune(r, r->pitch_hz, r->width_hz);
 }
 
 void rx_filter_process_block(struct rx_filter *r, const float *in, float *out)
