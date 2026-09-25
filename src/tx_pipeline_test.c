@@ -114,18 +114,23 @@ static double to_db(double measured, double reference)
 	return 20.0 * log10(measured / reference);
 }
 
-// Runs a continuous CW_PITCH_HZ tone (steady key-down, envelope at max -
-// same "settle, then measure" idea as fft_filter_test.c's
+// Runs a continuous tone_hz tone (steady key-down, envelope at max - same
+// "settle, then measure" idea as fft_filter_test.c's
 // steady_state_output()) through the real tx_pipeline for
-// settle_blocks+measure_blocks blocks, discarding the first
-// settle_blocks (overlap-save history/filter-edge transient) and
-// coherently demodulating the rest at measure_hz.
-static double measure_tone(struct tx_pipeline *p, enum tx_pipeline_signal sig,
-                            double measure_hz, int settle_blocks, int measure_blocks)
+// settle_blocks+measure_blocks blocks, discarding the first settle_blocks
+// (overlap-save history/filter-edge transient) and coherently demodulating
+// the rest at measure_hz.
+//
+// The input tone is a parameter because Case H needs it: the whole point of
+// a movable CW pitch is that the input tone changes while the output
+// carrier doesn't.
+static double measure_tone_at(struct tx_pipeline *p, enum tx_pipeline_signal sig,
+                               double tone_hz, double measure_hz,
+                               int settle_blocks, int measure_blocks)
 {
 	float in[TX_PIPELINE_BLOCK_LEN], out[TX_PIPELINE_BLOCK_LEN];
 	double phase = 0;
-	double phase_inc = 2.0 * M_PI * CW_PITCH_HZ / TEST_FS;
+	double phase_inc = 2.0 * M_PI * tone_hz / TEST_FS;
 	struct demod d;
 	demod_init(&d, measure_hz);
 
@@ -141,6 +146,14 @@ static double measure_tone(struct tx_pipeline *p, enum tx_pipeline_signal sig,
 			demod_feed(&d, out, TX_PIPELINE_BLOCK_LEN);
 	}
 	return demod_mag(&d);
+}
+
+// The CW_PITCH_HZ case, which is what Cases A-G all want.
+static double measure_tone(struct tx_pipeline *p, enum tx_pipeline_signal sig,
+                            double measure_hz, int settle_blocks, int measure_blocks)
+{
+	return measure_tone_at(p, sig, (double)CW_PITCH_HZ, measure_hz,
+	                        settle_blocks, measure_blocks);
 }
 
 // Case B's "without the zero" control path - built directly on
@@ -567,6 +580,101 @@ int main(void)
 		}
 		tx_pipeline_free(fresh);
 		tx_pipeline_free(reused);
+	}
+
+	// --- Case H: moving the CW pitch must not move the carrier -----------
+	// The sidetone has to equal the pitch the receiver renders, or
+	// zero-beating by ear transmits off frequency (radio.h's
+	// radio_set_cw_pitch()). Making the sidetone movable therefore means
+	// feeding this pipeline a different tone - and the whole arrangement is
+	// only safe if the CW bin rotation absorbs that change exactly, leaving
+	// the carrier on the dial.
+	//
+	// So: for each selectable pitch, set the placement for that tone, feed
+	// that tone, and measure where the carrier actually lands. The ideal is
+	// bfo_freq - xtal_filter_center for all of them.
+	//
+	// It cannot be exact, and the residual is the point of the measurement
+	// rather than a flaw in it: the rotation is a whole number of
+	// TX_PIPELINE_BIN_HZ bins, so each pitch rounds differently and the
+	// carrier lands within half a bin of the dial. That quantization is not
+	// new - the shipped 700 Hz placement has always carried its own share
+	// of it - so what this case bounds is the whole error, at every pitch.
+	{
+		const int pitches[] = { 600, 700, 800 };
+		const double ideal = (double)(TX_PIPELINE_BENCH_BFO_FREQ_HZ
+		                              - TX_PIPELINE_BENCH_XTAL_CENTER_HZ);
+		double worst_offset = 0.0, lowest = 1e9, highest = -1e9;
+		int fails = 0;
+
+		printf("\nH. CW pitch moves the sidetone, not the carrier "
+		       "(ideal carrier %.0f Hz)\n", ideal);
+		printf("   pitch   shift    carrier      level    off the dial\n");
+
+		for (unsigned i = 0; i < sizeof(pitches) / sizeof(pitches[0]); i++) {
+			struct tx_pipeline *p = tx_pipeline_new();
+			int pitch = pitches[i];
+
+			if (tx_pipeline_set_if_placement(p, TX_PIPELINE_BENCH_BFO_FREQ_HZ,
+			                                  TX_PIPELINE_BENCH_XTAL_CENTER_HZ,
+			                                  pitch) != 0) {
+				fprintf(stderr, "   FAIL: placement refused for pitch %d\n", pitch);
+				tx_pipeline_free(p);
+				fails++;
+				continue;
+			}
+
+			// Where the carrier must be: the tone plus the quantized shift
+			// the pipeline actually applied. Reading cw_shift_bins back
+			// rather than recomputing it is deliberate - it means this
+			// measures the rotation in force, not the arithmetic this test
+			// would like it to be.
+			double shift_hz = (double)p->cw_shift_bins * TX_PIPELINE_BIN_HZ;
+			double carrier = (double)pitch + shift_hz;
+			double level = to_db(measure_tone_at(p, TX_PIPELINE_CW, (double)pitch,
+			                                      carrier, 8, 8), 1.0);
+			double offset = carrier - ideal;
+
+			printf("   %5d  %6.0f  %9.2f  %+7.2f dB  %+9.2f Hz\n",
+			       pitch, shift_hz, carrier, level, offset);
+
+			if (fabs(offset) > worst_offset)
+				worst_offset = fabs(offset);
+			if (carrier < lowest)
+				lowest = carrier;
+			if (carrier > highest)
+				highest = carrier;
+
+			// The carrier really is there, at full amplitude - so the
+			// placement moved as intended rather than the tone leaking
+			// through at some other frequency.
+			if (level < -1.0) {
+				fprintf(stderr, "   FAIL: pitch %d puts no carrier at %.2f Hz "
+				                "(%.2f dB)\n", pitch, carrier, level);
+				fails++;
+			}
+			tx_pipeline_free(p);
+		}
+
+		printf("   Worst offset from the dial %.2f Hz, spread across pitches %.2f Hz\n",
+		       worst_offset, highest - lowest);
+		printf("   (one bin is %.3f Hz - both should be under half of that: the\n"
+		       "    rotate can't place a carrier finer than its own bin grid)\n",
+		       (double)TX_PIPELINE_BIN_HZ);
+
+		// Half a bin each. A whole bin would mean a rounding bug, not
+		// quantization.
+		if (worst_offset > TX_PIPELINE_BIN_HZ / 2.0) {
+			fprintf(stderr, "   FAIL: carrier is more than half a bin off the dial\n");
+			fails++;
+		}
+		if (highest - lowest > TX_PIPELINE_BIN_HZ / 2.0) {
+			fprintf(stderr, "   FAIL: the carrier moves with pitch by more than "
+			                "half a bin\n");
+			fails++;
+		}
+		if (fails)
+			return 1;
 	}
 
 	return 0;
