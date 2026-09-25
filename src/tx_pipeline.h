@@ -156,16 +156,26 @@ void tx_pipeline_process_block(struct tx_pipeline *p, enum tx_pipeline_signal si
 void tx_pipeline_reset(struct tx_pipeline *p);
 
 // Sets the two bin rotations from this board's actual IF frequencies,
-// replacing the compiled-in defaults above. sound.c calls it once, after
-// hw_settings_load() has read bfo_freq and xtal_filter_center, before
-// any block is processed. Takes plain Hz rather than reading radio.c, so
-// tx_pipeline.c keeps linking without any hardware code.
+// replacing the compiled-in defaults above. sound.c calls it after
+// hw_settings_load() has read bfo_freq and xtal_filter_center, before any
+// block is processed, and again whenever the CW pitch changes. Takes plain
+// Hz rather than reading radio.c, so tx_pipeline.c keeps linking without
+// any hardware code.
+//
+// cw_tone_hz is the frequency cw.c is actually generating - normally
+// CW_PITCH_HZ, but runtime-settable via cw_set_pitch(). The CW rotation is
+// (bfo - xtal_center) - cw_tone_hz, so the tone and the shift cancel and a
+// key-down carrier lands on the dial whatever the pitch is. Passing a tone
+// the pipeline isn't actually being fed transmits off frequency by the
+// difference, which is why the pitch moves through radio_set_cw_pitch():
+// that updates cw.c and this together, and refuses mid-transmission.
 //
 // Rejects a placement that isn't physical - the difference must be
 // positive and inside the 0-Fs/2 the rotate can express - leaving the
 // previous values in place and returning -1, since transmitting at a
 // wrong IF is worse than transmitting at the default one.
-int tx_pipeline_set_if_placement(struct tx_pipeline *p, int bfo_hz, int xtal_center_hz);
+int tx_pipeline_set_if_placement(struct tx_pipeline *p, int bfo_hz, int xtal_center_hz,
+                                  int cw_tone_hz);
 
 // Sets the limiter's ceiling as an amplitude in (0, 1], where 1.0 is the
 // full-scale signal the per-band calibration turns into
