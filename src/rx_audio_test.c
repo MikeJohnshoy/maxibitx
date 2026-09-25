@@ -38,7 +38,7 @@
 //   list matches what selection accepts. A client that displays its own
 //   request instead of the reply would show a pitch the radio isn't using.
 // Case G: every one of the twelve sets is reachable and centered where it
-//   claims - a station on dial center stays loud at all three pitches
+//   claims - a station on dial center stays loud at every pitch
 //   (because the BFO moves with the pitch, which is the part that makes the
 //   control mean anything), while a station 600 Hz off is rejected
 //   progressively harder as the width narrows.
@@ -266,27 +266,69 @@ int main(void)
 			}
 		}
 
-		// Values between, below and above the rungs.
-		struct { int ask, want; } pitch_cases[] = {
-			{ 0, 600 }, { 100, 600 }, { 640, 600 }, { 660, 700 },
-			{ 725, 700 }, { 760, 800 }, { 5000, 800 }, { -400, 600 },
+		// Values between, below and above the rungs. Expectations are derived
+		// from the bank rather than written out, because the bank's contents
+		// are a design decision that changes: an earlier version of this case
+		// hard-coded 600/700/800 and had to be edited when the pitch range
+		// was extended, which is a test measuring the table it was written
+		// against instead of the behavior. What is actually being asserted is
+		// three rules - below the bottom rung snaps to the bottom, above the
+		// top snaps to the top, and in between snaps to the nearer neighbour.
+		int lo_p = rx_audio_narrow_pitch_at(0);
+		int hi_p = rx_audio_narrow_pitch_at(pitches - 1);
+		int lo_w = rx_audio_narrow_width_at(0);
+		int hi_w = rx_audio_narrow_width_at(widths - 1);
+
+		struct { int ask, want; const char *why; } edge_cases[] = {
+			{ 0,          lo_p, "pitch far below the lowest rung" },
+			{ -400,       lo_p, "negative pitch" },
+			{ lo_p - 10,  lo_p, "pitch just below the lowest rung" },
+			{ hi_p + 10,  hi_p, "pitch just above the highest rung" },
+			{ 100000,     hi_p, "pitch far above the highest rung" },
 		};
-		struct { int ask, want; } width_cases[] = {
-			{ 1, 150 }, { 200, 150 }, { 240, 300 }, { 380, 450 },
-			{ 9999, 600 },
-		};
-		for (unsigned i = 0; i < sizeof(pitch_cases) / sizeof(pitch_cases[0]); i++) {
-			int got = rx_audio_set_narrow_pitch(pitch_cases[i].ask);
-			printf("   pitch request %5d Hz -> %d Hz%s\n", pitch_cases[i].ask, got,
-			       got == pitch_cases[i].want ? "" : "   WRONG");
-			if (got != pitch_cases[i].want)
+		for (unsigned i = 0; i < sizeof(edge_cases) / sizeof(edge_cases[0]); i++) {
+			int got = rx_audio_set_narrow_pitch(edge_cases[i].ask);
+			printf("   pitch %6d Hz -> %4d Hz  (%s)%s\n", edge_cases[i].ask, got,
+			       edge_cases[i].why, got == edge_cases[i].want ? "" : "   WRONG");
+			if (got != edge_cases[i].want)
 				fails++;
 		}
-		for (unsigned i = 0; i < sizeof(width_cases) / sizeof(width_cases[0]); i++) {
-			int got = rx_audio_set_narrow_width(width_cases[i].ask);
-			printf("   width request %5d Hz -> %d Hz%s\n", width_cases[i].ask, got,
-			       got == width_cases[i].want ? "" : "   WRONG");
-			if (got != width_cases[i].want)
+
+		// Either side of every midpoint between adjacent rungs, so the snap
+		// is checked across the whole table rather than at one seam.
+		for (int i = 0; i + 1 < pitches; i++) {
+			int a = rx_audio_narrow_pitch_at(i), b = rx_audio_narrow_pitch_at(i + 1);
+			int mid = (a + b) / 2;
+			int below = rx_audio_set_narrow_pitch(mid - 10);
+			int above = rx_audio_set_narrow_pitch(mid + 10);
+			printf("   pitch %6d Hz -> %4d Hz, %6d Hz -> %4d Hz  (either side of "
+			       "%d/%d)%s\n", mid - 10, below, mid + 10, above, a, b,
+			       (below == a && above == b) ? "" : "   WRONG");
+			if (below != a || above != b)
+				fails++;
+		}
+
+		struct { int ask, want; const char *why; } width_edges[] = {
+			{ 1,      lo_w, "width far below the narrowest" },
+			{ 0,      lo_w, "zero width" },
+			{ 99999,  hi_w, "width far above the widest" },
+		};
+		for (unsigned i = 0; i < sizeof(width_edges) / sizeof(width_edges[0]); i++) {
+			int got = rx_audio_set_narrow_width(width_edges[i].ask);
+			printf("   width %6d Hz -> %4d Hz  (%s)%s\n", width_edges[i].ask, got,
+			       width_edges[i].why, got == width_edges[i].want ? "" : "   WRONG");
+			if (got != width_edges[i].want)
+				fails++;
+		}
+		for (int i = 0; i + 1 < widths; i++) {
+			int a = rx_audio_narrow_width_at(i), b = rx_audio_narrow_width_at(i + 1);
+			int mid = (a + b) / 2;
+			int below = rx_audio_set_narrow_width(mid - 10);
+			int above = rx_audio_set_narrow_width(mid + 10);
+			printf("   width %6d Hz -> %4d Hz, %6d Hz -> %4d Hz  (either side of "
+			       "%d/%d)%s\n", mid - 10, below, mid + 10, above, a, b,
+			       (below == a && above == b) ? "" : "   WRONG");
+			if (below != a || above != b)
 				fails++;
 		}
 		if (fails) {
@@ -298,9 +340,10 @@ int main(void)
 	// --- Case G: every set reachable, and centered where it claims -------
 	// A station on dial center is heard AT the selected pitch, because
 	// rx_audio_set_narrow_pitch() moves the BFO too - so on_center should
-	// stay strong at all three pitches. If only the filter moved and the BFO
-	// didn't, the 150 Hz-wide rows at 600 and 800 would collapse instead,
-	// which is exactly the bug this case exists to catch.
+	// stay strong at every pitch. If only the filter moved and the BFO
+	// didn't, every 150 Hz-wide row away from the default pitch would
+	// collapse instead - which is exactly the bug this case exists to catch,
+	// and it gets harder to miss the wider the pitch range grows.
 	{
 		const double offset = 600.0;  // heard at pitch + 600 (spectrum inverted, CW keeps the upper side)
 		printf("\nG. All %d sets, steady tone on dial center vs %.0f Hz off\n",
