@@ -107,7 +107,7 @@ already used in `antialias_filter_design.md`.
   report. Then §12 takes the other route entirely: since the FFT filter
   existed to make pitch and width adjustable, and elliptic coefficients
   merely can't be designed *at runtime*, stage 3 now carries a bank of
-  twelve elliptic filters pre-designed offline (three pitches x four
+  24 elliptic filters pre-designed offline (six pitches x four
   widths, `tools/gen_narrow_filters.py` -> `src/narrow_filter_bank.h`) and
   switches between them - quantized pitch/width at no CPU cost and no
   time-domain penalty, with the switching transient measured at 2dB
