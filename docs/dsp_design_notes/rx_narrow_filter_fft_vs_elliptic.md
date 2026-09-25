@@ -535,12 +535,10 @@ had.
 
 ### What this leaves open
 
-- **The TX sidetone doesn't follow the pitch.** `cw.c` generates it at
-  `CW_PITCH_HZ`, so at 600 or 800 the sidetone and the received tone
-  disagree. On-air TX frequency is unaffected either way, because the tone
-  and the compensating IF shift cancel - which is also why this is
-  separable: moving both together (`tx_pipeline_set_if_placement()` already
-  exists for the shift) changes the sidetone without moving the carrier.
+- ~~**The TX sidetone doesn't follow the pitch.**~~ **Fixed - see §13.** It
+  turned out to matter more than "cosmetic": a sidetone that disagrees with
+  the received pitch makes zero-beating by ear transmit off frequency by the
+  difference.
 - **Whether three pitches and four widths are the right rungs** is an
   on-air question. 150 and 300 Hz are the CW widths; 450 and 600 are for
   comfortable listening. A 100 Hz rung is available if wanted.
@@ -551,3 +549,85 @@ had.
 - **`M <mode> <passband>`'s passband argument is still cosmetic.** Snapping
   it to the nearest width rung would give stock Hamlib clients real filter
   control with no extensions, and would retire the `CWWIDTH` extension.
+
+## 13. The sidetone has to move too, or you transmit off frequency
+
+§12 shipped the pitch control with a gap it described as separable: `cw.c`
+kept generating the sidetone at `CW_PITCH_HZ` while the receiver moved. On
+air that gap is not cosmetic, and the reason is worth stating plainly.
+
+The pitch is the beat note that means *he is on my dial*. A station exactly
+on the dial is heard at the pitch; one *d* Hz above is heard at pitch + *d*;
+and a key-down lands on the dial, because `tx_pipeline.c`'s CW rotation is
+`(bfo_freq − xtal_filter_center) − CW_PITCH_HZ` — the tone and the shift
+cancel. So tuning a station until it beats at the selected pitch puts you
+exactly on his frequency.
+
+Now leave the sidetone at 700 and select 600. The operator does the natural
+thing and tunes until the received note matches the sidetone they know — 700
+Hz. But heard = pitch + *d*, so 700 = 600 + *d* means the station is 100 Hz
+**above** the dial, while the transmission goes out **on** the dial: 100 Hz
+low. Inside a 500 Hz filter he still hears you, so nothing announces the
+error; you just get answered less often than you should be.
+
+The fix is to move all four things that encode the pitch, together:
+
+| what | where | why it has to move |
+|---|---|---|
+| RX BFO | `rx_audio.c` | the tone you hear |
+| narrow filter | the bank, §12 | centered on that tone |
+| keyed tone | `cw.c` | the sidetone you zero-beat against |
+| CW IF shift | `tx_pipeline.c` | so the carrier stays on the dial |
+
+`radio_set_cw_pitch()` is the only function that does all four, and it is
+what `L CWPITCH` now calls. `radio.c` is the right owner — it already
+coordinates across modules for `radio_set_mode()` — and the alternative,
+`rx_audio.c` reaching into `cw.c` and `sound.c`, would have put transmit
+behavior behind a receive-side call.
+
+Two details the implementation turns on. The request is snapped by the RX
+side *first*, and that snapped value is what feeds `cw.c` — handing the
+sidetone the unsnapped request is precisely how the two would silently
+disagree again. And `sound_update_cw_if_placement()` reads `cw_get_pitch()`
+rather than taking a pitch argument, so the shift cannot be derived from a
+tone the radio isn't generating; the ordering (tone, then shift) follows from
+that.
+
+It refuses mid-transmission, returning the current pitch unchanged. The four
+updates aren't atomic, and a key-down straddling them would transmit the old
+tone against the new shift — briefly off frequency by the pitch change.
+Waiting for key-up costs nothing, since nobody adjusts pitch while sending.
+
+### The carrier moves by a few Hz, and always did
+
+`tx_pipeline_test.c` Case H measures where the carrier actually lands at
+each pitch, reading `cw_shift_bins` back from the pipeline rather than
+recomputing what it ought to be:
+
+| pitch | shift applied | carrier | off the dial |
+|---|---|---|---|
+| 600 Hz | 21984 Hz | 22584.38 Hz | −15.62 Hz |
+| 700 Hz | 21891 Hz | 22590.62 Hz | −9.38 Hz |
+| 800 Hz | 21797 Hz | 22596.88 Hz | −3.12 Hz |
+
+The ideal is 22600 Hz at every pitch. It can't be hit exactly, because the
+rotation is a whole number of 46.875 Hz bins and each pitch rounds
+differently — so the carrier sits within half a bin of the dial, and the
+spread across pitches is 12.5 Hz. Case H bounds both at half a bin; a whole
+bin would mean a rounding bug rather than quantization.
+
+**The 9.38 Hz at 700 Hz is not new.** `TX_IF_SHIFT_CW_BINS` has always
+rounded 21900 Hz to 467 bins = 21890.625 Hz, so every CW transmission this
+radio has ever made was about 9 Hz low of its dial reading. That is the
+first hard number for ARCHITECTURE.md §10 step 5's still-open "where does
+maxibitx actually transmit" question — nine Hz is far too small to have been
+noticed on air, and far too large to be nothing if anyone ever measures it.
+
+If that ever needs fixing, the clean answer is not a finer rotate but the
+reverse of the current arithmetic: choose the *tone* so the shift lands on
+an exact bin. At 700 Hz nominal, 467 bins wants a tone of
+22600 − 21890.625 = 709.375 Hz, which is inaudibly different from 700 and
+puts the carrier exactly on the dial. The filter bank wouldn't care — a 9 Hz
+offset inside a 150 Hz passband is nothing — and `vfo_start()`'s own 1.46 Hz
+quantization would then be the only residual. Not done, not needed at CW
+accuracies, but it is the shape of the fix.
