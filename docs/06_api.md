@@ -162,16 +162,19 @@ connected.
 | `l ALC` | `0.00` | ALC gain reduction in **dB**, not Hamlib's 0.0-1.0. Peak-held ~1 s so it reads as a meter. Read-only (extension) |
 | `u NARROW` / `U NARROW <0\|1>` | `0` / `RPRT 0` | Narrow CW filter on/off (extension) |
 | `u FFTFILT` / `U FFTFILT <0\|1>` | `0` / `RPRT 0` | Narrow filter type: 0 elliptic, 1 FFT (extension) |
+| `u MINPHASE` / `U MINPHASE <0\|1>` | `1` / `RPRT 0` | Which realization the FFT filter uses: 1 minimum phase (the default, 4.5 ms group delay), 0 linear phase (16 ms). Same magnitude response either way; no effect while the elliptic is selected (extension) |
+| `l CWPITCH` / `L CWPITCH <hz>` | `700` / `RPRT 0` | Stage 3's center pitch: 600, 700 or 800 Hz. Moves the RX BFO with it, so the tone you hear moves too — not just the filter. A real Hamlib level, advertised in `dump_state` |
+| `l CWWIDTH` / `L CWWIDTH <hz>` | `300` / `RPRT 0` | Stage 3's width: 150, 300, 450 or 600 Hz (extension). Both settings snap to the nearest value `src/narrow_filter_bank.h` carries; the log line reports which one was selected, and a client should display the `l` readback rather than what it asked for |
 | `u TONE` / `U TONE <0\|1\|2>` | `0` / `RPRT 0` | TX test-tone generator: 0 off, 1 single 1 kHz, 2 two-tone 700 + 1900 Hz. Doesn't key the radio; any PTT does. Off after 30 s in TX. Out of range: `RPRT -1` (extension) |
 | `v` / `V <vfo>` | `VFOA` / `RPRT 0` | Single VFO; any `V` is accepted. |
 | `chk_vfo` | `0` | Not in VFO mode - send commands without a VFO argument. |
-| `dump_state` | capability block | Protocol 0. TX ranges come from `data/hw_settings.ini`'s `[tx_band]` entries at 5 W; modes CW/USB/LSB/PKTUSB; max RIT 9999. `has_get_level` is `AF\|RFPOWER\|STRENGTH`, `has_set_level` is `AF\|RFPOWER`. |
+| `dump_state` | capability block | Protocol 0. TX ranges come from `data/hw_settings.ini`'s `[tx_band]` entries at 5 W; modes CW/USB/LSB/PKTUSB; max RIT 9999. `has_get_level` is `AF\|CWPITCH\|RFPOWER\|STRENGTH`, `has_set_level` is `AF\|CWPITCH\|RFPOWER`. |
 | `q`, `Q`, `quit` | (connection closes) | |
 
 Anything else replies `RPRT -1`. The extensions (`MICGAIN`, `ALC`,
-`NARROW`, `FFTFILT`, `TONE`) aren't Hamlib names or aren't in Hamlib's
+`NARROW`, `FFTFILT`, `MINPHASE`, `CWWIDTH`, `TONE`) aren't Hamlib names or aren't in Hamlib's
 units, so a stock Hamlib client won't use them, but they follow the same
-syntax. `AF`, `RFPOWER` and `STRENGTH` are real Hamlib levels and are
+syntax. `AF`, `CWPITCH`, `RFPOWER` and `STRENGTH` are real Hamlib levels and are
 advertised in `dump_state`.
 
 Two of these are easy to confuse. `RFPOWER` sets a ceiling: it lowers
