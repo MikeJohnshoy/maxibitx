@@ -74,4 +74,13 @@ double sound_get_tx_power(void);
    MICGAIN - a couple of dB on speech peaks is right. */
 double sound_get_alc_db(void);
 
+/* Re-derives the CW IF placement from this board's bfo_freq/
+   xtal_filter_center and whatever tone cw.c is currently generating, so
+   the two cancel to a key-down carrier on the dial. Called at startup and
+   again after every CW pitch change - radio_set_cw_pitch() owns that
+   sequence, so don't call this on its own expecting the pitch to move.
+   Returns -1 if the board's values give no usable IF, leaving the previous
+   placement in force. */
+int sound_update_cw_if_placement(void);
+
 #endif /* SOUND_H */
