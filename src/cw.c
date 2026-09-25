@@ -79,18 +79,29 @@ static const double cw_envelope[CW_ENVELOPE_LEN] = {
     0.996989, 0.997511, 0.997984, 0.998406, 0.998780, 0.999103, 0.999377, 0.999601, 0.999776,
     0.999900, 0.999975, 1.000000,
 };
-static struct vfo cw_tone;     // CW_PITCH_HZ oscillator
+static struct vfo cw_tone;     // keyed-tone oscillator, running at cw_pitch_hz
+static int cw_pitch_hz = CW_PITCH_HZ; // live pitch - see cw_set_pitch()
 static int envelope_pos = 0;   // 0 = silent, CW_ENVELOPE_LEN-1 = full output
 static int key_down = 0;       // last polled key state
 static int tx_active = 0;      // PTT/relay currently asserted for a keying burst
 static int hang_counter = 0;   // polls remaining before TX releases
 
 void cw_init(void) {
-    vfo_start(&cw_tone, CW_PITCH_HZ, 0);
+    cw_pitch_hz = CW_PITCH_HZ;
+    vfo_start(&cw_tone, cw_pitch_hz, 0);
     envelope_pos = 0;
     key_down = 0;
     tx_active = 0;
     hang_counter = 0;
+}
+
+void cw_set_pitch(int hz) {
+    cw_pitch_hz = hz;
+    vfo_start(&cw_tone, cw_pitch_hz, 0);
+}
+
+int cw_get_pitch(void) {
+    return cw_pitch_hz;
 }
 
 void cw_poll_key(void) {
