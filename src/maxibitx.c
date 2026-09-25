@@ -101,7 +101,11 @@ int main(int argc, char **argv) {
   // table above already built, same as cw_init(); no hardware of its
   // own to fail to open, so nothing to report but success.
   rx_audio_init();
-  printf("init: RX audio demod ready (CW pitch %d Hz)\n", CW_PITCH_HZ);
+  // radio_get_cw_pitch(), not CW_PITCH_HZ: rx_audio_init() selects the
+  // filter-bank entry nearest that constant, so printing the constant would
+  // report a pitch the radio isn't using if the bank's rungs ever change.
+  printf("init: RX audio demod ready (CW pitch %d Hz, narrow filter %d Hz)\n",
+         radio_get_cw_pitch(), rx_audio_get_narrow_width());
 
   // Bring up the rigctld-compatible control surface (src/interfaces/hamlib.c) first -
   // not a hard failure if the port's unavailable, same as HPSDR/UAC2.
