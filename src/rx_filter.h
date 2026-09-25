@@ -6,7 +6,7 @@
 // alongside the pre-designed elliptic bank (src/narrow_filter_bank.h).
 //
 // What this one is for, now that both offer pitch and width: it tunes
-// continuously rather than to the bank's three pitches and four widths,
+// continuously rather than to the bank's six pitches and four widths,
 // and its stopband keeps falling with distance (past -100dB) where an
 // equiripple elliptic floors out at its design figure of -50dB and stays
 // there. What it costs is attack on keyed CW - even in its minimum-phase
