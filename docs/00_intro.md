@@ -13,7 +13,7 @@ it is now.
 
 maxibitx runs on the Raspberry Pi inside an sbitx radio, in place of the
 `sbitx` software that shipped with it. It brings the hardware up and
-then serves three kinds of client:
+then serves three kinds of clients:
 
 - SDR applications (SparkSDR and other HPSDR Protocol 1 apps), which
   receive baseband I/Q over UDP and do their own display,
