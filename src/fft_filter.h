@@ -114,6 +114,22 @@ int filter_tune(struct filter *f, float low, float high, float kaiser_beta);
 // docs/ARCHITECTURE.md §5/§10 step 6).
 int filter_tune_real(struct filter *f, float low, float high, float kaiser_beta);
 
+// Replaces the response filter_tune()/filter_tune_real() just designed
+// with a minimum-phase one of the SAME magnitude: same passband, same
+// skirts, but the group delay collapsed and the impulse decaying from
+// time zero instead of sitting symmetrically about M/2. Returns -1 if
+// nothing has been tuned yet.
+//
+// Call it after every tune - a retune rebuilds fir_coeff from scratch,
+// so the conversion has to be reapplied (rx_filter.c does this).
+//
+// The cost is phase linearity: group delay is no longer constant across
+// the passband. For a CW filter that is the right trade - the ear hears
+// the 16ms delay and the slow attack, not the phase curve - but it is a
+// real one, which is why this is opt-in rather than what filter_tune()
+// does by default. See fft_filter.c for how the factorization works.
+int filter_min_phase(struct filter *f);
+
 // Phase 1 of filter_run(): prepends the saved M-1-sample history to
 // `in`'s L new complex samples, forward-FFTs the result, and multiplies
 // by fir_coeff - all unconditional, mode-independent passband work.
