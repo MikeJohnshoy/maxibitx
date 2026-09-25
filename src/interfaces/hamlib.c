@@ -262,12 +262,13 @@ static int handle_line(int fd, char *line)
             send_line(fd, buf);
             printf("rigctl: l ALC -> %.2f dB of gain reduction\n", sound_get_alc_db());
         } else if (strcmp(level_name, "CWPITCH") == 0) {
-            // A real Hamlib RIG_LEVEL, in Hz. Quantized here to stage 3's
-            // filter bank - see rx_audio.h.
+            // A real Hamlib RIG_LEVEL, in Hz. Quantized to stage 3's filter
+            // bank, and one value for the sidetone, the RX BFO and the
+            // narrow filter alike - see radio.h's radio_set_cw_pitch().
             char buf[16];
-            snprintf(buf, sizeof(buf), "%d\n", rx_audio_get_narrow_pitch());
+            snprintf(buf, sizeof(buf), "%d\n", radio_get_cw_pitch());
             send_line(fd, buf);
-            printf("rigctl: l CWPITCH -> %d Hz\n", rx_audio_get_narrow_pitch());
+            printf("rigctl: l CWPITCH -> %d Hz\n", radio_get_cw_pitch());
         } else if (strcmp(level_name, "CWWIDTH") == 0) {
             // Extension: Hamlib carries filter width in the m/M passband
             // argument rather than as a level, but that argument is still
@@ -307,11 +308,15 @@ static int handle_line(int fd, char *line)
             printf("rigctl: L RFPOWER %.6f -> %.6f of max_power\n", val, sound_get_tx_power());
         } else if (sscanf(cmd + 1, "%31s %lf", level_name, &val) == 2 &&
                    strcmp(level_name, "CWPITCH") == 0) {
-            // Snaps to the nearest bank entry and logs what it actually
-            // selected, since that can differ from what was asked for.
-            int got = rx_audio_set_narrow_pitch((int)val);
+            // radio_set_cw_pitch(), not rx_audio's own setter: the sidetone
+            // and the TX IF shift have to move with it or zero-beating by
+            // ear goes off frequency (radio.h). Snaps to the nearest bank
+            // entry, and returns the current pitch unchanged if this arrives
+            // mid-transmission - so the reply is always what is now in
+            // force, which is why it gets logged.
+            int got = radio_set_cw_pitch((int)val);
             send_rprt(fd, 0);
-            printf("rigctl: L CWPITCH %.0f -> %d Hz (stage 3 pitch, BFO follows)\n", val, got);
+            printf("rigctl: L CWPITCH %.0f -> %d Hz (sidetone and TX IF follow)\n", val, got);
         } else if (sscanf(cmd + 1, "%31s %lf", level_name, &val) == 2 &&
                    strcmp(level_name, "CWWIDTH") == 0) {
             int got = rx_audio_set_narrow_width((int)val);
