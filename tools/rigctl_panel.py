@@ -571,7 +571,8 @@ class Panel(tk.Tk):
         ttk.Label(pwrow, text="Pitch").pack(side="left")
         self.pitch_var = tk.StringVar(value="700")
         self.pitch_combo = ttk.Combobox(pwrow, textvariable=self.pitch_var, width=5,
-                                         state="readonly", values=("600", "700", "800"))
+                                         state="readonly",
+                                         values=("500", "600", "700", "800", "900", "1000"))
         self.pitch_combo.pack(side="left", padx=(4, 2))
         ttk.Label(pwrow, text="Hz    Width").pack(side="left")
         self.width_var = tk.StringVar(value="300")
