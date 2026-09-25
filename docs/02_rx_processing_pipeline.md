@@ -243,7 +243,8 @@ ALSA device.
 3. An optional narrow filter (an elliptic IIR by default, or
    `rx_filter.c`'s FFT filter), switched by rigctld `U NARROW` and
    `U FFTFILT` or the control panel. Its pitch and width are selectable at
-   runtime — `L CWPITCH` picks 600, 700 or 800 Hz and `L CWWIDTH` picks
+   runtime — `L CWPITCH` picks 500 to 1000 Hz in 100 Hz steps and
+   `L CWWIDTH` picks
    150, 300, 450 or 600 Hz, defaulting to 700/300. Changing the pitch moves
    the stage-2 BFO with it, so the tone you hear moves rather than the
    filter just detuning off it — and it moves the TX sidetone and CW IF
