@@ -223,10 +223,10 @@ static int handle_line(int fd, char *line)
     }
 
     if (cmd[0] == 'l' && (cmd[1] == '\0' || cmd[1] == ' ')) {
-        // get_level <name>. AF, RFPOWER and STRENGTH are real Hamlib
-        // levels (see dump_state); MICGAIN and ALC are this server's
-        // extensions, in their own units. Anything else (SQL, preamp,
-        // ...) has no equivalent here.
+        // get_level <name>. AF, CWPITCH, RFPOWER and STRENGTH are real
+        // Hamlib levels (see dump_state); MICGAIN, ALC and CWWIDTH are this
+        // server's extensions, in their own units. Anything else (SQL,
+        // preamp, ...) has no equivalent here.
         char level_name[32] = "";
         sscanf(cmd + 1, "%31s", level_name);
         if (strcmp(level_name, "AF") == 0) {
@@ -261,6 +261,22 @@ static int handle_line(int fd, char *line)
             snprintf(buf, sizeof(buf), "%.2f\n", sound_get_alc_db());
             send_line(fd, buf);
             printf("rigctl: l ALC -> %.2f dB of gain reduction\n", sound_get_alc_db());
+        } else if (strcmp(level_name, "CWPITCH") == 0) {
+            // A real Hamlib RIG_LEVEL, in Hz. Quantized here to stage 3's
+            // filter bank - see rx_audio.h.
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%d\n", rx_audio_get_narrow_pitch());
+            send_line(fd, buf);
+            printf("rigctl: l CWPITCH -> %d Hz\n", rx_audio_get_narrow_pitch());
+        } else if (strcmp(level_name, "CWWIDTH") == 0) {
+            // Extension: Hamlib carries filter width in the m/M passband
+            // argument rather than as a level, but that argument is still
+            // cosmetic here (see the 'M' handler), so a named level is the
+            // honest place for it until it isn't.
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%d\n", rx_audio_get_narrow_width());
+            send_line(fd, buf);
+            printf("rigctl: l CWWIDTH -> %d Hz\n", rx_audio_get_narrow_width());
         } else {
             send_rprt(fd, -1);
             printf("rigctl: l %s -> unsupported level\n", level_name);
@@ -289,6 +305,18 @@ static int handle_line(int fd, char *line)
             sound_set_tx_power(val); // clamps to [0, 1] itself
             send_rprt(fd, 0);
             printf("rigctl: L RFPOWER %.6f -> %.6f of max_power\n", val, sound_get_tx_power());
+        } else if (sscanf(cmd + 1, "%31s %lf", level_name, &val) == 2 &&
+                   strcmp(level_name, "CWPITCH") == 0) {
+            // Snaps to the nearest bank entry and logs what it actually
+            // selected, since that can differ from what was asked for.
+            int got = rx_audio_set_narrow_pitch((int)val);
+            send_rprt(fd, 0);
+            printf("rigctl: L CWPITCH %.0f -> %d Hz (stage 3 pitch, BFO follows)\n", val, got);
+        } else if (sscanf(cmd + 1, "%31s %lf", level_name, &val) == 2 &&
+                   strcmp(level_name, "CWWIDTH") == 0) {
+            int got = rx_audio_set_narrow_width((int)val);
+            send_rprt(fd, 0);
+            printf("rigctl: L CWWIDTH %.0f -> %d Hz (stage 3 width)\n", val, got);
         } else {
             send_rprt(fd, -1);
             printf("rigctl: L %s -> unsupported level or bad args\n", cmd + 1);
@@ -298,9 +326,10 @@ static int handle_line(int fd, char *line)
 
     if (cmd[0] == 'u' && (cmd[1] == '\0' || cmd[1] == ' ')) {
         // get_func <name>: NARROW (rx_audio.c's narrow stage-3 filter, on/off),
-        // FFTFILT (which stage-3 implementation it uses) and TONE (the TX
-        // test-tone generator, 0-2). Not Hamlib RIG_FUNC names - extensions
-        // for tools/rigctl_panel.py.
+        // FFTFILT (which stage-3 implementation it uses), MINPHASE (which
+        // realization the FFT one uses) and TONE (the TX test-tone
+        // generator, 0-2). Not Hamlib RIG_FUNC names - extensions for
+        // tools/rigctl_panel.py.
         char func_name[32] = "";
         sscanf(cmd + 1, "%31s", func_name);
         if (strcmp(func_name, "NARROW") == 0) {
@@ -315,6 +344,12 @@ static int handle_line(int fd, char *line)
             send_line(fd, buf);
             printf("rigctl: u FFTFILT -> %s\n",
                    rx_audio_get_narrow_filter_impl() ? "fft" : "elliptic");
+        } else if (strcmp(func_name, "MINPHASE") == 0) {
+            char buf[8];
+            snprintf(buf, sizeof(buf), "%d\n", rx_audio_get_narrow_filter_min_phase());
+            send_line(fd, buf);
+            printf("rigctl: u MINPHASE -> %s\n",
+                   rx_audio_get_narrow_filter_min_phase() ? "minimum phase" : "linear phase");
         } else if (strcmp(func_name, "TONE") == 0) {
             char buf[8];
             snprintf(buf, sizeof(buf), "%d\n", (int)tone_gen_get_mode());
@@ -344,6 +379,14 @@ static int handle_line(int fd, char *line)
             send_rprt(fd, 0);
             printf("rigctl: U FFTFILT %d -> stage-3 implementation %s\n", val,
                    val ? "fft" : "elliptic");
+        } else if (strcmp(func_name, "MINPHASE") == 0) {
+            // Re-designs the FFT filter's response, so it runs here on the
+            // rigctld thread rather than anywhere near the audio thread -
+            // see rx_audio_set_narrow_filter_min_phase().
+            rx_audio_set_narrow_filter_min_phase(val != 0);
+            send_rprt(fd, 0);
+            printf("rigctl: U MINPHASE %d -> FFT filter uses %s\n", val,
+                   val ? "minimum phase" : "linear phase");
         } else if (strcmp(func_name, "TONE") == 0) {
             // Test-tone generator: 0 off, 1 single tone, 2 two-tone
             // (tone_gen.h). Doesn't key the radio - any PTT source does.
@@ -388,11 +431,16 @@ static int handle_line(int fd, char *line)
         // Minimal, spec-shaped dump_state (format checked against Hamlib's
         // rigctl_parse.c). Advertises only what exists: no XIT/IF shift, no
         // preamp/attenuator, no filter list; max_rit is real (RIT_MAX_HZ).
-        // has_get_level = RIG_LEVEL_AF (0x8) | RIG_LEVEL_RFPOWER (1<<12) |
-        // RIG_LEVEL_STRENGTH (1<<30) = 0x40001008; has_set_level drops
-        // STRENGTH (an S-meter can't be set) = 0x1008. ALC isn't
-        // advertised: this server reports it in dB rather than Hamlib's
-        // 0.0-1.0, so it's an extension like MICGAIN.
+        // has_get_level = RIG_LEVEL_AF (0x8) | RIG_LEVEL_CWPITCH (1<<9) |
+        // RIG_LEVEL_RFPOWER (1<<12) | RIG_LEVEL_STRENGTH (1<<30) =
+        // 0x40001208; has_set_level drops STRENGTH (an S-meter can't be
+        // set) = 0x1208. ALC isn't advertised: this server reports it in dB
+        // rather than Hamlib's 0.0-1.0, so it's an extension like MICGAIN.
+        // Nor is CWWIDTH, which isn't a RIG_LEVEL at all. CWPITCH is
+        // advertised even though this radio quantizes it to three values:
+        // the level is real and a client's set is honored to the nearest
+        // one, which is the same deal a rig with a coarse pitch control
+        // offers.
         // has_get_func/set_func stay 0: NARROW/FFTFILT aren't RIG_FUNC bits.
         //
         // Mode masks carry the modes m/M actually handle: CW (0x2), USB
@@ -436,8 +484,8 @@ static int handle_line(int fd, char *line)
         send_line(fd, "\n");                          // attenuator list (empty)
         send_line(fd, "0x0\n");                       // has_get_func
         send_line(fd, "0x0\n");                       // has_set_func
-        send_line(fd, "0x40001008\n");                // has_get_level (AF | RFPOWER | STRENGTH)
-        send_line(fd, "0x1008\n");                    // has_set_level (AF | RFPOWER)
+        send_line(fd, "0x40001208\n");                // has_get_level (AF | CWPITCH | RFPOWER | STRENGTH)
+        send_line(fd, "0x1208\n");                    // has_set_level (AF | CWPITCH | RFPOWER)
         send_line(fd, "0x0\n");                       // has_get_parm
         send_line(fd, "0x0\n");                       // has_set_parm
         printf("rigctl: dump_state -> sent\n");
