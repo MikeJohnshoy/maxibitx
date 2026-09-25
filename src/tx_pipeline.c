@@ -198,12 +198,15 @@ void tx_pipeline_reset(struct tx_pipeline *p)
 	p->meter_db = 0.0f;
 }
 
-int tx_pipeline_set_if_placement(struct tx_pipeline *p, int bfo_hz, int xtal_center_hz)
+int tx_pipeline_set_if_placement(struct tx_pipeline *p, int bfo_hz, int xtal_center_hz,
+                                  int cw_tone_hz)
 {
-	// The SSB shift is the whole difference; CW's is that less the pitch
-	// it anchors on the dial (tx_pipeline.h).
+	// The SSB shift is the whole difference; CW's is that less the tone it
+	// anchors on the dial - the caller's live pitch rather than
+	// CW_PITCH_HZ, so moving the sidetone doesn't move the carrier
+	// (tx_pipeline.h).
 	double ssb_hz = (double)bfo_hz - (double)xtal_center_hz;
-	double cw_hz = ssb_hz - (double)CW_PITCH_HZ;
+	double cw_hz = ssb_hz - (double)cw_tone_hz;
 	double nyquist = TX_PIPELINE_FS_HZ / 2.0;
 
 	if (!(cw_hz > 0.0) || ssb_hz >= nyquist)
