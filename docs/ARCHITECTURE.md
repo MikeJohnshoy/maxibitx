@@ -1633,13 +1633,38 @@ for keying an external accessory's PTT, not this input line.)
      and `l`/`L CWWIDTH`, plus two selectors in `tools/rigctl_panel.py`.
      Full write-up:
      [`dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md`](dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md)
-     §12. **Still open:** `cw.c`'s TX sidetone stays at `CW_PITCH_HZ`, so at
-     600 or 800 it disagrees with the received tone (on-air TX frequency is
-     unaffected - the tone and its compensating IF shift cancel); whether
-     these are the right twelve rungs is an on-air question; and `M <mode>
-     <passband>`'s passband argument is still cosmetic, where snapping it to
-     the nearest width would give stock Hamlib clients the same control with
-     no extension.
+     §12. **Still open:** whether these are the right twelve rungs is an
+     on-air question; and `M <mode> <passband>`'s passband argument is still
+     cosmetic, where snapping it to the nearest width would give stock
+     Hamlib clients the same control with no extension.
+   - **Follow-up: the sidetone had to move with the pitch, and that was a
+     frequency-accuracy bug, not a nicety.** §12 left `cw.c` generating the
+     sidetone at `CW_PITCH_HZ` while the receiver moved, on the reasoning
+     that the on-air frequency was unaffected either way. True but
+     insufficient: the pitch is the beat note that means "he is on my dial,"
+     so an operator zero-beating against a 700Hz sidetone while the receiver
+     renders 600Hz tunes the station 100Hz above the dial and transmits
+     100Hz low - audible to nobody, answered by fewer people.
+     `radio_set_cw_pitch()` (radio.c, the right owner since it already
+     coordinates `radio_set_mode()`) now moves all four things that encode
+     the pitch: the RX BFO, the narrow filter, `cw.c`'s keyed tone, and
+     `tx_pipeline.c`'s CW rotation, which is now derived from the live tone
+     (`tx_pipeline_set_if_placement()` gained a `cw_tone_hz` parameter)
+     rather than the constant. It snaps on the RX side first and feeds that
+     snapped value to the TX side, and refuses mid-transmission, since the
+     four updates aren't atomic and a key-down straddling them would be
+     briefly off frequency.
+     `tx_pipeline_test.c` Case H is the guard: at all three pitches the
+     carrier lands on the same IF to within half a rotate bin.
+     **A pre-existing finding it surfaced:** the rotation is a whole number
+     of 46.875Hz bins, so 21,900Hz rounds to 467 bins and every CW
+     transmission this radio has made sits **~9Hz low of its dial reading**;
+     600 and 800Hz vary that between -15.6 and -3.1Hz. That is the first
+     hard number for step 5's still-open TX dial-accuracy question. The fix,
+     if it ever matters, is to choose the tone so the shift lands on an exact
+     bin (709.375Hz for 467 bins) rather than to build a finer rotate - see
+     [`dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md`](dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md)
+     §13.
    - **RX dial accuracy, confirmed on air:** the user reports receiving
      W1AW (ARRL HQ's own station, a well-known reference signal hams use
      for exactly this kind of check) at 7.0475 MHz and finding it exactly
