@@ -601,7 +601,7 @@ int main(void)
 	// new - the shipped 700 Hz placement has always carried its own share
 	// of it - so what this case bounds is the whole error, at every pitch.
 	{
-		const int pitches[] = { 600, 700, 800 };
+		const int pitches[] = { 500, 600, 700, 800, 900, 1000 };
 		const double ideal = (double)(TX_PIPELINE_BENCH_BFO_FREQ_HZ
 		                              - TX_PIPELINE_BENCH_XTAL_CENTER_HZ);
 		double worst_offset = 0.0, lowest = 1e9, highest = -1e9;
@@ -656,21 +656,31 @@ int main(void)
 			tx_pipeline_free(p);
 		}
 
-		printf("   Worst offset from the dial %.2f Hz, spread across pitches %.2f Hz\n",
-		       worst_offset, highest - lowest);
-		printf("   (one bin is %.3f Hz - both should be under half of that: the\n"
-		       "    rotate can't place a carrier finer than its own bin grid)\n",
-		       (double)TX_PIPELINE_BIN_HZ);
+		printf("   Worst offset from the dial %.2f Hz (bound %.2f), spread across "
+		       "pitches %.2f Hz (bound %.2f)\n",
+		       worst_offset, TX_PIPELINE_BIN_HZ / 2.0,
+		       highest - lowest, (double)TX_PIPELINE_BIN_HZ);
+		printf("   (one bin is %.3f Hz - the rotate can't place a carrier finer\n"
+		       "    than its own bin grid)\n", (double)TX_PIPELINE_BIN_HZ);
 
-		// Half a bin each. A whole bin would mean a rounding bug, not
-		// quantization.
+		// Two different bounds, for two different reasons.
+		//
+		// Any one pitch rounds to the nearest bin, so its carrier is within
+		// half a bin of the dial - more than that is a rounding bug rather
+		// than quantization.
 		if (worst_offset > TX_PIPELINE_BIN_HZ / 2.0) {
 			fprintf(stderr, "   FAIL: carrier is more than half a bin off the dial\n");
 			fails++;
 		}
-		if (highest - lowest > TX_PIPELINE_BIN_HZ / 2.0) {
+		// But each pitch rounds independently, one possibly up and another
+		// down, so two of them can legitimately sit a whole bin apart. This
+		// bound was half a bin while the bank held only 600/700/800, whose
+		// roundings happened to cluster within 12.5Hz; extending the bank to
+		// 500-1000Hz reached 31.25Hz and showed the bound, not the code, was
+		// wrong.
+		if (highest - lowest > TX_PIPELINE_BIN_HZ) {
 			fprintf(stderr, "   FAIL: the carrier moves with pitch by more than "
-			                "half a bin\n");
+			                "a full bin\n");
 			fails++;
 		}
 		if (fails)
