@@ -172,7 +172,7 @@ gap is an on-air question nobody has answered yet.
 There's a second twist. The FFT filter existed on the receive side to make
 pitch and width adjustable, and elliptic coefficients merely can't be
 designed *at runtime* — nothing stopped stage 3 from carrying more than one
-of them. It now carries twelve, three pitches by four widths, designed
+of them. It now carries 24, six pitches by four widths, designed
 offline and switched by loading a coefficient set. That gives the elliptic
 the adjustability the migration was for, at quantized values instead of
 continuous ones, and keeps its faster attack. So the receive side has two
