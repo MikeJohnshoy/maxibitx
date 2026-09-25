@@ -10,11 +10,17 @@
 //      positive baseband, rejects negative. Sideband selection
 //      happens by conjugating the input first (or not) - see
 //      rx_audio_process().
-//   2. Demod: CW mixes up to CW_PITCH_HZ; USB/LSB take the real part
-//      directly, so audio Hz == |RF - dial|.
-//   3. Optional narrow selectivity, ~300Hz around CW_PITCH_HZ: the fixed
-//      elliptic IIR (default) or rx_filter.c's FFT filter. Both always
-//      run, so switching or un-bypassing never clicks.
+//   2. Demod: CW and CWR mix up to the selected CW pitch; USB/LSB take
+//      the real part directly, so audio Hz == |RF - dial|.
+//   3. Optional narrow selectivity, centered on that same pitch: an
+//      elliptic IIR from a pre-designed bank (default) or rx_filter.c's
+//      FFT filter. Both always run, so switching or un-bypassing never
+//      clicks.
+//
+// Pitch and width are both selectable at runtime, 600/700/800Hz by
+// 150/300/450/600Hz - see rx_audio_set_narrow_pitch()/_width() in
+// rx_audio.h, and radio_set_cw_pitch() for why the pitch is normally moved
+// from radio.c rather than here.
 //   4. AGC, then rx_volume for out[] only.
 //
 // The AGC measures the RAW input magnitude, not any stage's output: its
@@ -335,7 +341,9 @@ static double narrow_filter_apply(struct narrow_filter_state *f, double x) {
 // full-scale hiss.
 #define AGC_MAX_GAIN 8.0e11
 
-static struct vfo bfo;                 // CW_PITCH_HZ mixing oscillator
+// Mixing oscillator for CW/CWR, running at the selected pitch - moved by
+// narrow_select() below, not fixed at CW_PITCH_HZ.
+static struct vfo bfo;
 // Local speaker volume, 0-100%, log (audio) taper: 1..100% maps evenly
 // onto -RX_VOLUME_RANGE_DB..0dB relative to RX_VOLUME_MAX, so every 1% is
 // 0.5dB; 0% is a true mute. RX_VOLUME_MAX is the loudest the local
@@ -638,7 +646,7 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
         double q_in = conjugate ? -q_samples[k] : q_samples[k];
         ssb_filter_apply(&ssb_state, i_samples[k], q_in, &fi, &fq);
 
-        // Stage 2: demod. CW and CWR mix up to CW_PITCH_HZ:
+        // Stage 2: demod. CW and CWR mix up to the selected pitch:
         //   Re[(fi + j*fq)(cos + j*sin)] = fi*cos - fq*sin
         // USB/LSB take the real part directly, so audio Hz == |RF - dial|,
         // which is what WSJT-X assumes. The BFO advances every sample
