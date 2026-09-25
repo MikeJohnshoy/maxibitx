@@ -17,8 +17,8 @@
 //      FFT filter. Both always run, so switching or un-bypassing never
 //      clicks.
 //
-// Pitch and width are both selectable at runtime, 600/700/800Hz by
-// 150/300/450/600Hz - see rx_audio_set_narrow_pitch()/_width() in
+// Pitch and width are both selectable at runtime - 500-1000Hz in 100Hz
+// steps, by 150/300/450/600Hz - see rx_audio_set_narrow_pitch()/_width() in
 // rx_audio.h, and radio_set_cw_pitch() for why the pitch is normally moved
 // from radio.c rather than here.
 //   4. AGC, then rx_volume for out[] only.
@@ -238,7 +238,7 @@ static void ssb_filter_apply(struct ssb_filter_state *f, double i_in, double q_i
 // direct-form biquad sections, ~1.9:1 shape factor (CW crystal-filter
 // territory) and a few ms of group delay at center. Elliptic coefficients
 // need offline design, so rather than one fixed filter there is a bank of
-// twelve, pre-designed at three pitches and four widths and selected at
+// 24, pre-designed at six pitches and four widths and selected at
 // runtime - narrow_filter_bank.h, generated and verified by
 // tools/gen_narrow_filters.py. The 700Hz/300Hz entry is bit-for-bit the
 // single filter this stage used to carry, so the default is unchanged.
