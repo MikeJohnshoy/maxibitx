@@ -31,6 +31,22 @@ beyond the commands it actually exercises:
                                   the shared FFT filter (rx_filter.c,
                                   docs/ARCHITECTURE.md step 6/7) - lets
                                   an operator A/B the two on real signals
+    u MINPHASE / U MINPHASE <0|1>  get / set which realization that FFT
+                                    filter uses - 1 = minimum phase
+                                    (default, 4.5ms group delay), 0 =
+                                    linear phase (16ms). Same magnitude
+                                    response either way; see
+                                    docs/dsp_design_notes/
+                                    rx_narrow_filter_fft_vs_elliptic.md
+    l CWPITCH / L CWPITCH <hz>   get / set stage 3's center pitch - 600,
+                                  700 or 800 Hz. Moves the RX BFO with it,
+                                  so the tone you hear moves too. A real
+                                  Hamlib level
+    l CWWIDTH / L CWWIDTH <hz>   get / set stage 3's width - 150, 300, 450
+                                  or 600 Hz. Both settings snap to the
+                                  nearest value the filter bank carries
+                                  (src/narrow_filter_bank.h) and the reply
+                                  says which one was selected
 
 It also shows a live spectrum, fed by a second, independent UDP
 connection to src/interfaces/iq_stream.c's lightweight I/Q telemetry stream (UDP
@@ -360,6 +376,11 @@ class Panel(tk.Tk):
         self._syncing_narrow = False
         # Same guard, same reasoning, for the FFT-filter selector below.
         self._syncing_fftfilt = False
+        # Same guard, same reasoning, for that filter's phase selector.
+        self._syncing_minphase = False
+        # Same guard, same reasoning, for the pitch/width selectors.
+        self._syncing_pitch = False
+        self._syncing_width = False
         # Same guard, same reasoning, for the mode selector below.
         self._syncing_mode = False
         # Same guard, same reasoning, for the TX test controls below.
@@ -517,6 +538,49 @@ class Panel(tk.Tk):
         self.fftfilt_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(nf, text="Use FFT filter (experimental)", variable=self.fftfilt_var,
                          command=self.on_fftfilt_toggled).grid(row=1, column=0, sticky="w")
+
+        # Which realization that FFT filter uses - rigctld's u/U MINPHASE.
+        # Checked (minimum phase) is the server's default and the one that
+        # sounds right on CW; unchecking it returns the linear-phase
+        # realization, which has the same magnitude response and 16ms of
+        # group delay instead of 4.5ms. Only audible while the box above is
+        # checked. See docs/dsp_design_notes/
+        # rx_narrow_filter_fft_vs_elliptic.md §11.
+        self.minphase_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(nf, text="Minimum phase (FFT filter only)", variable=self.minphase_var,
+                         command=self.on_minphase_toggled).grid(row=2, column=0, sticky="w")
+
+        # Stage 3's pitch and width - rigctld's l/L CWPITCH (a real Hamlib
+        # level) and l/L CWWIDTH (this server's extension). Both apply to
+        # whichever implementation is selected above.
+        #
+        # Fixed lists rather than values read from the server: rigctld has no
+        # "enumerate the choices" command, and hard-coding them here means
+        # this panel can drift from src/narrow_filter_bank.h if that table is
+        # ever regenerated at other frequencies. The server snaps whatever it
+        # is sent to its nearest entry and the reply says what it chose, so
+        # drift shows up as a selector that springs back rather than as
+        # silently wrong behavior - apply_pitch()/apply_width() below add any
+        # value the server reports that isn't already in the list.
+        #
+        # Both on one row: the window is already 1174px tall with
+        # resizable(False, False), so a stacked row per control would push
+        # the Power/ALC section below a 1080p screen's usable height.
+        pwrow = ttk.Frame(nf)
+        pwrow.grid(row=3, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(pwrow, text="Pitch").pack(side="left")
+        self.pitch_var = tk.StringVar(value="700")
+        self.pitch_combo = ttk.Combobox(pwrow, textvariable=self.pitch_var, width=5,
+                                         state="readonly", values=("600", "700", "800"))
+        self.pitch_combo.pack(side="left", padx=(4, 2))
+        ttk.Label(pwrow, text="Hz    Width").pack(side="left")
+        self.width_var = tk.StringVar(value="300")
+        self.width_combo = ttk.Combobox(pwrow, textvariable=self.width_var, width=5,
+                                         state="readonly", values=("150", "300", "450", "600"))
+        self.width_combo.pack(side="left", padx=(4, 2))
+        ttk.Label(pwrow, text="Hz").pack(side="left")
+        self.pitch_combo.bind("<<ComboboxSelected>>", self.on_pitch_selected)
+        self.width_combo.bind("<<ComboboxSelected>>", self.on_width_selected)
 
         # --- signal strength ("l STRENGTH") ---
         # Read-only, like a real rig's S-meter - no slider/checkbox to
@@ -684,6 +748,9 @@ class Panel(tk.Tk):
         mode_reply = self.client.query("m")
         narrow_reply = self.client.query("u NARROW")
         fftfilt_reply = self.client.query("u FFTFILT")
+        minphase_reply = self.client.query("u MINPHASE")
+        pitch_reply = self.client.query("l CWPITCH")
+        width_reply = self.client.query("l CWWIDTH")
         strength_reply = self.client.query("l STRENGTH")
         tone_reply = self.client.query("u TONE")
         ptt_reply = self.client.query("t")
@@ -691,7 +758,9 @@ class Panel(tk.Tk):
         alc_reply = self.client.query("l ALC")
         if freq_reply is None or rit_reply is None or vol_reply is None \
                 or micgain_reply is None or mode_reply is None or narrow_reply is None \
-                or fftfilt_reply is None or strength_reply is None \
+                or fftfilt_reply is None or minphase_reply is None \
+                or pitch_reply is None or width_reply is None \
+                or strength_reply is None \
                 or tone_reply is None or ptt_reply is None \
                 or power_reply is None or alc_reply is None:
             self.after(0, self.disconnect)
@@ -703,6 +772,9 @@ class Panel(tk.Tk):
         self.after(0, lambda: self.apply_mode(mode_reply))
         self.after(0, lambda: self.apply_narrow(narrow_reply))
         self.after(0, lambda: self.apply_fftfilt(fftfilt_reply))
+        self.after(0, lambda: self.apply_minphase(minphase_reply))
+        self.after(0, lambda: self.apply_pitch(pitch_reply))
+        self.after(0, lambda: self.apply_width(width_reply))
         self.after(0, lambda: self.apply_strength(strength_reply))
         self.after(0, lambda: self.apply_tone(tone_reply))
         self.after(0, lambda: self.apply_ptt(ptt_reply))
@@ -875,6 +947,39 @@ class Panel(tk.Tk):
         self.fftfilt_var.set(use_fft)
         self._syncing_fftfilt = False
 
+    def apply_minphase(self, reply):
+        try:
+            min_phase = int(reply) != 0
+        except ValueError:
+            return
+        # Same guard, same reasoning, as apply_narrow() above.
+        self._syncing_minphase = True
+        self.minphase_var.set(min_phase)
+        self._syncing_minphase = False
+
+    # Pitch/width readback. The server owns the list of valid values, so if
+    # it reports one this panel's dropdown doesn't offer, widen the dropdown
+    # rather than discard the reply - that keeps a regenerated
+    # narrow_filter_bank.h visible here instead of invisible.
+    def _apply_choice(self, reply, combo, var, flag_name):
+        try:
+            hz = str(int(float(reply)))
+        except ValueError:
+            return
+        values = list(combo.cget("values"))
+        if hz not in values:
+            values = sorted(values + [hz], key=int)
+            combo.configure(values=tuple(values))
+        setattr(self, flag_name, True)
+        var.set(hz)
+        setattr(self, flag_name, False)
+
+    def apply_pitch(self, reply):
+        self._apply_choice(reply, self.pitch_combo, self.pitch_var, "_syncing_pitch")
+
+    def apply_width(self, reply):
+        self._apply_choice(reply, self.width_combo, self.width_var, "_syncing_width")
+
     def apply_tone(self, reply):
         try:
             val = int(reply)
@@ -1021,6 +1126,29 @@ class Panel(tk.Tk):
             return
         use_fft = 1 if self.fftfilt_var.get() else 0
         threading.Thread(target=lambda: self.client.query(f"U FFTFILT {use_fft}"),
+                          daemon=True).start()
+
+    def on_minphase_toggled(self):
+        if self._syncing_minphase:
+            return  # apply_minphase() is syncing from a poll reply, not an operator click
+        if not self.client.connected():
+            return
+        min_phase = 1 if self.minphase_var.get() else 0
+        threading.Thread(target=lambda: self.client.query(f"U MINPHASE {min_phase}"),
+                          daemon=True).start()
+
+    def on_pitch_selected(self, _event=None):
+        if self._syncing_pitch or not self.client.connected():
+            return
+        hz = self.pitch_var.get()
+        threading.Thread(target=lambda: self.client.query(f"L CWPITCH {hz}"),
+                          daemon=True).start()
+
+    def on_width_selected(self, _event=None):
+        if self._syncing_width or not self.client.connected():
+            return
+        hz = self.width_var.get()
+        threading.Thread(target=lambda: self.client.query(f"L CWWIDTH {hz}"),
                           daemon=True).start()
 
     # ---- spectrum ----
