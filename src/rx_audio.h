@@ -14,7 +14,8 @@
 // header ("docs/ARCHITECTURE.md build order step 6/7") for what each one
 // is.
 enum rx_narrow_filter_impl {
-	RX_NARROW_FILTER_ELLIPTIC, // the original fixed 8-pole elliptic IIR (default)
+	RX_NARROW_FILTER_ELLIPTIC, // 8-pole elliptic IIR from the pre-designed
+	                            // bank, src/narrow_filter_bank.h (default)
 	RX_NARROW_FILTER_FFT,      // the shared FFT overlap-save filter (src/rx_filter.c)
 };
 
@@ -34,31 +35,38 @@ void rx_audio_set_volume(int percent);
 // on connect, before ever calling set_volume).
 int rx_audio_get_volume(void);
 
-// The narrow, post-demodulation "single signal" selectivity filter
-// centered on CW_PITCH_HZ - a separate stage from the wide image-reject
-// filter upstream of it (see rx_audio.c's file header and
+// The narrow, post-demodulation "single signal" selectivity filter,
+// centered on the selected CW pitch - a separate stage from the wide
+// image-reject filter upstream of it (see rx_audio.c's file header and
 // docs/dsp_design_notes/rx_audio_demod_design.md §7/§8 for why those two
-// are deliberately independent) - originally a fixed 8-pole elliptic
-// design, not runtime-adjustable. An earlier revision had a
-// rx_audio_set_filter_bw() here; it's gone deliberately, not an
-// oversight - see rx_audio_demod_design.md §8.2 for why:
+// are deliberately independent). Originally one fixed 8-pole elliptic
+// design; pitch and width are now selectable from a pre-designed bank
+// (rx_audio_set_narrow_pitch()/_width() below). An earlier revision had a
+// rx_audio_set_filter_bw() here that took an arbitrary bandwidth; that one
+// is gone deliberately, not an oversight - see rx_audio_demod_design.md
+// §8.2 for why, and note that the bank answers it differently rather than
+// reviving it, by offering only widths that were designed and measured
+// offline:
 // the SHAPE (coefficients) was fixed. Whether the operator hears it at
 // all is a different, much cheaper question - rx_audio_set_narrow_filter()
 // below just switches between the filter's output and its bypass, no
 // coefficient math involved, so it doesn't reopen that earlier decision.
 //
-// docs/ARCHITECTURE.md build order step 6/7: a second stage-3
-// implementation now exists alongside the elliptic one - src/rx_filter.c/
-// .h, the same shared FFT overlap-save engine tx_pipeline.c uses, with
-// pitch/width as live parameters instead of a baked-in design. Both
+// A second stage-3 implementation sits alongside the elliptic bank -
+// src/rx_filter.c/.h, the same shared FFT overlap-save engine
+// tx_pipeline.c uses. It tunes its passband continuously rather than
+// selecting from designed-in values, and its stopband keeps descending
+// where an equiripple elliptic floors out around -50dB; it pays for both
+// with a slower attack on keyed CW. Both
 // implementations run continuously regardless of which one is currently
 // selected (same "keep it warm so switching doesn't thump" reasoning the
 // enable/bypass toggle already used, just extended to cover switching
 // BETWEEN implementations too, not only on/off) - see
 // rx_audio_set_narrow_filter_impl() below and rx_audio.c's own comment
-// on why. Elliptic stays the default; this is meant for an on-air
-// listening comparison (§10 step 7), not a cutover - narrow_filter_coeffs[]
-// stays in the tree until that comparison says it's safe to remove.
+// on why. The elliptic bank stays the default; the FFT path is there for an
+// on-air listening comparison (§10 step 7), not as a cutover in waiting -
+// the bank stays whatever that comparison concludes, since it is also the
+// faster-attacking of the two.
 
 // Enable (1, the default) or bypass (0) stage 3, the narrow filter
 // above. The filter itself keeps running either way (its history stays
@@ -98,8 +106,8 @@ int rx_audio_get_narrow_filter_impl(void);
 // measuring better on the bench - see
 // docs/dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md.
 //
-// Minimum phase is the default because a narrow filter centered on
-// CW_PITCH_HZ exists to hear CW through. Linear phase stays reachable so
+// Minimum phase is the default because a narrow filter centered on the CW
+// pitch exists to hear CW through. Linear phase stays reachable so
 // the two can be compared on air, and because the step 6 bench numbers
 // were all measured against it. No effect while the elliptic
 // implementation is selected.
@@ -156,15 +164,16 @@ int rx_audio_narrow_pitch_at(int index);
 int rx_audio_narrow_width_at(int index);
 
 // Which demodulator rx_audio_process() applies:
-//   CW   keeps the upper side (as on most rigs) and mixes it up to
-//        CW_PITCH_HZ, so a station d Hz above dial is heard at
-//        CW_PITCH_HZ + d and tuning up lowers its pitch.
+//   CW   keeps the upper side (as on most rigs) and mixes it up to the
+//        selected pitch, so a station d Hz above dial is heard at
+//        pitch + d and tuning up lowers its pitch.
 //   USB  upper side, no BFO: audio Hz == RF - dial, the convention WSJT-X
 //        and other SSB-based apps assume. Also used for DIGITAL.
 //   LSB  lower side, no BFO: audio Hz == dial - RF.
 //   CWR  CW-reverse - CW's BFO with LSB's side, so a station d Hz BELOW
-//        dial is heard at CW_PITCH_HZ + d. Only the demodulator changes;
-//        transmit is identical to CW (radio.h).
+//        dial is heard at pitch + d. Only the demodulator changes;
+//        transmit is identical to CW (radio.h). CWR shares CW's BFO, so it
+//        follows the pitch with no separate handling.
 // Sideband selection accounts for the spectrally inverted I/Q (rx_audio.c's
 // RX_IQ_SPECTRUM_INVERTED). History: docs/dsp_design_notes/
 // rx_uac_out_digital_mode_bandwidth.md §10.
