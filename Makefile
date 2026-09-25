@@ -63,6 +63,13 @@ check-comments:
 check-comments-all:
 	python3 tools/check_comments.py --all
 
+# Verifies src/narrow_filter_bank.h still matches what
+# tools/gen_narrow_filters.py designs, and that all twelve sets still pass
+# their stability/shape/attack checks. A separate target because it needs
+# scipy: a Pi building this needs the generated header, not the design tools.
+check-filters:
+	python3 tools/gen_narrow_filters.py --check
+
 clean:
 	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-upsample48k \
 		src/fft_filter.o src/fft_filter_test.o src/tx_pipeline.o src/tx_pipeline_test.o \
