@@ -293,15 +293,31 @@ Bringing RX onto the same `filter_tune()`-based pipeline (§5) — same
 block size as TX/SSB, not a separately-sized "narrow CW" block — gives
 both pitch *and* width as live, continuous operator controls, on both
 transmit and receive, for the cost of one shared mechanism instead of
-two (`rx_audio.c`'s bespoke IIR plus a separate TX exciter). The
-accepted trade, quantified rather than hand-waved: at the same block
-size sbitx itself uses everywhere (`filter_new(1024, 1025)`, Kaiser
-`beta=5`), the realizable transition is roughly ~300Hz per side versus
-the elliptic design's measured ~135Hz per side — a real, roughly 2x
-softer skirt. That's the deliberate cost of a common, variable-pitch,
-variable-width, single-pipeline architecture instead of a sharper but
-fixed, TX/RX-duplicated one, and it's being made with the numbers in
-hand, not discovered later on the bench.
+two (`rx_audio.c`'s bespoke IIR plus a separate TX exciter).
+
+The accepted trade was quantified before building, at the block size
+sbitx itself uses everywhere (`filter_new(1024, 1025)`, Kaiser `beta=5`):
+a realizable transition of roughly ~300Hz per side against the elliptic
+design's measured ~135Hz per side — a roughly 2x softer skirt, taken
+deliberately in exchange for one variable-pitch, variable-width pipeline
+instead of two fixed ones.
+
+What got built is not that filter, and the cost landed somewhere else, so
+the paragraph above stands as the reasoning and this one as the result.
+`rx_filter.c` sizes its impulse from the FFT size and the ALSA period
+rather than copying sbitx's 1025 — `RX_FILTER_N - RX_FILTER_BLOCK_LEN + 1`
+= 3073 taps, three times as long — and measures **-3dB at 134Hz off pitch
+against the elliptic's ~160Hz, with a stopband 30-55dB deeper**: sharper
+than the filter it replaces, not softer. The skirt was never the price.
+The price is in the time domain — a linear-phase FIR of that length has a
+constant group delay of (M-1)/2 = 16.0ms, and a keyed CW element then
+needs ~20ms to settle, which is audible on CW in a way none of the
+magnitude numbers predict. The minimum-phase realization
+(`filter_min_phase()`, §10 step 6's follow-up) keeps the magnitude and
+buys most of that back: 4.5ms of group delay, 8.7ms to settle, against
+the elliptic's 3.6ms and 7.2ms measured the same way. See
+[`dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md`](dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md)
+for every measurement behind both paragraphs.
 
 ## 5. Proposed pipeline — one FFT chain for CW and SSB, TX and RX
 
@@ -1563,6 +1579,67 @@ for keying an external accessory's PTT, not this input line.)
      comparable (here, more) energy with no such emphasis to draw the
      ear's attention. Elliptic stays the default on the same basis as
      before.
+   - **Follow-up: the time domain was the missing variable, and it has a
+     fix that costs nothing.** Both explanations above (in-band ripple as
+     perceptual emphasis, then the measured-shape check that strengthened
+     it) reason entirely from magnitude responses, because that was all
+     that had been measured. Measuring the *time* domain against a keyed
+     CW element instead found a difference far larger than any of the
+     magnitude numbers: the FFT filter's envelope is 56.7dB below its
+     settled level 10ms after key-down, where the elliptic is within
+     0.7dB of settled, and it needs 20.4ms to reach -3dB against the
+     elliptic's 7.2ms. That is not selectivity - it is the 16.0ms
+     constant group delay of a linear-phase FIR, which is
+     `(M-1)/2 = 1536` samples by construction, plus the symmetric impulse
+     spreading the attack either side of it.
+     `fft_filter.c`'s new `filter_min_phase()` re-realizes the same
+     magnitude response as a minimum-phase filter (cepstral
+     factorization, then a faded truncation back into the M-tap budget
+     overlap-save needs): group delay 4.5ms, -3dB in 8.7ms, magnitude
+     within 0.06dB in the passband and 0.5dB anywhere in the stopband,
+     and no pre-response at all. `rx_filter_set_min_phase()` /
+     `rx_audio_set_narrow_filter_min_phase()` / rigctld `u`/`U MINPHASE`
+     select it, on by default when the FFT implementation is chosen;
+     `rx_filter_test.c` Case E is the bench proof. Full derivation and
+     every measurement:
+     [`dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md`](dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md)
+     §11. **What this does not settle:** whether the FFT path should now
+     become the default stage 3, and whether the perceived "wideband
+     hiss" goes away with it. Both need on-air listening - the bench has
+     said everything it can.
+   - **Follow-up: pitch and width arrive on the elliptic instead, as a bank
+     of twelve.** §11 made the FFT filter usable; this makes it optional.
+     The reason stage 3 was migrating to an FFT filter at all was runtime
+     pitch/width control (§4, §5) - and elliptic coefficients can't be
+     designed at runtime, which is why this stage carried exactly one
+     filter. But it never had to carry only one: three pitches
+     (600/700/800Hz) times four widths (150/300/450/600Hz) is twelve
+     coefficient sets, 1.9KB of rodata, one active at a time - the same CPU
+     cost as the single fixed filter, and less than the FFT filter's
+     4096-point transform every block. The elliptic's attack beats the
+     minimum-phase FFT filter at every width (5.2ms against 8.8ms at 300Hz),
+     so the trade is quantized control instead of continuous, rather than
+     control at a time-domain cost.
+     `tools/gen_narrow_filters.py` designs and verifies all twelve and emits
+     `src/narrow_filter_bank.h` (`make check-filters`); the shipped
+     700Hz/300Hz filter's design call was recovered by coefficient matching
+     and the bank reproduces it bit-for-bit, so the default is provably
+     unchanged. Switching sets costs 2dB of overshoot settling in under
+     14ms, measured - no crossfade needed. Selecting a pitch also moves
+     `rx_audio.c`'s software BFO, without which a new pitch only detunes the
+     filter off the tone (38dB of self-attenuation at the 150Hz width);
+     `rx_audio_test.c` Cases F-H are the guards. Reachable as rigctld
+     `l`/`L CWPITCH` (a real Hamlib level, now advertised in `dump_state`)
+     and `l`/`L CWWIDTH`, plus two selectors in `tools/rigctl_panel.py`.
+     Full write-up:
+     [`dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md`](dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md)
+     §12. **Still open:** `cw.c`'s TX sidetone stays at `CW_PITCH_HZ`, so at
+     600 or 800 it disagrees with the received tone (on-air TX frequency is
+     unaffected - the tone and its compensating IF shift cancel); whether
+     these are the right twelve rungs is an on-air question; and `M <mode>
+     <passband>`'s passband argument is still cosmetic, where snapping it to
+     the nearest width would give stock Hamlib clients the same control with
+     no extension.
    - **RX dial accuracy, confirmed on air:** the user reports receiving
      W1AW (ARRL HQ's own station, a well-known reference signal hams use
      for exactly this kind of check) at 7.0475 MHz and finding it exactly
