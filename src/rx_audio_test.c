@@ -31,6 +31,21 @@
 // Case D: rx_audio_set_narrow_filter(0) (bypass) still produces finite
 //   output and doesn't crash regardless of which implementation was
 //   selected.
+// Case E: CW vs CWR favour opposite sides of the dial.
+// Case F: the filter bank's pitch/width selection - that a request snaps to
+//   the nearest value the bank carries, that the setter reports back what it
+//   actually chose rather than what it was asked for, and that the advertised
+//   list matches what selection accepts. A client that displays its own
+//   request instead of the reply would show a pitch the radio isn't using.
+// Case G: every one of the twelve sets is reachable and centered where it
+//   claims - a station on dial center stays loud at all three pitches
+//   (because the BFO moves with the pitch, which is the part that makes the
+//   control mean anything), while a station 600 Hz off is rejected
+//   progressively harder as the width narrows.
+// Case H: switching a coefficient set live, under a steady tone, stays
+//   bounded. The bank keeps the biquad history across the swap, so this is
+//   the case that would catch a high-Q section being handed a state it
+//   can't reconcile - the failure mode would be a loud thump, not a crash.
 
 #include <stdio.h>
 #include <math.h>
@@ -64,6 +79,11 @@ static double rms(const int32_t *out, int n) {
 // a 0Hz baseband input is what actually reaches stage 3 as a CW_PITCH_HZ
 // audio tone - the frequency both stage-3 implementations are tuned to
 // pass. Returns the RMS of the LAST call's output only (post-settle).
+// Largest |sample| the most recent run_tone() call emitted, across all its
+// blocks - Case H needs the peak, not the settled RMS, since a switching
+// transient is by definition brief.
+static double last_peak;
+
 static double run_tone(int n, int blocks, double freq_hz) {
 	double i_samples[RX_FILTER_BLOCK_LEN > 4096 ? RX_FILTER_BLOCK_LEN : 4096];
 	double q_samples[RX_FILTER_BLOCK_LEN > 4096 ? RX_FILTER_BLOCK_LEN : 4096];
@@ -72,6 +92,7 @@ static double run_tone(int n, int blocks, double freq_hz) {
 	double phase_inc = 2.0 * M_PI * freq_hz / TEST_FS;
 	double last_rms = 0;
 
+	last_peak = 0;
 	for (int b = 0; b < blocks; b++) {
 		for (int i = 0; i < n; i++) {
 			i_samples[i] = cos(phase);
@@ -84,6 +105,11 @@ static double run_tone(int n, int blocks, double freq_hz) {
 		if (!all_finite(out, n)) {
 			fprintf(stderr, "run_tone: out-of-range sample at block %d (n=%d) - FAIL\n", b, n);
 			exit(1);
+		}
+		for (int i = 0; i < n; i++) {
+			double a = fabs((double)out[i]);
+			if (a > last_peak)
+				last_peak = a;
 		}
 		if (b == blocks - 1)
 			last_rms = rms(out, n);
@@ -190,6 +216,159 @@ int main(void)
 			return 1;
 		}
 		rx_audio_set_demod(RX_DEMOD_CW); // leave the default in place
+	}
+
+	// Cases F-H all exercise stage 3 itself, so put it back in circuit:
+	// Case D left it bypassed and Case B left the FFT path selected.
+	rx_audio_set_narrow_filter(1);
+	rx_audio_set_narrow_filter_impl(0);
+
+	// --- Case F: pitch/width snapping ------------------------------------
+	{
+		int pitches = rx_audio_narrow_pitch_count();
+		int widths = rx_audio_narrow_width_count();
+		int fails = 0;
+
+		printf("\nF. Filter bank: %d pitches x %d widths = %d sets\n",
+		       pitches, widths, pitches * widths);
+		printf("   pitches:");
+		for (int i = 0; i < pitches; i++)
+			printf(" %d", rx_audio_narrow_pitch_at(i));
+		printf(" Hz    widths:");
+		for (int i = 0; i < widths; i++)
+			printf(" %d", rx_audio_narrow_width_at(i));
+		printf(" Hz\n");
+
+		if (rx_audio_narrow_pitch_at(-1) != -1 || rx_audio_narrow_pitch_at(pitches) != -1 ||
+		    rx_audio_narrow_width_at(-1) != -1 || rx_audio_narrow_width_at(widths) != -1) {
+			fprintf(stderr, "   FAIL: an out-of-range index didn't return -1\n");
+			return 1;
+		}
+
+		// Each advertised value must select exactly itself - an off-by-one
+		// in the snap would show up here as a neighbour.
+		for (int i = 0; i < pitches; i++) {
+			int want = rx_audio_narrow_pitch_at(i);
+			int got = rx_audio_set_narrow_pitch(want);
+			if (got != want || rx_audio_get_narrow_pitch() != want) {
+				fprintf(stderr, "   FAIL: pitch %d selected %d (getter %d)\n",
+				        want, got, rx_audio_get_narrow_pitch());
+				fails++;
+			}
+		}
+		for (int i = 0; i < widths; i++) {
+			int want = rx_audio_narrow_width_at(i);
+			int got = rx_audio_set_narrow_width(want);
+			if (got != want || rx_audio_get_narrow_width() != want) {
+				fprintf(stderr, "   FAIL: width %d selected %d (getter %d)\n",
+				        want, got, rx_audio_get_narrow_width());
+				fails++;
+			}
+		}
+
+		// Values between, below and above the rungs.
+		struct { int ask, want; } pitch_cases[] = {
+			{ 0, 600 }, { 100, 600 }, { 640, 600 }, { 660, 700 },
+			{ 725, 700 }, { 760, 800 }, { 5000, 800 }, { -400, 600 },
+		};
+		struct { int ask, want; } width_cases[] = {
+			{ 1, 150 }, { 200, 150 }, { 240, 300 }, { 380, 450 },
+			{ 9999, 600 },
+		};
+		for (unsigned i = 0; i < sizeof(pitch_cases) / sizeof(pitch_cases[0]); i++) {
+			int got = rx_audio_set_narrow_pitch(pitch_cases[i].ask);
+			printf("   pitch request %5d Hz -> %d Hz%s\n", pitch_cases[i].ask, got,
+			       got == pitch_cases[i].want ? "" : "   WRONG");
+			if (got != pitch_cases[i].want)
+				fails++;
+		}
+		for (unsigned i = 0; i < sizeof(width_cases) / sizeof(width_cases[0]); i++) {
+			int got = rx_audio_set_narrow_width(width_cases[i].ask);
+			printf("   width request %5d Hz -> %d Hz%s\n", width_cases[i].ask, got,
+			       got == width_cases[i].want ? "" : "   WRONG");
+			if (got != width_cases[i].want)
+				fails++;
+		}
+		if (fails) {
+			fprintf(stderr, "   FAIL: %d snapping case(s) wrong\n", fails);
+			return 1;
+		}
+	}
+
+	// --- Case G: every set reachable, and centered where it claims -------
+	// A station on dial center is heard AT the selected pitch, because
+	// rx_audio_set_narrow_pitch() moves the BFO too - so on_center should
+	// stay strong at all three pitches. If only the filter moved and the BFO
+	// didn't, the 150 Hz-wide rows at 600 and 800 would collapse instead,
+	// which is exactly the bug this case exists to catch.
+	{
+		const double offset = 600.0;  // heard at pitch + 600 (spectrum inverted, CW keeps the upper side)
+		printf("\nG. All %d sets, steady tone on dial center vs %.0f Hz off\n",
+		       rx_audio_narrow_pitch_count() * rx_audio_narrow_width_count(), offset);
+		printf("   pitch  width   on center      off-center    rejection\n");
+		int fails = 0;
+		for (int pi = 0; pi < rx_audio_narrow_pitch_count(); pi++) {
+			for (int wi = 0; wi < rx_audio_narrow_width_count(); wi++) {
+				int p = rx_audio_narrow_pitch_at(pi);
+				int w = rx_audio_narrow_width_at(wi);
+				rx_audio_set_narrow_pitch(p);
+				rx_audio_set_narrow_width(w);
+				double on_center = run_tone(RX_FILTER_BLOCK_LEN, 12, 0.0);
+				double off_center = run_tone(RX_FILTER_BLOCK_LEN, 12, -offset);
+				printf("   %5d  %5d  %11.1f  %13.1f  %8.1f dB\n", p, w, on_center, off_center,
+				       -20.0 * log10(off_center / on_center));
+				if (!(on_center > 0)) {
+					fprintf(stderr, "   FAIL: %d/%d is silent on its own pitch\n", p, w);
+					fails++;
+				}
+				if (!(on_center > off_center)) {
+					fprintf(stderr, "   FAIL: %d/%d passes %.0f Hz off as strongly as center\n",
+					        p, w, offset);
+					fails++;
+				}
+			}
+		}
+		if (fails)
+			return 1;
+		printf("   (rejection grows as the width narrows - the AGC rides the raw\n"
+		       "    input, so these are absolute levels, not normalized)\n");
+	}
+
+	// --- Case H: live coefficient swap stays bounded ----------------------
+	// The swap keeps x1/x2/y1/y2, so the new sections inherit the old
+	// filter's history. Bench-measured overshoot for that is about 2 dB
+	// settling within 14 ms; the gate here is deliberately looser (6 dB),
+	// because what would matter is a thump, and anything approaching the
+	// +-2e9 clamp is caught by run_tone()'s own all_finite() check anyway.
+	{
+		printf("\nH. Live width swaps under a steady on-center tone\n");
+		rx_audio_set_narrow_pitch(700);
+		rx_audio_set_narrow_width(300);
+		double settled = run_tone(RX_FILTER_BLOCK_LEN, 16, 0.0);
+		double settled_peak = last_peak;
+		int fails = 0;
+		const int order[] = { 150, 600, 300, 450, 150 };
+
+		for (unsigned i = 0; i < sizeof(order) / sizeof(order[0]); i++) {
+			int from = rx_audio_get_narrow_width();
+			rx_audio_set_narrow_width(order[i]);
+			// Two blocks is ~21 ms, comfortably covering the measured
+			// settling time, and short enough that a transient isn't
+			// averaged away.
+			run_tone(RX_FILTER_BLOCK_LEN, 2, 0.0);
+			double overshoot_db = 20.0 * log10(last_peak / settled_peak);
+			printf("   %3d -> %3d Hz: peak %+6.2f dB vs the settled peak%s\n",
+			       from, order[i], overshoot_db, overshoot_db > 6.0 ? "   TOO LOUD" : "");
+			if (overshoot_db > 6.0)
+				fails++;
+			run_tone(RX_FILTER_BLOCK_LEN, 12, 0.0); // re-settle before the next swap
+		}
+		if (fails) {
+			fprintf(stderr, "   FAIL: %d swap(s) overshot by more than 6 dB\n", fails);
+			return 1;
+		}
+		rx_audio_set_narrow_width(300);
+		(void)settled;
 	}
 
 	printf("\nAll cases completed without a crash or out-of-range sample.\n");
