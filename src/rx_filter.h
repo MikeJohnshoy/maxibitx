@@ -95,6 +95,9 @@
 
 struct rx_filter {
 	struct filter *filt;
+	float pitch_hz;   // last tuned passband centre, kept so that
+	float width_hz;   // rx_filter_set_min_phase() can re-tune itself
+	int min_phase;    // see rx_filter_set_min_phase()
 };
 
 // Allocates and tunes the shared filter to [pitch_hz - width_hz/2,
@@ -125,6 +128,24 @@ struct rx_filter *rx_filter_new(float pitch_hz, float width_hz);
 // guarantee filter_tune()/filter_tune_real() themselves give (only
 // touches fir_coeff, not the running overlap-save state).
 int rx_filter_retune(struct rx_filter *r, float pitch_hz, float width_hz);
+
+// Selects a linear-phase (off, the default) or minimum-phase (on)
+// realization of the same passband, and re-tunes to apply it. The
+// magnitude response is the same either way; what changes is the time
+// domain. A linear-phase FIR of this length delays everything by
+// (M-1)/2 = 1536 samples - 16ms at 96kHz - and spreads a keyed CW
+// element's attack symmetrically around that, which is what makes this
+// filter sound duller on CW than the elliptic it replaces despite
+// measuring better on magnitude. Minimum phase keeps the magnitude and
+// drops most of the delay, at the cost of a group delay that varies
+// across the passband.
+//
+// A switch rather than the new default: the two are genuinely different
+// filters to listen to, every bench number in ARCHITECTURE.md §10 step 6
+// was measured against the linear-phase one, and SSB has no particular
+// reason to want either. See
+// docs/dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md.
+int rx_filter_set_min_phase(struct rx_filter *r, int on);
 
 // Processes one RX_FILTER_BLOCK_LEN-sample block of real, already-
 // demodulated audio (rx_audio.c stage 2's output) through the shared
