@@ -156,10 +156,18 @@ and 40,012,400 Hz).
 **Audio source.** `sound.c` fills one block of TX audio per ~10.7 ms
 period:
 
-- CW: `cw_get_sample()`, a 700 Hz tone (`CW_PITCH_HZ`) times a 5 ms
-  Blackman-Harris attack/decay envelope, so key transitions don't
-  click. The same tone is the local sidetone, so what you hear is
-  exactly what's being sent.
+- CW: `cw_get_sample()`, a keyed tone at the current CW pitch (700 Hz by
+  default, `CW_PITCH_HZ`) times a 5 ms Blackman-Harris attack/decay
+  envelope, so key transitions don't click. The same tone is the local
+  sidetone, so what you hear is exactly what's being sent. The pitch is
+  runtime-settable — `L CWPITCH`, through `radio_set_cw_pitch()` — and
+  moving it moves the sidetone, the receive pitch, the narrow filter and
+  the CW bin rotate together, so the transmitted frequency doesn't change.
+  The sidetone tracking the receive pitch is not a nicety: zero-beating
+  against a sidetone that disagrees with what you hear transmits off
+  frequency by the difference
+  ([`dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md`](dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md)
+  §13).
 - USB/LSB: the mic, from the WM8731's right capture channel, converted
   to about ±1 full scale (`MIC_TX_INPUT_SCALE`) and multiplied by
   `mic_tx_gain`. That gain is live-adjustable with rigctld `L MICGAIN`
@@ -192,22 +200,38 @@ For the example, the input is a 700 Hz tone.
    the lower.
 3. **Bin rotate** - the IF shift, done in the frequency domain instead
    of with an oscillator. What it aims at depends on the signal: CW and
-   CWR rotate by 467 bins (21,890.6 Hz, `TX_IF_SHIFT_CW_BINS`), putting
-   the 700 Hz tone on the dial; USB, LSB and DIGITAL rotate by 482 bins
+   CWR rotate by 467 bins (21,890.6 Hz, `TX_IF_SHIFT_CW_BINS`) at the
+   default pitch, putting the 700 Hz tone on the dial — the rotation is
+   `(bfo_freq − xtal_filter_center) − pitch`, so it is re-derived whenever
+   the pitch moves and the tone and the shift always cancel; USB, LSB and
+   DIGITAL rotate by 482 bins
    (22,593.8 Hz, `TX_IF_SHIFT_SSB_BINS`), putting the suppressed carrier
    there, so audio at `a` Hz goes out at dial ± `a`. Both sidebands use
    the same SSB rotation and extend from that carrier point in opposite
    directions. Both rotations are derived at startup from the
    `bfo_freq` and `xtal_filter_center` actually loaded from
    `data/hw_settings.ini` - `sound.c` calls
-   `tx_pipeline_set_if_placement()` once, after `hw_settings_load()`,
-   so a board whose IF differs transmits on frequency rather than off
+   `tx_pipeline_set_if_placement()` after `hw_settings_load()`, and again
+   via `sound_update_cw_if_placement()` on every pitch change, so a board
+   whose IF differs transmits on frequency rather than off
    by the difference. `tx_pipeline.h`'s `TX_IF_SHIFT_*_BINS` remain as
    the starting values and as what the bench harness uses, since that
    links no hardware code and has no settings file to read. A placement
    that isn't physical (a non-positive difference, or one past Nyquist)
    is rejected, leaving the defaults and logging it: transmitting at a
    wrong IF is worse than transmitting at the default one.
+
+   One measured consequence of doing the shift in whole bins: 46.875 Hz is
+   the finest placement available, so the carrier lands within half a bin
+   of the dial rather than exactly on it. At the default pitch, 21,900 Hz
+   rounds to 467 bins = 21,890.6 Hz, which puts every CW transmission
+   **about 9 Hz low of its dial reading** — not a regression, this has
+   always been true — and choosing 600 or 800 Hz varies it between −15.6
+   and −3.1 Hz. `tx_pipeline_test.c` Case H measures all three and bounds
+   them at half a bin. Well inside CW practice, and the first hard number
+   for the still-open question of where this radio actually transmits; see
+   [`dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md`](dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md)
+   §13 for the arithmetic and for the fix if it ever matters.
 4. **Inverse FFT.** Back to the time domain, still complex.
 5. **Peak limiter (ALC).** The signal is still complex at this point,
    so `2*|out_c[i]|` is the envelope the exciter will radiate - the
