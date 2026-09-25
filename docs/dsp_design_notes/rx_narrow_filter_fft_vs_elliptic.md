@@ -433,11 +433,13 @@ quantized control at no cost at all.
 
 Elliptic coefficients can't be designed at runtime, which is why stage 3
 originally carried exactly one filter. But nothing requires it to carry
-only one. Three pitches (600/700/800 Hz) times four widths
-(150/300/450/600 Hz) is twelve coefficient sets, 1.9 KB of rodata, one of
-which is active at a time - so the CPU cost is identical to the single
-fixed filter it replaces, and strictly lower than running the FFT filter's
-4096-point transform every block.
+only one. Six pitches (500 to 1000 Hz in 100 Hz steps) times four widths
+(150/300/450/600 Hz) is 24 coefficient sets, 3.8 KB of rodata, one of which
+is active at a time - so the CPU cost is identical to the single fixed
+filter it replaces, and strictly lower than running the FFT filter's
+4096-point transform every block. Adding rungs costs only rodata, which is
+why the range is set by what an operator would use rather than by what the
+arithmetic can afford.
 
 ### Where the design came from
 
@@ -521,8 +523,8 @@ that way - "does nothing, or kills the audio, depending on the width knob"
 
 So `rx_audio_set_narrow_pitch()` moves both: the bank entry and
 `vfo_start(&bfo, pitch, 0)`. `rx_audio_test.c` Case G is the regression
-guard - a station on dial center stays equally loud at all three pitches,
-which is only true if the BFO followed.
+guard - a station on dial center stays equally loud at every pitch, which
+is only true if the BFO followed.
 
 Two things worth being precise about. This is the *software audio-frequency*
 BFO, not `hw_settings.ini`'s `bfo_freq` (the ~22.6 kHz hardware
@@ -539,9 +541,10 @@ had.
   turned out to matter more than "cosmetic": a sidetone that disagrees with
   the received pitch makes zero-beating by ear transmit off frequency by the
   difference.
-- **Whether three pitches and four widths are the right rungs** is an
-  on-air question. 150 and 300 Hz are the CW widths; 450 and 600 are for
-  comfortable listening. A 100 Hz rung is available if wanted.
+- **Whether these are the right rungs** is an on-air question. 150 and
+  300 Hz are the CW widths; 450 and 600 are for comfortable listening. A
+  100 Hz width rung is available if wanted. The pitch range stops at 500 Hz
+  at the bottom for a measured reason - see §14.
 - **Which implementation should be the default** is still undecided, and
   the bank makes the comparison fairer rather than settling it: both
   implementations now track the same pitch and width, so switching compares
@@ -604,17 +607,21 @@ Waiting for key-up costs nothing, since nobody adjusts pitch while sending.
 each pitch, reading `cw_shift_bins` back from the pipeline rather than
 recomputing what it ought to be:
 
-| pitch | shift applied | carrier | off the dial |
-|---|---|---|---|
-| 600 Hz | 21984 Hz | 22584.38 Hz | −15.62 Hz |
-| 700 Hz | 21891 Hz | 22590.62 Hz | −9.38 Hz |
-| 800 Hz | 21797 Hz | 22596.88 Hz | −3.12 Hz |
+| pitch | shift applied | carrier | off the dial | level |
+|---|---|---|---|---|
+| 500 Hz | 22078 Hz | 22578.12 Hz | −21.88 Hz | −0.41 dB |
+| 600 Hz | 21984 Hz | 22584.38 Hz | −15.62 Hz | −0.04 dB |
+| 700 Hz | 21891 Hz | 22590.62 Hz | −9.38 Hz | −0.00 dB |
+| 800 Hz | 21797 Hz | 22596.88 Hz | −3.12 Hz | −0.00 dB |
+| 900 Hz | 21703 Hz | 22603.12 Hz | +3.12 Hz | −0.00 dB |
+| 1000 Hz | 21609 Hz | 22609.38 Hz | +9.38 Hz | −0.00 dB |
 
 The ideal is 22600 Hz at every pitch. It can't be hit exactly, because the
 rotation is a whole number of 46.875 Hz bins and each pitch rounds
-differently — so the carrier sits within half a bin of the dial, and the
-spread across pitches is 12.5 Hz. Case H bounds both at half a bin; a whole
-bin would mean a rounding bug rather than quantization.
+differently — so the carrier sits within half a bin of the dial. Case H
+bounds the individual offset at half a bin, and the *spread* between pitches
+at a full bin, because two pitches can round in opposite directions; more
+than that in either case would be a rounding bug rather than quantization.
 
 **The 9.38 Hz at 700 Hz is not new.** `TX_IF_SHIFT_CW_BINS` has always
 rounded 21900 Hz to 467 bins = 21890.625 Hz, so every CW transmission this
@@ -631,3 +638,50 @@ puts the carrier exactly on the dial. The filter bank wouldn't care — a 9 Hz
 offset inside a 150 Hz passband is nothing — and `vfo_start()`'s own 1.46 Hz
 quantization would then be the only residual. Not done, not needed at CW
 accuracies, but it is the shape of the fix.
+
+## 14. Extending the bank to 500-1000 Hz, and what that cost
+
+Three pitches was a starting point, not a design: most rigs offer a CW
+pitch range on the order of 400-1000 Hz. The bank now runs 500 to 1000 Hz
+in 100 Hz steps against the same four widths — 24 sets, 3.8 KB of rodata,
+still one filter active at a time, so still no CPU cost over the single
+fixed filter this stage started with.
+
+Extending it was editing two lists in `tools/gen_narrow_filters.py` and
+rerunning it, which is the whole reason the generator exists. All 24 sets
+pass the same checks, and they are strikingly uniform: every width lands on
+the same measured −3 dB figure at every pitch (162/324/486/648 Hz), the
+stopband floor is −50.0 to −50.2 dB throughout, attack runs 3.2 to 9.2 ms,
+and the worst pole radius is 0.99937 at 500 Hz / 150 Hz — no worse than the
+0.99933 the original three already carried. Nothing about the wider range
+stresses the arithmetic.
+
+### Two things the extension taught
+
+**A bound in the test was wrong.** Case H asserted that the carrier's
+*spread* across pitches stayed inside half a bin. That passed while the bank
+held 600/700/800 Hz, whose roundings happen to cluster within 12.5 Hz. At
+500 to 1000 Hz the spread is 31.25 Hz and the assertion failed — correctly
+reporting that the bound, not the code, was wrong: each pitch rounds
+independently to its own nearest bin, one possibly up while another rounds
+down, so two pitches can legitimately sit a full bin apart. The individual
+offset bound of half a bin was right and is unchanged. Worth recording
+because it is the good case: a test that failed on being asked a harder
+question, rather than a test that silently kept passing.
+
+**500 Hz is the floor, and it is the TX pipeline's floor, not the bank's.**
+Case H's level column shows the CW carrier at −0.41 dB at 500 Hz against
+−0.00 dB from 700 Hz up. That is not the narrow filter — it is
+`tx_pipeline.c`'s own 300-3000 Hz passband, whose Kaiser transition is
+roughly 340 Hz wide at M=1025, so a 500 Hz tone still sits on the lower
+skirt. Four tenths of a dB of transmit power is nothing, but the roll-off
+steepens below 500, and a 400 Hz pitch would be measurably down. Extending
+lower would therefore mean widening the TX passband's lower edge, not adding
+bank entries — a separate change with its own consequences for what else
+that edge is keeping out.
+
+Also worth noting for anyone reading the carrier table: the extreme pitches
+have the largest dial offsets (−21.9 Hz at 500 Hz), since the quantization
+residual grows with distance from wherever the bin grid happens to align.
+Still far inside CW practice, and still the same argument for the
+tone-chosen-to-land-on-a-bin fix in §13 if it ever matters.
