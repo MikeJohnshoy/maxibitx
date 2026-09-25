@@ -138,6 +138,16 @@ def check_file(path):
     if not path.endswith((".c", ".h")):
         return hits, errors
 
+    # A generated file's comments aren't hand-written prose that can drift
+    # from the code it sits next to, so the heuristics below don't apply: its
+    # header describes its own provenance and any long block is a table its
+    # generator emits alongside the values. The header check above still
+    # runs - a generated file naming the wrong file is a real bug in
+    # whatever generated it. The marker must appear near the top, so a
+    # passing mention further down can't exempt a hand-written file.
+    if "GENERATED FILE" in "\n".join(text.split("\n")[:10]):
+        return hits, errors
+
     comments = list(comment_lines(text))
     for ln, body in ((c[0], c[1]) for c in comments):
         if DOC_POINTER.search(body):
