@@ -119,7 +119,22 @@ SPECTRUM_REDRAW_MS = 66        # ~15 fps - the FFT itself runs far faster than t
                                 # than a human eye or a Tkinter Canvas benefits from
 SPECTRUM_DB_FLOOR = -100.0     # y-axis floor, dBFS-style (0dB ~= one full-scale tone -
                                 # see SpectrumClient's docstring on how that's calibrated)
-SPECTRUM_DB_CEILING = 0.0
+# Y-axis top. NOT 0dBFS: nothing on this receiver's raw I/Q gets anywhere
+# near full scale, so a 0dB top left the strongest real signals at about
+# half height and spent the upper half of the canvas on levels that never
+# occur. -37.5 puts a -50dBFS signal at 80% of the height
+# ((-50) - (-100)) / ((-37.5) - (-100)) = 0.8 - which was the measured peak
+# on this board, and it also stretches the whole trace: the gap between a
+# -85dB noise floor and a -50dB peak grows from 35% of the canvas to 56%,
+# so it is more readable rather than just taller.
+#
+# The cost is headroom. The trace flat-tops above -37.5dBFS, which is only
+# 12.5dB above that measured peak, so a much stronger signal will clip
+# against the top - the status line says so when it happens. Both this and
+# the floor are display-only; raise this number if clipping shows up
+# regularly, and use the peak/floor readout in the status line to pick a
+# window that matches your own band conditions rather than these.
+SPECTRUM_DB_CEILING = -37.5
 # The FFT itself still covers the full native +-48kHz (FFT_SIZE stays
 # 2048 either way - resolution is unaffected), but only the middle
 # +-15kHz gets drawn: docs/dsp_design_notes/antialias_filter_design.md's
@@ -610,7 +625,14 @@ class Panel(tk.Tk):
                                           background="#111", highlightthickness=0)
         self.spectrum_canvas.pack()
         self.spectrum_status_var = tk.StringVar(value="no spectrum data yet")
-        ttk.Label(spec, textvariable=self.spectrum_status_var).pack(anchor="w", pady=(4, 0))
+        # wraplength pinned to the canvas width: this label's text is the only
+        # thing in the window whose length varies at runtime, and the window
+        # is sized to its contents and then frozen by resizable(False, False).
+        # Without the cap, a long status line silently widens the whole panel
+        # and there is no way for the operator to drag it back - measured at
+        # 891px against the normal 596px before this was added.
+        ttk.Label(spec, textvariable=self.spectrum_status_var,
+                   wraplength=self.spectrum_canvas_w).pack(anchor="w", pady=(4, 0))
 
         # --- TX test ---
         # rigctld's u/U TONE (the test-tone generator, tone_gen.h) and t/T
@@ -1186,6 +1208,7 @@ class Panel(tk.Tk):
 
             n = len(db)
             xs = np.arange(n) * (w / n)
+            peak_db, floor_db = float(np.max(db)), float(np.min(db))
             clipped = np.clip(db, SPECTRUM_DB_FLOOR, SPECTRUM_DB_CEILING)
             frac = (clipped - SPECTRUM_DB_FLOOR) / (SPECTRUM_DB_CEILING - SPECTRUM_DB_FLOOR)
             ys = h - frac * h
@@ -1193,6 +1216,15 @@ class Panel(tk.Tk):
             coords[0::2] = xs
             coords[1::2] = ys
             canvas.create_line(*coords.tolist(), fill="#3fa", width=1)
+
+            # A trace against the top is flat-topped, not peaking - say so
+            # where it is happening rather than only in the status line, since
+            # a clipped peak and a genuinely strong one look identical.
+            # SPECTRUM_DB_CEILING is the knob; its comment has the trade.
+            if peak_db >= SPECTRUM_DB_CEILING:
+                canvas.create_line(0, 1, w, 1, fill="#f55", width=1)
+                canvas.create_text(w - 4, 8, text="clipping", anchor="e",
+                                    fill="#f55", font=("monospace", 8))
 
             # Dial-center line plus frequency ticks across the displayed
             # +-SPECTRUM_DISPLAY_HALF_SPAN_HZ span.
@@ -1209,8 +1241,13 @@ class Panel(tk.Tk):
 
             freq_note = f" (dial {self.current_freq_hz:,} Hz)".replace(",", ".") \
                 if self.current_freq_hz is not None else ""
+            # Peak and floor of what is actually on screen (pre-clip), so the
+            # dB window above can be chosen from measurements rather than
+            # guesses. Kept terse on purpose - see the wraplength comment
+            # where this label is built.
             self.spectrum_status_var.set(
-                f"live - {FFT_SIZE}-pt FFT, {bin_hz:.1f} Hz/bin{freq_note}")
+                f"live - {FFT_SIZE}-pt, {bin_hz:.1f} Hz/bin, "
+                f"peak {peak_db:.1f}, floor {floor_db:.1f} dB{freq_note}")
 
         self.after(SPECTRUM_REDRAW_MS, self.redraw_spectrum)
 
