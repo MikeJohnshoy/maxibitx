@@ -1612,9 +1612,9 @@ for keying an external accessory's PTT, not this input line.)
      The reason stage 3 was migrating to an FFT filter at all was runtime
      pitch/width control (§4, §5) - and elliptic coefficients can't be
      designed at runtime, which is why this stage carried exactly one
-     filter. But it never had to carry only one: three pitches
-     (600/700/800Hz) times four widths (150/300/450/600Hz) is twelve
-     coefficient sets, 1.9KB of rodata, one active at a time - the same CPU
+     filter. But it never had to carry only one: six pitches (500-1000Hz in
+     100Hz steps) times four widths (150/300/450/600Hz) is 24
+     coefficient sets, 3.8KB of rodata, one active at a time - the same CPU
      cost as the single fixed filter, and less than the FFT filter's
      4096-point transform every block. The elliptic's attack beats the
      minimum-phase FFT filter at every width (5.2ms against 8.8ms at 300Hz),
@@ -1654,8 +1654,10 @@ for keying an external accessory's PTT, not this input line.)
      snapped value to the TX side, and refuses mid-transmission, since the
      four updates aren't atomic and a key-down straddling them would be
      briefly off frequency.
-     `tx_pipeline_test.c` Case H is the guard: at all three pitches the
-     carrier lands on the same IF to within half a rotate bin.
+     `tx_pipeline_test.c` Case H is the guard: at every pitch the carrier
+     lands on the same IF to within half a rotate bin. Extending the bank
+     from three pitches to six is what caught that case's own spread bound
+     being too tight - see the design note's §14.
      **A pre-existing finding it surfaced:** the rotation is a whole number
      of 46.875Hz bins, so 21,900Hz rounds to 467 bins and every CW
      transmission this radio has made sits **~9Hz low of its dial reading**;
