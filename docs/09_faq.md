@@ -154,11 +154,30 @@ filter for both directions, which is what makes pitch and width live
 operator controls instead of recompiled coefficients. The cost was
 quantified before it was accepted: roughly 300 Hz of transition per side
 against the elliptic design's measured 135 Hz, about a 2× softer skirt.
-Worth noting that the unification is not complete — after an on-air
-comparison the elliptic IIR remains the *default* for the receive narrow
-filter, with the FFT implementation selectable at runtime
-(`u FFTFILT`), because the FFT version sounded worse on real signals in
-a way the bench could not reproduce.
+
+That prediction turned out to be wrong in an interesting direction. The
+filter that got built is three times longer than the one those numbers
+describe, and it measures *sharper* than the elliptic, with a stopband
+30–55 dB deeper. The real cost was in the time domain, where nobody had
+looked: a linear-phase FIR of that length delays everything by 16 ms, and
+a keyed CW element took 20 ms to settle against the elliptic's 7 ms. A
+minimum-phase realization of the same response (`u MINPHASE`, on by
+default) brings those to 4.5 ms and 8.7 ms with the magnitude response
+intact. The unification still isn't complete — the elliptic IIR remains
+the *default* receive narrow filter, with the FFT implementation
+selectable at runtime (`u FFTFILT`), because it sounded worse on real
+signals than the bench predicted, and whether minimum phase closes that
+gap is an on-air question nobody has answered yet.
+
+There's a second twist. The FFT filter existed on the receive side to make
+pitch and width adjustable, and elliptic coefficients merely can't be
+designed *at runtime* — nothing stopped stage 3 from carrying more than one
+of them. It now carries twelve, three pitches by four widths, designed
+offline and switched by loading a coefficient set. That gives the elliptic
+the adjustability the migration was for, at quantized values instead of
+continuous ones, and keeps its faster attack. So the receive side has two
+working answers now, and the shared-pipeline argument is weaker on receive
+than it looked.
 
 ### Why is the raw I/Q spectrally inverted?
 
@@ -475,8 +494,9 @@ limitations.
 
 A small standalone Tk control panel, about a thousand lines of Python,
 that runs on the Pi or any machine on the network. It shows frequency,
-mode, RIT, volume, the narrow-filter switches, mic gain, TX power, an
-S-meter, an ALC meter, a TX test section and a live spectrum.
+mode, RIT, volume, the narrow-filter switches and its pitch/width
+selectors, mic gain, TX power, an S-meter, an ALC meter, a TX test section
+and a live spectrum.
 
 Two things make it more interesting than a utility. First, it is a
 *client*, not part of the daemon — it speaks the ordinary rigctld
@@ -485,7 +505,9 @@ everything it does, any other application can do. It is the working
 proof that [`06_api.md`](06_api.md) is sufficient. Second, it is a
 development instrument: the `u FFTFILT` switch exists so an operator can
 A/B the elliptic and FFT narrow filters on real signals, which is how
-the FFT version was found to sound worse than the bench predicted.
+the FFT version was found to sound worse than the bench predicted — and
+`u MINPHASE` is there for the follow-up A/B, between the two realizations
+of that same FFT filter.
 
 ### Could `rigctl_panel.py` be replaced by a full-featured SDR application?
 
