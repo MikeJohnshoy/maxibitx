@@ -2,9 +2,10 @@
 //
 // A tunable, FFT overlap-save bandpass filter - the shared primitive
 // docs/ARCHITECTURE.md's plan is built on. One instance of this does
-// the "software-domain sideband separation" job SSB TX needs, and
-// (later) the same job rx_audio.c's fixed elliptic stage 3 does today,
-// just with a live-adjustable passband instead of a baked-in one.
+// the "software-domain sideband separation" job SSB TX needs, and another
+// (rx_filter.c) is one of the two implementations of rx_audio.c's stage-3
+// narrow filter - the one whose passband tunes continuously, against an
+// elliptic bank offering a fixed set of pitches and widths.
 //
 // The frequency-domain design math (make_kaiser/window_filter/
 // filter_tune) is ported near-verbatim from real sbitx's
