@@ -2,24 +2,30 @@
 //
 // The shared FFT overlap-save filter (fft_filter.c/.h), applied to
 // rx_audio.c's stage 3 - the narrow, post-demodulation "single signal"
-// selectivity stage that today is a fixed 8-pole elliptic IIR
-// (narrow_filter_coeffs[] in rx_audio.c). See docs/ARCHITECTURE.md §5's
-// "RX pipeline" section for why this replacement exists (pitch/width as
-// live filter_tune()-style parameters instead of a baked-in, offline-
-// designed elliptic response) and §10 step 6 for the bench numbers this
-// module was checked against before ever touching rx_audio.c's real,
-// live audio path.
+// selectivity stage - as the second of that stage's two implementations,
+// alongside the pre-designed elliptic bank (src/narrow_filter_bank.h).
 //
-// docs/ARCHITECTURE.md build order step 6 status: this module exists
-// and is bench-verified (rx_filter_test.c) against synthetic tones - it
-// is NOT wired into rx_audio.c yet. rx_audio.c's existing
-// narrow_filter_coeffs[]/narrow_filter_apply() are completely untouched
-// and are still what the real, running binary demodulates CW with; this
-// is a parallel, proven-on-the-bench-only replacement, not yet a live
-// one - same "bench first, live-wire and on-air-compare later" split
-// build order steps 4/5 already used for the TX side. See
-// ARCHITECTURE.md §10 step 6 for what's proven vs. still open, and
-// step 7 for what's still ahead before any live cutover.
+// What this one is for, now that both offer pitch and width: it tunes
+// continuously rather than to the bank's three pitches and four widths,
+// and its stopband keeps falling with distance (past -100dB) where an
+// equiripple elliptic floors out at its design figure of -50dB and stays
+// there. What it costs is attack on keyed CW - even in its minimum-phase
+// realization a keyed element settles in 8.8ms against the elliptic's
+// 5.2ms at the same width, because a 300Hz filter at 96kHz is a 0.3%
+// fractional bandwidth and this one spends 3073 taps on it. So: the bank
+// for everyday copy, this for digging a weak signal out from under a
+// close strong one. docs/dsp_design_notes/
+// rx_narrow_filter_fft_vs_elliptic.md has every measurement behind that
+// split; ARCHITECTURE.md §10 step 6 has the bench numbers this module was
+// checked against before it ever touched live audio.
+//
+// This is live, not a bench experiment: rx_audio.c creates one instance in
+// rx_audio_init(), runs it on every block whether or not it is the selected
+// implementation (so switching never thumps), and retunes it whenever the
+// pitch or width changes. The elliptic bank is still the default, pending
+// an on-air comparison rather than any bench result - see
+// ARCHITECTURE.md §10 step 7. rx_filter_test.c remains the standalone
+// harness for this module's own DSP.
 //
 // Why this needs its own module, not just a call into tx_pipeline.c:
 // unlike tx_pipeline.c (a genuinely SHARED pipeline - one instance
@@ -84,13 +90,13 @@
 #define RX_FILTER_FS_HZ 96000.0f
 #define RX_FILTER_BIN_HZ (RX_FILTER_FS_HZ / RX_FILTER_N)                 // Fs/N, 23.4375Hz here
 
-// Default passband width, matching rx_audio.c's existing elliptic
-// filter's own design point (order=4, 0.5dB ripple, 50dB stopband,
-// centered on CW_PITCH_HZ with a ~300Hz -3dB width) - a reasonable
-// starting comparison point, not a claim that 300Hz is the ideal width
-// for this different filter shape (§9's "Width control's real range" is
-// still an open question, to be bench-mapped once this filter has a
-// live caller).
+// Default passband width, matching the elliptic bank's own middle design
+// point (order=4, 0.5dB ripple, 50dB stopband, ~300Hz -3dB width - see
+// tools/gen_narrow_filters.py) - a reasonable default and a fair
+// comparison point, not a claim that 300Hz is the ideal width for this
+// different filter shape. rx_audio.c retunes this filter to whatever pitch
+// and width are selected, so the two implementations always face the same
+// passband; this constant only sets where they both start.
 #define RX_FILTER_DEFAULT_WIDTH_HZ 300.0f
 
 struct rx_filter {
@@ -103,9 +109,8 @@ struct rx_filter {
 // Allocates and tunes the shared filter to [pitch_hz - width_hz/2,
 // pitch_hz + width_hz/2] (a REAL bandpass - see fft_filter.h's
 // filter_tune_real(), which this calls). fs_hz is implicitly
-// RX_FILTER_FS_HZ (matching rx_audio.c's own SAMPLE_RATE_HZ - both are
-// minibitx's fixed 96kHz audio thread rate, not independently
-// configurable).
+// RX_FILTER_FS_HZ (matching rx_audio.c's own SAMPLE_RATE_HZ - both are the
+// audio thread's fixed 96kHz, not independently configurable).
 //
 // Internally calls fft_filter.h's filter_new_ex() with FFTW_ESTIMATE,
 // not plain filter_new()'s FFTW_MEASURE - a real-hardware finding from
