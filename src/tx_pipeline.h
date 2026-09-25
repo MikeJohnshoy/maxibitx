@@ -35,8 +35,11 @@
 // difference product against bfo_freq (clk1 during TX), which must land
 // on xtal_filter_center. What should land there differs by signal:
 //
-//   CW  - the CW_PITCH_HZ tone itself, so a key-down carrier is on the
-//         dial:   shift = bfo_freq - xtal_filter_center - CW_PITCH_HZ
+//   CW  - the keyed tone itself, so a key-down carrier is on the dial:
+//                 shift = bfo_freq - xtal_filter_center - cw_tone_hz
+//         The tone is the live CW pitch (cw.c), not a constant, so the
+//         shift is re-derived whenever the pitch moves and the two always
+//         cancel - see tx_pipeline_set_if_placement() below.
 //   SSB - the suppressed carrier (audio 0 Hz), so audio at a Hz goes out
 //         at dial+a (USB) or dial-a (LSB):
 //                 shift = bfo_freq - xtal_filter_center
@@ -46,9 +49,12 @@
 // band then extends from that same point in its own direction.
 //
 // A rotate moves whole bins, so each is rounded to the nearest one: on
-// this board's values that is 467 bins (21,890.625 Hz) for CW and 482
-// (22,593.750 Hz) for SSB, leaving the carrier 9.4 Hz and 6.3 Hz low
-// respectively.
+// this board's values, at the default pitch, that is 467 bins
+// (21,890.625 Hz) for CW and 482 (22,593.750 Hz) for SSB, leaving the
+// carrier 9.4 Hz and 6.3 Hz low respectively. Another CW pitch rounds
+// differently - 600 Hz lands 15.6 Hz low and 800 Hz 3.1 Hz low - so the
+// carrier stays within half a bin of the dial at any pitch rather than
+// exactly on it (tx_pipeline_test.c Case H bounds both).
 //
 // The two frequencies below are radio.c's compiled-in defaults, used as
 // the pipeline's starting placement and by the bench harness (which
@@ -69,7 +75,7 @@
 // sideband-zero step keeps, and which IF shift places it (above). CW and
 // USB both keep the upper half but anchor different things on the dial.
 enum tx_pipeline_signal {
-	TX_PIPELINE_CW,  // upper half, CW_PITCH_HZ tone on the dial
+	TX_PIPELINE_CW,  // upper half, the keyed tone on the dial
 	TX_PIPELINE_USB, // upper half, carrier on the dial - also DIGITAL
 	TX_PIPELINE_LSB, // lower half, carrier on the dial
 };
