@@ -6,6 +6,7 @@
 #include "radio_hw.h"
 #include "si5351.h"
 #include "sound.h"
+#include "cw.h"       // cw_set_pitch() - radio_set_cw_pitch() below
 #include "rx_audio.h" // rx_audio_set_demod() - radio_set_mode() below
 #include "hw_settings.h" // hw_settings_tx_allowed() - radio_set_tx() below
 #include <pthread.h>
@@ -107,6 +108,47 @@ void radio_set_mode(enum radio_mode m) {
   case RADIO_MODE_CW:
   default:                 rx_audio_set_demod(RX_DEMOD_CW);  break;
   }
+}
+
+int radio_set_cw_pitch(int hz) {
+  // Refused mid-transmission. The updates below aren't atomic against each
+  // other, and a key-down straddling them would transmit the old tone with
+  // the new shift (or the reverse) - off frequency by the pitch change for
+  // as long as that lasts. Waiting for key-up costs nothing; nobody adjusts
+  // pitch while sending.
+  if (in_tx) {
+    printf("radio: CW pitch change to %d Hz refused while transmitting - "
+           "still %d Hz\n", hz, radio_get_cw_pitch());
+    return radio_get_cw_pitch();
+  }
+
+  // RX first, because it owns which pitches exist: it snaps the request to
+  // its filter bank and reports what it actually selected, and that value -
+  // not the caller's request - is what the TX side has to match. Handing
+  // cw.c the unsnapped request is exactly how the sidetone and the received
+  // tone would silently disagree again.
+  int pitch = rx_audio_set_narrow_pitch(hz);
+
+  // Then the sidetone, then the shift that cancels it. Order matters:
+  // sound_update_cw_if_placement() reads cw_get_pitch(), so the tone has to
+  // be set first or the shift gets derived from the old one.
+  cw_set_pitch(pitch);
+  if (sound_update_cw_if_placement() < 0) {
+    // The pitch still applies - this only means the board's bfo_freq and
+    // xtal_filter_center give no usable IF, a calibration problem that
+    // predates the pitch change.
+    fprintf(stderr, "radio: CW pitch is %d Hz but the TX IF placement was "
+                    "refused - check bfo_freq/xtal_filter_center\n", pitch);
+  }
+  printf("radio: CW pitch %d Hz - sidetone, RX BFO, narrow filter and TX IF "
+         "shift all moved together\n", pitch);
+  return pitch;
+}
+
+int radio_get_cw_pitch(void) {
+  // rx_audio.c's bank selection is the single source of truth, since cw.c's
+  // tone is set from it; radio_set_cw_pitch() is what keeps them equal.
+  return rx_audio_get_narrow_pitch();
 }
 
 enum radio_mode radio_get_mode(void) {
