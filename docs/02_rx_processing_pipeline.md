@@ -246,7 +246,10 @@ ALSA device.
    runtime — `L CWPITCH` picks 600, 700 or 800 Hz and `L CWWIDTH` picks
    150, 300, 450 or 600 Hz, defaulting to 700/300. Changing the pitch moves
    the stage-2 BFO with it, so the tone you hear moves rather than the
-   filter just detuning off it.
+   filter just detuning off it — and it moves the TX sidetone and CW IF
+   shift too, so the pitch you hear is the pitch you send against while the
+   transmitted frequency stays where it is
+   ([`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md)).
 
    The elliptic can't design coefficients at runtime, so those twelve
    combinations are pre-designed offline into `src/narrow_filter_bank.h` by
