@@ -153,3 +153,28 @@ already used in `antialias_filter_design.md`.
   a simultaneous A/B against SparkSDR now matches it (~40 decodes
   each in one 20m interval, SNRs typically within 1dB) - the ~10x
   deficit is closed.
+- [`cw_break_in_and_i2c_timing.md`](cw_break_in_and_i2c_timing.md) — two
+  investigations run together because they share a call path: what I2C
+  activity costs the RX/TX chains, and what actually limits break-in CW.
+  Both answers are "not the thing you'd expect." **I2C:** no I2C exists
+  anywhere on the real-time audio path (`audio_loop()` traced end to end),
+  and nothing polls — the bus is idle except when something is tuned or
+  keyed, so an I2C-induced xrun is designed out rather than merely absent.
+  But one `si5351bx_setfreq()` is 17 bit-banged transactions (~4.8ms at an
+  assumed 100kHz), half the traffic on every T/R cycle is provably
+  redundant when RIT is zero, and `i2cSendRegister()`'s retry loop has a
+  340ms worst case. Includes a verified comparison against sbitx 5.401,
+  where `read_power()` runs a userspace busy-wait bit-banged read *inside*
+  `tx_process()` on every TX block — and still pays the address phase on
+  boards with no SWR bridge fitted; the INA260, by contrast, is 1Hz on the
+  UI thread and off by default. maxibitx needs none of it because its ALC
+  is open-loop. **Break-in:** the Si5351 is not the limit (no PLL reset is
+  ever issued on a retune, the step is 35ppm, and I2C delivery swamps any
+  settling), the 20ms delay everyone reads as T/R settling is actually
+  `EXT_PTT`→`TX_LINE` amplifier sequencing, and the keying granularity is
+  one audio block (10.667ms). Carries the full key-down→RF and key-up→RX
+  budgets, a testable prediction that the first element of every
+  transmission is truncated by 30-40ms, the arithmetic showing why full
+  QSK is out of reach, and a proposed (not implemented)
+  `ext_ptt_delay_ms` setting. Status: **investigation only, nothing
+  measured on hardware** - measurement recipes included.
