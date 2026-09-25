@@ -40,7 +40,7 @@ import numpy as np
 from scipy import signal
 
 FS = 96000.0
-PITCHES_HZ = [600, 700, 800]
+PITCHES_HZ = [500, 600, 700, 800, 900, 1000]
 WIDTHS_HZ = [150, 300, 450, 600]
 SECTIONS = 4
 
