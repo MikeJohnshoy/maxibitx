@@ -97,9 +97,24 @@ already used in `antialias_filter_design.md`.
   ruled out and how, the impulse-length tradeoff table if shortening
   `RX_FILTER_IMPULSE_LEN` turns out to be the answer, and why that
   constant is an accident of the FFT and ALSA period sizes rather than
-  anything CW asked for. Status: measurement only, no code changed — the
-  on-air "hiss" report remains unexplained, with impulsive (rather than
-  stationary) band noise the leading untested hypothesis.
+  anything CW asked for. The note's §11 then acts on the time-domain
+  finding: a minimum-phase realization of that same magnitude response
+  (`filter_min_phase()`, rigctld `u`/`U MINPHASE`, on by default when the
+  FFT filter is selected) cuts group delay to 4.5ms and a keyed element's
+  settling time to 8.7ms, agrees with the linear-phase filter to within
+  0.06dB across the passband, and has no pre-ringing at all — which also
+  removes the mechanism behind the leading hypothesis for the "hiss"
+  report. Then §12 takes the other route entirely: since the FFT filter
+  existed to make pitch and width adjustable, and elliptic coefficients
+  merely can't be designed *at runtime*, stage 3 now carries a bank of
+  twelve elliptic filters pre-designed offline (three pitches x four
+  widths, `tools/gen_narrow_filters.py` -> `src/narrow_filter_bank.h`) and
+  switches between them - quantized pitch/width at no CPU cost and no
+  time-domain penalty, with the switching transient measured at 2dB
+  settling in 14ms. Records why the pitch axis needs the software BFO to
+  move with the filter (38dB of self-attenuation at the narrowest width if
+  it doesn't), and what stays open: the TX sidetone, the choice of rungs,
+  and which implementation should be the default.
 - [`iq_stream_design.md`](iq_stream_design.md) — a third, minimal I/Q
   export path (`iq_stream.c`), independent of both `hpsdr_p1.c` (single-
   client - a second HPSDR client would silently steal its stream) and
