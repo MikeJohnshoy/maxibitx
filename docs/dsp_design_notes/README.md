@@ -113,8 +113,14 @@ already used in `antialias_filter_design.md`.
   time-domain penalty, with the switching transient measured at 2dB
   settling in 14ms. Records why the pitch axis needs the software BFO to
   move with the filter (38dB of self-attenuation at the narrowest width if
-  it doesn't), and what stays open: the TX sidetone, the choice of rungs,
-  and which implementation should be the default.
+  it doesn't). §13 then closes the gap §12 left: the TX sidetone has to move
+  with the pitch too, because the pitch is the beat note meaning "he is on
+  my dial," so zero-beating against a stale sidetone transmits off frequency
+  by the difference - `radio_set_cw_pitch()` moves the RX BFO, the filter,
+  the sidetone and the CW IF shift together. Records the measurement that
+  the carrier stays on the dial to within half a rotate bin at every pitch,
+  and the pre-existing ~9Hz low placement that measurement exposed. Still
+  open: the choice of rungs, and which implementation should be the default.
 - [`iq_stream_design.md`](iq_stream_design.md) — a third, minimal I/Q
   export path (`iq_stream.c`), independent of both `hpsdr_p1.c` (single-
   client - a second HPSDR client would silently steal its stream) and
