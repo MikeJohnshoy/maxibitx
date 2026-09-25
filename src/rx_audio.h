@@ -129,14 +129,19 @@ int rx_audio_get_narrow_filter_min_phase(void);
 // Changing the pitch also moves the software BFO stage 2 mixes with, since
 // that is what the operator actually hears - the filter alone would just
 // detune off the tone. It does NOT touch hw_settings.ini's bfo_freq or
-// where the radio transmits. One thing it does not do yet: cw.c's TX
-// sidetone stays at CW_PITCH_HZ, so at 600 or 800 the sidetone and the
-// received tone disagree. See docs/dsp_design_notes/
-// rx_narrow_filter_fft_vs_elliptic.md §12 for why that is separable.
+// where the radio transmits.
+//
+// PREFER radio_set_cw_pitch() (radio.h) over the pitch setter here. This
+// one moves the receiver only, and a receiver whose pitch disagrees with
+// cw.c's sidetone makes zero-beating by ear transmit off frequency by the
+// difference. radio_set_cw_pitch() moves the sidetone and the TX IF shift
+// with it and refuses mid-transmission; it calls this to do the RX half and
+// to decide which pitch the request snaps to. The width setter has no such
+// partner - width is receive-only - so call it directly.
 //
 // Not for the audio thread: selecting re-tunes the FFT filter, which
-// allocates. Wired to rigctld's "l"/"L CWPITCH" and "l"/"L CWWIDTH"
-// (hamlib.c), i.e. called on an interface thread.
+// allocates. Reached from rigctld's "l"/"L CWPITCH" (via radio.c) and
+// "l"/"L CWWIDTH" (hamlib.c), i.e. on an interface thread.
 int rx_audio_set_narrow_pitch(int hz);
 int rx_audio_get_narrow_pitch(void);
 int rx_audio_set_narrow_width(int hz);
