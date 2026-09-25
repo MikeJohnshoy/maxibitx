@@ -23,13 +23,14 @@ int in_tx = 0;
 int xtal_filter_center = 40012400;
 
 // clk1 while transmitting - deliberately not xtal_filter_center.
-// tx_pipeline.c places the TX waveform at
-// bfo_freq - xtal_filter_center - CW_PITCH_HZ, so bfo_freq's mixer lands
-// the wanted difference product on xtal_filter_center and the sum product
-// in the crystal filter's stopband ("BFO at the filter's edge", as in
-// sbitx). ~xtal_filter_center + 22.6kHz by calibration, not enforced in
-// code: changing it means re-deriving tx_pipeline.h's IF shifts. RX
-// doesn't use it. Overridable in hw_settings.ini.
+// tx_pipeline.c places a CW waveform at
+// bfo_freq - xtal_filter_center - (the keyed tone), so bfo_freq's mixer
+// lands the wanted difference product on xtal_filter_center and the sum
+// product in the crystal filter's stopband ("BFO at the filter's edge", as
+// in sbitx). ~xtal_filter_center + 22.6kHz by calibration, not enforced in
+// code: changing it means re-deriving tx_pipeline.h's IF shifts, which
+// sound_update_cw_if_placement() does from these two values and the live
+// pitch. RX doesn't use it. Overridable in hw_settings.ini.
 int bfo_freq = 40035000;
 struct vfo lo;
 
