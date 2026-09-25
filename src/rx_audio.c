@@ -30,10 +30,12 @@
 
 #include "rx_audio.h"
 #include "cw.h"
+#include "narrow_filter_bank.h"
 #include "rx_filter.h"
 #include "vfo.h"
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>   // abs(), for the bank's nearest-value snap
 
 #define SAMPLE_RATE_HZ 96000
 
@@ -227,35 +229,79 @@ static void ssb_filter_apply(struct ssb_filter_state *f, double i_in, double q_i
 }
 
 // Stage 3: narrow real bandpass - an 8-pole elliptic (Cauer) IIR, as 4
-// direct-form biquad sections. ~300Hz -3dB wide at CW_PITCH_HZ, ~1.9:1
-// shape factor (CW crystal-filter territory), ~2.6ms group delay at
-// center. A fixed design, not runtime-tunable, because elliptic
-// coefficients need offline design:
-//   scipy.signal.ellip(4, 0.5, 50, [(700-150)/48000, (700+150)/48000],
-//                      btype='bandpass', output='sos')    # Fs = 96000
-// Rows are {b0, b1, b2, a1, a2} with a0 == 1 (scipy's sos convention).
-// Changing CW_PITCH_HZ means regenerating this table. Why elliptic
-// rather than a resonator cascade: rx_audio_demod_design.md §8.
+// direct-form biquad sections, ~1.9:1 shape factor (CW crystal-filter
+// territory) and a few ms of group delay at center. Elliptic coefficients
+// need offline design, so rather than one fixed filter there is a bank of
+// twelve, pre-designed at three pitches and four widths and selected at
+// runtime - narrow_filter_bank.h, generated and verified by
+// tools/gen_narrow_filters.py. The 700Hz/300Hz entry is bit-for-bit the
+// single filter this stage used to carry, so the default is unchanged.
+//
+// Why a bank of fixed filters rather than the FFT filter's continuous
+// pitch/width: the FFT path is the tunable one and it is still here
+// (rx_filter.c), but a linear-phase FIR narrow enough for CW costs 16ms of
+// group delay, and even its minimum-phase realization settles a keyed
+// element in 8.8ms against this stage's 5.2ms at the same width. Switching
+// between pre-designed elliptic sets keeps the attack and buys quantized
+// pitch/width instead of continuous. See
+// docs/dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md §12.
+//
+// Why elliptic rather than a resonator cascade: rx_audio_demod_design.md §8.
 struct biquad_state {
     double b0, b1, b2, a1, a2;   // coefficients
     double x1, x2, y1, y2;       // history
 };
 
-#define NARROW_FILTER_SECTIONS 4
-
-static const double narrow_filter_coeffs[NARROW_FILTER_SECTIONS][5] = {
-    // { b0, b1, b2, a1, a2 }
-    { 0.0031347125317966271, -0.0062262711904984037, 0.003134712531796628, -1.9880750263609597, 0.99051500563718153 },
-    { 1, -1.9997094875296553, 1, -1.9906166255419793, 0.99224567397195218 },
-    { 1, -1.9948828058283654, 0.99999999999999989, -1.9932472877766807, 0.99636250549261574 },
-    { 1, -1.9992168539672679, 0.99999999999999978, -1.9963811875913184, 0.99766425853740737 },
-};
+#define NARROW_FILTER_SECTIONS NARROW_BANK_SECTIONS
 
 struct narrow_filter_state {
     struct biquad_state stage[NARROW_FILTER_SECTIONS];
 };
 
 static struct narrow_filter_state narrow_filter;
+
+// Which bank entry is loaded. Indices, not frequencies, since the bank's
+// own tables are what define the selectable values; the public setters
+// snap a requested Hz to the nearest one and report back what they chose.
+static int narrow_pitch_idx = 1;   // 700 Hz, checked against the bank in rx_audio_init()
+static int narrow_width_idx = 1;   // 300 Hz
+
+// Index of the bank value nearest `hz`. Ties go to the lower entry, which
+// only matters for a request exactly between two rungs.
+static int nearest_index(const int *table, int n, int hz) {
+    int best = 0;
+    for (int i = 1; i < n; i++)
+        if (abs(hz - table[i]) < abs(hz - table[best]))
+            best = i;
+    return best;
+}
+
+// Copies a bank entry's coefficients into the running filter, leaving
+// x1/x2/y1/y2 alone.
+//
+// Keeping the history across a coefficient change is deliberate. The
+// alternative - zeroing it - measures no better: swapping under a steady
+// tone overshoots by at most 2.0dB either way and settles within 14ms, and
+// on the widening direction keeping the history actually settles faster
+// (measured, see the design note's §12). Zeroing would also throw away a
+// filter's worth of signal every time the operator touched the control.
+//
+// Not atomic against the audio thread: it can be mid-block in
+// narrow_filter_apply() while these 20 doubles are rewritten, so one block
+// may be computed with a half-updated set. That is the same non-atomic
+// retune rx_filter_retune() has always documented, and at 2dB of
+// transient it is an audible edge when the operator turns a knob, not a
+// defect that appears on its own.
+static void narrow_filter_load(int pitch_idx, int width_idx) {
+    for (int i = 0; i < NARROW_FILTER_SECTIONS; i++) {
+        const double *c = narrow_bank_coeffs[pitch_idx][width_idx][i];
+        narrow_filter.stage[i].b0 = c[0];
+        narrow_filter.stage[i].b1 = c[1];
+        narrow_filter.stage[i].b2 = c[2];
+        narrow_filter.stage[i].a1 = c[3];
+        narrow_filter.stage[i].a2 = c[4];
+    }
+}
 
 static double biquad_apply(struct biquad_state *f, double x) {
     double y = f->b0 * x + f->b1 * f->x1 + f->b2 * f->x2
@@ -321,6 +367,11 @@ static int narrow_filter_enabled = 1;
 // (ARCHITECTURE.md §10 step 7).
 static enum rx_narrow_filter_impl narrow_filter_impl = RX_NARROW_FILTER_ELLIPTIC;
 
+// 1 = the FFT implementation uses its minimum-phase realization (the
+// default), 0 = linear phase. Only audible while that implementation is
+// the selected one. See rx_audio_set_narrow_filter_min_phase().
+static int narrow_filter_min_phase = 1;
+
 // maxibitx's raw baseband I/Q is spectrally inverted: a station +d Hz
 // above dial arrives at baseband -d. (sound.c mixes the ~24kHz IF by
 // e^{+j*2pi*RX_IF_FREQ_HZ*t}, mapping IF f to 24000-f, and the analog
@@ -363,10 +414,21 @@ static double onepole_alpha_from_ms(double time_ms) {
 void rx_audio_init(void) {
     rx_volume = volume_percent_to_gain(rx_volume_percent);
 
-    // CW BFO at +CW_PITCH_HZ: a station at dial center is heard at
-    // CW_PITCH_HZ, and one d Hz above dial at CW_PITCH_HZ + d (CW keeps the
-    // upper side, same as USB - see rx_audio_process()).
-    vfo_start(&bfo, CW_PITCH_HZ, 0);
+    // Start on the bank entry nearest CW_PITCH_HZ, so the compile-time
+    // pitch stays the thing that defines the default even if the bank's
+    // rungs are ever regenerated at other frequencies.
+    narrow_pitch_idx = nearest_index(narrow_bank_pitch_hz, NARROW_BANK_PITCHES, CW_PITCH_HZ);
+    narrow_width_idx = nearest_index(narrow_bank_width_hz, NARROW_BANK_WIDTHS,
+                                     (int)RX_FILTER_DEFAULT_WIDTH_HZ);
+
+    // CW BFO at the selected pitch: a station at dial center is heard at
+    // that pitch, and one d Hz above dial at pitch + d (CW keeps the upper
+    // side, same as USB - see rx_audio_process()). This is the software
+    // audio-frequency oscillator stage 2 mixes with, NOT hw_settings.ini's
+    // bfo_freq (the ~22.6kHz hardware crystal-filter BFO tx_pipeline.c
+    // derives its IF placement from) - moving this one does not touch
+    // where the radio transmits.
+    vfo_start(&bfo, narrow_bank_pitch_hz[narrow_pitch_idx], 0);
 
     for (int i = 0; i < 2 * SSB_FIR_TAPS; i++) {
         ssb_state.hist_i[i] = 0.0;
@@ -374,12 +436,8 @@ void rx_audio_init(void) {
     }
     ssb_state.pos = 0;
 
+    narrow_filter_load(narrow_pitch_idx, narrow_width_idx);
     for (int i = 0; i < NARROW_FILTER_SECTIONS; i++) {
-        narrow_filter.stage[i].b0 = narrow_filter_coeffs[i][0];
-        narrow_filter.stage[i].b1 = narrow_filter_coeffs[i][1];
-        narrow_filter.stage[i].b2 = narrow_filter_coeffs[i][2];
-        narrow_filter.stage[i].a1 = narrow_filter_coeffs[i][3];
-        narrow_filter.stage[i].a2 = narrow_filter_coeffs[i][4];
         narrow_filter.stage[i].x1 = narrow_filter.stage[i].x2 = 0.0;
         narrow_filter.stage[i].y1 = narrow_filter.stage[i].y2 = 0.0;
     }
@@ -389,8 +447,12 @@ void rx_audio_init(void) {
     agc_env = 0.0;
     meter_env = 0.0;
 
-    // Same center as the BFO, at rx_filter.h's default width.
-    rx_fft_filter = rx_filter_new((float)CW_PITCH_HZ, RX_FILTER_DEFAULT_WIDTH_HZ);
+    // Same pitch and width as the elliptic bank entry above, so switching
+    // implementations compares two filters aimed at the same passband
+    // rather than two different passbands.
+    rx_fft_filter = rx_filter_new((float)narrow_bank_pitch_hz[narrow_pitch_idx],
+                                  (float)narrow_bank_width_hz[narrow_width_idx]);
+    rx_filter_set_min_phase(rx_fft_filter, narrow_filter_min_phase);
 }
 
 void rx_audio_set_volume(int percent) {
@@ -418,6 +480,87 @@ void rx_audio_set_narrow_filter_impl(int use_fft) {
 
 int rx_audio_get_narrow_filter_impl(void) {
     return narrow_filter_impl == RX_NARROW_FILTER_FFT;
+}
+
+void rx_audio_set_narrow_filter_min_phase(int min_phase) {
+    narrow_filter_min_phase = (min_phase != 0);
+    // Re-designs fir_coeff. The audio thread may be mid-block in
+    // filter_forward()/filter_inverse() while this runs, so one block can
+    // see a partly-rewritten response - the same non-atomic retune
+    // rx_filter_retune() has always documented, and the reason this is a
+    // control-thread call: an audible one-block edge when the operator
+    // flips a switch, not a glitch that happens on its own.
+    rx_filter_set_min_phase(rx_fft_filter, narrow_filter_min_phase);
+}
+
+int rx_audio_get_narrow_filter_min_phase(void) {
+    return narrow_filter_min_phase;
+}
+
+// Shared by the two setters below: load the selected bank entry, move the
+// BFO to the selected pitch, and point the FFT implementation at the same
+// passband.
+//
+// The BFO move is what makes pitch selection mean anything. Without it the
+// demodulated tone stays where it was and a new pitch only detunes the
+// filter off it - at the 150Hz width that is 38dB of attenuation on the
+// operator's own signal, while at 600Hz it does nothing observable. Moving
+// both together is the whole control.
+//
+// vfo_start() quantizes to a 65536-entry phase table, so 96000/65536 =
+// 1.46Hz steps: the bank's rungs land at 599.5/698.7/799.8Hz rather than
+// exactly. Against a 150Hz-wide filter centered on the nominal value that
+// is a fraction of a percent of the passband, and it is the same
+// quantization the BFO has always had at CW_PITCH_HZ.
+static void narrow_select(int pitch_idx, int width_idx) {
+    int pitch_hz = narrow_bank_pitch_hz[pitch_idx];
+    int width_hz = narrow_bank_width_hz[width_idx];
+
+    narrow_pitch_idx = pitch_idx;
+    narrow_width_idx = width_idx;
+    narrow_filter_load(pitch_idx, width_idx);
+    vfo_start(&bfo, pitch_hz, 0);
+    rx_filter_retune(rx_fft_filter, (float)pitch_hz, (float)width_hz);
+}
+
+int rx_audio_set_narrow_pitch(int hz) {
+    narrow_select(nearest_index(narrow_bank_pitch_hz, NARROW_BANK_PITCHES, hz),
+                  narrow_width_idx);
+    return narrow_bank_pitch_hz[narrow_pitch_idx];
+}
+
+int rx_audio_get_narrow_pitch(void) {
+    return narrow_bank_pitch_hz[narrow_pitch_idx];
+}
+
+int rx_audio_set_narrow_width(int hz) {
+    narrow_select(narrow_pitch_idx,
+                  nearest_index(narrow_bank_width_hz, NARROW_BANK_WIDTHS, hz));
+    return narrow_bank_width_hz[narrow_width_idx];
+}
+
+int rx_audio_get_narrow_width(void) {
+    return narrow_bank_width_hz[narrow_width_idx];
+}
+
+int rx_audio_narrow_pitch_count(void) {
+    return NARROW_BANK_PITCHES;
+}
+
+int rx_audio_narrow_width_count(void) {
+    return NARROW_BANK_WIDTHS;
+}
+
+int rx_audio_narrow_pitch_at(int index) {
+    if (index < 0 || index >= NARROW_BANK_PITCHES)
+        return -1;
+    return narrow_bank_pitch_hz[index];
+}
+
+int rx_audio_narrow_width_at(int index) {
+    if (index < 0 || index >= NARROW_BANK_WIDTHS)
+        return -1;
+    return narrow_bank_width_hz[index];
 }
 
 void rx_audio_set_demod(enum rx_demod d) {
