@@ -20,24 +20,18 @@ beyond the commands it actually exercises:
                             envelope - dB relative to a placeholder S9, see
                             rx_audio_get_strength_db()'s comment; read-only,
                             same as a real rig's S-meter)
-    u NARROW / U NARROW <0|1>  get / set the narrow (~300Hz) post-demod
-                                CW filter (rx_audio.c stage 3) on/off
+    u NARROW / U NARROW <0|1>  get / set the post-demod CW filter
+                                (rx_audio.c stage 3) in or out of circuit.
+                                Its width is selectable - see CWWIDTH
     t  / T <0|1>           get / set PTT (the TX Test section)
     u TONE / U TONE <0|1|2>  get / set the TX test-tone generator: off,
                               1 kHz, or two-tone 700 + 1900 Hz
-    u FFTFILT / U FFTFILT <0|1>  get / set WHICH stage-3 implementation
-                                  NARROW's "on" state uses - 0 = the
-                                  original elliptic IIR (default), 1 =
-                                  the shared FFT filter (rx_filter.c,
-                                  docs/ARCHITECTURE.md step 6/7) - lets
-                                  an operator A/B the two on real signals
-    u MINPHASE / U MINPHASE <0|1>  get / set which realization that FFT
-                                    filter uses - 1 = minimum phase
-                                    (default, 4.5ms group delay), 0 =
-                                    linear phase (16ms). Same magnitude
-                                    response either way; see
-                                    docs/dsp_design_notes/
-                                    rx_narrow_filter_fft_vs_elliptic.md
+    u FFTFILT / U FFTFILT <0|1>  get / set WHICH filter NARROW's "on"
+                                  state uses - 1 = the shared FFT filter
+                                  (rx_filter.c, the default, always
+                                  minimum phase), 0 = an elliptic IIR from
+                                  the pre-designed bank. Pitch and width
+                                  below apply to either one
     l CWPITCH / L CWPITCH <hz>   get / set stage 3's center pitch - 600,
                                   700 or 800 Hz. Moves the RX BFO with it,
                                   so the tone you hear moves too. A real
@@ -391,8 +385,6 @@ class Panel(tk.Tk):
         self._syncing_narrow = False
         # Same guard, same reasoning, for the FFT-filter selector below.
         self._syncing_fftfilt = False
-        # Same guard, same reasoning, for that filter's phase selector.
-        self._syncing_minphase = False
         # Same guard, same reasoning, for the pitch/width selectors.
         self._syncing_pitch = False
         self._syncing_width = False
@@ -532,42 +524,48 @@ class Panel(tk.Tk):
         self.micgain_label.grid(row=0, column=1)
 
         # --- narrow filter ---
-        # rx_audio.c stage 3, the ~300Hz post-demod "single signal"
+        # rx_audio.c stage 3, the post-demod "single signal"
         # selectivity filter - a plain on/off toggle (not a runtime-
         # adjustable width, see rx_audio.h), reached over rigctld's
         # u/U NARROW (this server's own extension, not a real Hamlib
         # function - see hamlib.c's u/U comment).
         nf = ttk.LabelFrame(self, text="RX Filter", padding=8)
         nf.grid(row=6, column=0, sticky="ew", padx=8, pady=(0, 8))
+        # One checkbox for whether the filter is in circuit, then one choice
+        # of which filter, then its pitch and width. An earlier layout had
+        # three checkboxes - on/off, elliptic-vs-FFT, and which realization of
+        # the FFT one - which read as three independent options when it was
+        # really one two-way choice with a modifier that only applied to one
+        # side. An operator spent a long time believing the pitch and width
+        # selectors belonged to the FFT filter alone; they never did. The
+        # linear-phase realization is gone from the server too (rx_audio.h),
+        # so the third box had nothing left to select.
         self.narrow_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(nf, text="Narrow CW filter (~300Hz)", variable=self.narrow_var,
+        ttk.Checkbutton(nf, text="CW filter", variable=self.narrow_var,
                          command=self.on_narrow_toggled).grid(row=0, column=0, sticky="w")
 
-        # Which stage-3 implementation NARROW's "on" state uses -
-        # rigctld's u/U FFTFILT (this server's own extension, same as
-        # NARROW above - see hamlib.c's u/U comment). Elliptic (unchecked)
-        # is the server's own default; this exists specifically so an
-        # operator can A/B it against the newer shared FFT filter
-        # (rx_filter.c, docs/ARCHITECTURE.md step 6/7) on a real signal,
-        # not to steer anyone toward one or the other.
-        self.fftfilt_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(nf, text="Use FFT filter (experimental)", variable=self.fftfilt_var,
-                         command=self.on_fftfilt_toggled).grid(row=1, column=0, sticky="w")
-
-        # Which realization that FFT filter uses - rigctld's u/U MINPHASE.
-        # Checked (minimum phase) is the server's default and the one that
-        # sounds right on CW; unchecking it returns the linear-phase
-        # realization, which has the same magnitude response and 16ms of
-        # group delay instead of 4.5ms. Only audible while the box above is
-        # checked. See docs/dsp_design_notes/
-        # rx_narrow_filter_fft_vs_elliptic.md §11.
-        self.minphase_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(nf, text="Minimum phase (FFT filter only)", variable=self.minphase_var,
-                         command=self.on_minphase_toggled).grid(row=2, column=0, sticky="w")
+        # Which filter, as two radio buttons rather than a checkbox: the
+        # choice is between two named things, and a checkbox labelled with one
+        # of them leaves the other unnamed. rigctld's u/U FFTFILT underneath,
+        # where 1 is the FFT filter. Indented under the checkbox above,
+        # because it means nothing while the filter is out of circuit.
+        #
+        # The FFT filter is the server's default. The elliptic bank is not a
+        # legacy option - it is far cheaper per sample, which matters on a Pi
+        # Zero 2W, and it is what the server falls back to for an odd-sized
+        # block.
+        self.fftfilt_var = tk.BooleanVar(value=True)
+        frow = ttk.Frame(nf)
+        frow.grid(row=1, column=0, sticky="w", padx=(16, 0))
+        ttk.Radiobutton(frow, text="FFT (tunable)", variable=self.fftfilt_var, value=True,
+                         command=self.on_fftfilt_toggled).pack(side="left")
+        ttk.Radiobutton(frow, text="Elliptic bank", variable=self.fftfilt_var, value=False,
+                         command=self.on_fftfilt_toggled).pack(side="left", padx=(12, 0))
 
         # Stage 3's pitch and width - rigctld's l/L CWPITCH (a real Hamlib
         # level) and l/L CWWIDTH (this server's extension). Both apply to
-        # whichever implementation is selected above.
+        # whichever filter is selected above, which is the whole reason they
+        # sit outside the choice rather than under one arm of it.
         #
         # Fixed lists rather than values read from the server: rigctld has no
         # "enumerate the choices" command, and hard-coding them here means
@@ -582,7 +580,7 @@ class Panel(tk.Tk):
         # resizable(False, False), so a stacked row per control would push
         # the Power/ALC section below a 1080p screen's usable height.
         pwrow = ttk.Frame(nf)
-        pwrow.grid(row=3, column=0, sticky="w", pady=(6, 0))
+        pwrow.grid(row=2, column=0, sticky="w", padx=(16, 0), pady=(6, 0))
         ttk.Label(pwrow, text="Pitch").pack(side="left")
         self.pitch_var = tk.StringVar(value="700")
         self.pitch_combo = ttk.Combobox(pwrow, textvariable=self.pitch_var, width=5,
@@ -771,7 +769,6 @@ class Panel(tk.Tk):
         mode_reply = self.client.query("m")
         narrow_reply = self.client.query("u NARROW")
         fftfilt_reply = self.client.query("u FFTFILT")
-        minphase_reply = self.client.query("u MINPHASE")
         pitch_reply = self.client.query("l CWPITCH")
         width_reply = self.client.query("l CWWIDTH")
         strength_reply = self.client.query("l STRENGTH")
@@ -781,7 +778,7 @@ class Panel(tk.Tk):
         alc_reply = self.client.query("l ALC")
         if freq_reply is None or rit_reply is None or vol_reply is None \
                 or micgain_reply is None or mode_reply is None or narrow_reply is None \
-                or fftfilt_reply is None or minphase_reply is None \
+                or fftfilt_reply is None \
                 or pitch_reply is None or width_reply is None \
                 or strength_reply is None \
                 or tone_reply is None or ptt_reply is None \
@@ -795,7 +792,6 @@ class Panel(tk.Tk):
         self.after(0, lambda: self.apply_mode(mode_reply))
         self.after(0, lambda: self.apply_narrow(narrow_reply))
         self.after(0, lambda: self.apply_fftfilt(fftfilt_reply))
-        self.after(0, lambda: self.apply_minphase(minphase_reply))
         self.after(0, lambda: self.apply_pitch(pitch_reply))
         self.after(0, lambda: self.apply_width(width_reply))
         self.after(0, lambda: self.apply_strength(strength_reply))
@@ -970,16 +966,6 @@ class Panel(tk.Tk):
         self.fftfilt_var.set(use_fft)
         self._syncing_fftfilt = False
 
-    def apply_minphase(self, reply):
-        try:
-            min_phase = int(reply) != 0
-        except ValueError:
-            return
-        # Same guard, same reasoning, as apply_narrow() above.
-        self._syncing_minphase = True
-        self.minphase_var.set(min_phase)
-        self._syncing_minphase = False
-
     # Pitch/width readback. The server owns the list of valid values, so if
     # it reports one this panel's dropdown doesn't offer, widen the dropdown
     # rather than discard the reply - that keeps a regenerated
@@ -1149,15 +1135,6 @@ class Panel(tk.Tk):
             return
         use_fft = 1 if self.fftfilt_var.get() else 0
         threading.Thread(target=lambda: self.client.query(f"U FFTFILT {use_fft}"),
-                          daemon=True).start()
-
-    def on_minphase_toggled(self):
-        if self._syncing_minphase:
-            return  # apply_minphase() is syncing from a poll reply, not an operator click
-        if not self.client.connected():
-            return
-        min_phase = 1 if self.minphase_var.get() else 0
-        threading.Thread(target=lambda: self.client.query(f"U MINPHASE {min_phase}"),
                           daemon=True).start()
 
     def on_pitch_selected(self, _event=None):
