@@ -367,8 +367,32 @@ static double volume_percent_to_gain(int percent) {
 static int rx_volume_percent = RX_VOLUME_DEFAULT_PERCENT;
 static double rx_volume = 0.03;
 
-// 1 = stage 3 applied (default), 0 = bypassed. See rx_audio_set_narrow_filter().
+// What the operator asked for: 1 = stage 3 applied (default), 0 = bypassed.
+// See rx_audio_set_narrow_filter().
 static int narrow_filter_enabled = 1;
+
+// Set by radio.c's radio_set_mode() for a mode where a ~300Hz filter
+// centered on the CW pitch is wrong rather than merely narrow - DIGITAL,
+// today the only one. Kept separate from the operator's request above so
+// that leaving such a mode restores whatever the operator had chosen,
+// instead of silently clearing it.
+//
+// rx_audio.c has no radio.h dependency by design (its harnesses link
+// without radio.c), so it takes the decision as an input rather than
+// reading the mode: this file knows that stage 3 is inhibited, not which
+// mode inhibited it. Why DIGITAL needs it at all: uac_out below is
+// WSJT-X's entire audio feed and is taken AFTER stage 3, so a filter left
+// in from a CW session hands the decoder a 300Hz slice of a mode that
+// needs 2.7kHz. docs/dsp_design_notes/rx_uac_out_digital_mode_bandwidth.md
+// §2/§6 found that trap by reading the code, and §11 records closing it.
+static int narrow_filter_inhibited = 0;
+
+// Whether stage 3 actually reaches stage 4 this block - the operator's
+// request AND the absence of a mode-level inhibit. The one thing the
+// sample loop and every readback should ask.
+static int narrow_filter_active(void) {
+    return narrow_filter_enabled && !narrow_filter_inhibited;
+}
 
 // Which stage 3 implementation runs when enabled. The FFT filter is the
 // default: it tunes pitch and width continuously rather than to the bank's
@@ -486,10 +510,30 @@ int rx_audio_get_volume(void) {
 
 void rx_audio_set_narrow_filter(int enable) {
     narrow_filter_enabled = (enable != 0);
+    // Remembered either way. A client that asks for the filter while it is
+    // inhibited gets it when the inhibit lifts, and is told now rather than
+    // left to wonder why the readback below disagrees with what it just set.
+    if (narrow_filter_enabled && narrow_filter_inhibited)
+        fprintf(stderr, "rx_audio: narrow filter requested but inhibited by "
+                        "the current mode - remembered, applied on leaving it\n");
 }
 
+// The EFFECTIVE state, not the request: a client asking whether the filter
+// is in circuit wants to know what it is hearing, and answering with the
+// request would claim the filter is in while the mode holds it out. Same
+// "let a client read back what it didn't itself set" reasoning as
+// rx_audio_get_volume(), aimed at the signal rather than at the setting.
+// rx_audio_narrow_filter_inhibited() is how a caller tells the two 0s apart.
 int rx_audio_get_narrow_filter(void) {
-    return narrow_filter_enabled;
+    return narrow_filter_active();
+}
+
+void rx_audio_inhibit_narrow_filter(int inhibit) {
+    narrow_filter_inhibited = (inhibit != 0);
+}
+
+int rx_audio_narrow_filter_inhibited(void) {
+    return narrow_filter_inhibited;
 }
 
 void rx_audio_set_narrow_filter_impl(int use_fft) {
@@ -700,7 +744,7 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
     for (int k = 0; k < n; k++) {
         double audio = audio_buf[k];
         double narrowed;
-        if (!narrow_filter_enabled)
+        if (!narrow_filter_active())
             narrowed = audio;
         else if (narrow_filter_impl == RX_NARROW_FILTER_FFT && have_fft)
             narrowed = fft_buf[k];
