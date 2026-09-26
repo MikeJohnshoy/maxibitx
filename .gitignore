@@ -5,6 +5,7 @@ test-fft-filter
 test-tx-pipeline
 test-rx-filter
 test-rx-audio
+test-rx-audio-impulse
 test-upsample48k
 src/*.o
 *.o
