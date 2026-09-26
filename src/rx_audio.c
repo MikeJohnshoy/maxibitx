@@ -375,10 +375,14 @@ static int narrow_filter_enabled = 1;
 // rungs, and its minimum-phase realization brought a keyed element's
 // settling time to 8.8ms against the elliptic's 5.2ms - close enough that
 // continuous tuning wins. The elliptic bank stays selectable and is NOT
-// deprecated: it is four biquads per sample against a 4096-point transform
-// every block, which matters on a Pi Zero 2W, and it is what the
-// odd-block-size path in rx_audio_process() falls back to. See
-// docs/dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md.
+// deprecated: it is still the faster of the two on attack, and it is what
+// the odd-block-size path below falls back to.
+//
+// Note what selecting it does NOT do: both filters run every block whatever
+// is selected, so switching saves no CPU. See
+// docs/dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md §17 for the
+// measured per-block costs and why the always-run design makes the cheaper
+// filter's cheapness unrealised today.
 static enum rx_narrow_filter_impl narrow_filter_impl = RX_NARROW_FILTER_FFT;
 
 // The FFT implementation always runs minimum phase now; linear phase has no
