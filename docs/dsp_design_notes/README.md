@@ -121,6 +121,27 @@ already used in `antialias_filter_design.md`.
   the carrier stays on the dial to within half a rotate bin at every pitch,
   and the pre-existing ~9Hz low placement that measurement exposed. Still
   open: the choice of rungs, and which implementation should be the default.
+  §15 then measures the two stages *together* for the first time
+  (`src/rx_audio_impulse_test.c`, `make test-rx-audio-impulse`) and corrects
+  §7's guess: there is no pre-duck before an interferer becomes audible
+  (0.00dB measured), and the AGC ducks all three realizations identically to
+  0.01dB, so it cannot be why they sound different. The real cost is on the
+  wanted signal - the AGC flattens a keyed element's own onset in proportion
+  to the filter's group delay, +2.22/+1.74/+0.82dB of transient for
+  elliptic/min-phase/linear-phase - which means the AGC converts the filters'
+  15ms spread in attack into a 1.4dB spread in punch, and is why the bench
+  numbers and the listening reports were hard to reconcile. Aligning the gain
+  to the group delay recovers 1.1-1.5dB on every element; tested in a scratch
+  patch, not committed, with implementation notes and a record of the harness
+  mistake (a burst period shorter than the AGC release measures its own
+  recovery curve) that first inverted the result. §16 then records the decision the
+  note had been building toward: the FFT filter becomes the default, linear
+  phase is retired from the control surface but kept reachable because Case E
+  and the impulse harness verify against it, the panel is rebuilt to ask one
+  question at a time after a UI defect led to a long stretch of comparing the
+  wrong things, and the elliptic bank is kept deliberately - the cheap filter
+  for a Pi Zero 2W, the odd-block-size fallback, and still the faster of the
+  two on attack.
 - [`iq_stream_design.md`](iq_stream_design.md) — a third, minimal I/Q
   export path (`iq_stream.c`), independent of both `hpsdr_p1.c` (single-
   client - a second HPSDR client would silently steal its stream) and
