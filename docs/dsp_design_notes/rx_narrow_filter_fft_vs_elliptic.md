@@ -890,3 +890,83 @@ fast one a click away, both retuned together so the comparison stays fair.
 What remains genuinely unanswered is which an operator prefers on a crowded
 band. For the first time that question can be asked with controls that say
 what they do.
+
+## 17. Correction: "the elliptic is the cheap one" is not doing the work §16 claimed
+
+§16 justified keeping the elliptic bank partly on cost — "four biquads per
+sample against a 4096-point transform every block, which matters on a Pi
+Zero 2W." An operator then ran `top` while switching filters and saw no
+difference at all, and was right to expect none.
+
+**As shipped, selecting the elliptic saves nothing.** Both filters run on
+every block regardless of which one is selected:
+
+```c
+elliptic_buf[k] = (float)narrow_filter_apply(&narrow_filter, audio);  /* always */
+...
+if (n == RX_FILTER_BLOCK_LEN) {
+        rx_filter_process_block(rx_fft_filter, audio_buf, fft_buf);   /* always */
+```
+
+That is deliberate — it is what makes switching thump-free, since a filter
+whose overlap-save history has gone cold takes M−1 = 3072 samples (32 ms) to
+be trustworthy again. But it means the cheaper filter's cheapness is a
+property of the code that is never collected.
+
+**And the ratio is smaller than "biquads versus a transform" suggests.**
+Measured per 1024-sample block on an x86 development machine:
+
+| | per block | of the 10.67 ms block period |
+|---|---|---|
+| FFT filter, minimum phase | 19.9 µs | 0.19 % |
+| FFT filter, linear phase | 19.3 µs | 0.18 % |
+| elliptic, 4 biquads | 7.6 µs | 0.07 % |
+
+2.6× apart, not an order of magnitude, and both negligible against the block
+period on that hardware.
+
+**The Pi Zero 2W figure is unmeasured, and the architecture cuts against the
+intuition.** The elliptic cascade is serial, recursive, double-precision:
+each biquad depends on the previous sample, so it cannot be vectorized, and
+the Cortex-A53 has no double-precision SIMD. The FFT path is single-precision
+`fftwf`, which FFTW builds with NEON. So on the target board the gap could
+narrow, or invert. Nobody has measured it.
+
+### What the retention argument actually rests on
+
+Two reasons survive without qualification, and they were always the stronger
+two:
+
+- **The odd-block-size fallback.** `rx_audio_process()` needs *some* filter
+  for a block that isn't `RX_FILTER_BLOCK_LEN`, because the FFT filter's
+  overlap-save history would be misaligned by any other size. The elliptic is
+  per-sample and has no such constraint.
+- **Attack.** 5.2 ms against 8.8 ms at 300 Hz, and +2.22 dB of onset
+  transient against +1.74 dB through the full chain (§15).
+
+Cost is a *potential* third reason that is not currently realised. §16's code
+comments have been corrected to say so.
+
+### If the saving is wanted, here is the shape of it
+
+Skip the unselected filter instead of running both. The asymmetry makes it
+cheap to get right: keep the elliptic always-warm, since at 7.6 µs it costs
+almost nothing, and run the FFT filter only while it is selected. Then
+switching *to* the elliptic stays instant, and switching *to* the FFT filter
+costs one 32 ms warm-up during which its output is not yet trustworthy —
+acceptable for something an operator does deliberately and rarely, if it is
+either muted or crossfaded for that window.
+
+Worth measuring first, and the measurement needs no code change:
+`MAXIBITX_LOOP_TIMING=1` reports per-block process time on the real board. If
+the whole chain is using a small fraction of 10.67 ms, stage 3 is not where a
+Pi Zero 2W's margin goes and the skip is not worth its complexity. If the
+margin is genuinely tight, that same number says how much of it stage 3 is
+responsible for — and only then is it worth trading warm-up for headroom.
+
+On the board this has actually been run on, that number is already known: the
+xrun investigation (`ARCHITECTURE.md` §10 step 7) recorded a steady
+`process~3.08ms` against a `period~10.663ms`, so the whole RX and TX chain
+uses under a third of the budget and stage 3's ~20 µs is well under 1% of
+what the process phase spends. The open question is only the Pi Zero 2W, which
+nobody has run this on.
