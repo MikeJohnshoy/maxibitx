@@ -561,3 +561,135 @@ demodulation. Nobody has listened to it yet.
   which side stage 1 keeps changed. `test-rx-audio` (a tone on the
   dial) is unaffected. Still to check on air: in CW, stepping the dial
   up should now *lower* a station's pitch.
+
+## 11. Closing §2's trap: DIGITAL now holds the narrow filter out
+
+§2 listed two candidate causes for the original 10x gap and gave this
+as the first:
+
+> `narrow_filter_enabled` defaults ON (`rx_audio.c`, file scope: `static
+> int narrow_filter_enabled = 1;`), and nothing anywhere ties it to
+> `radio_get_mode() == RADIO_MODE_DIGITAL` [...] If an operator switches
+> from listening to CW into running WSJT-X without separately disabling
+> this, `uac_out` is stage 3's filtered output, not stage 1/2's wider
+> signal.
+
+§7 then established that this was *not* what happened in the original
+comparison — the operator had both filters off already — which retired it
+as an explanation but left it standing as a trap. §6 said as much: it was
+"checkable/fixable purely operator-side today, no code change needed", and
+"nothing on screen would remind an operator moving from CW listening to
+FT8 to turn it off". Nothing had changed about that since. An operator who
+spent an evening on CW with a 300 Hz filter and then started WSJT-X would
+hand the decoder a fourteenth of the window FT8 spreads across, and the
+only symptom would be poor decodes.
+
+The trap is now closed in code. Entering `RADIO_MODE_DIGITAL` takes stage
+3 out of circuit and holds it out; leaving DIGITAL gives the operator back
+whatever they had.
+
+### Where the decision lives, and why not in the panel
+
+Three files, each doing only what it is placed to do:
+
+| File | Responsibility |
+|---|---|
+| `radio.c` | Owns mode policy. `radio_set_mode()` calls `rx_audio_inhibit_narrow_filter(m == RADIO_MODE_DIGITAL)` on every mode change. |
+| `rx_audio.c` | Owns the mechanism. Keeps the operator's request and a separate inhibit flag; stage 3 reaches stage 4 only when the request is set and the inhibit is clear. |
+| `rigctl_panel.py` | Reflects it. Disables the RX Filter group and retitles it in DIGITAL. |
+
+The panel is last on that list deliberately. **A panel-side guard would
+have been worse than nothing**, because the client this protects is
+WSJT-X, which sets the mode itself over CAT and never opens the panel. A
+greyed-out checkbox in a window the operator isn't looking at does not
+stop `MD3`/`M PKTUSB` from arriving with a 300 Hz filter still in circuit.
+The daemon has to be the one that knows.
+
+`rx_audio.c` takes the inhibit as an *input* rather than reading the mode,
+for the same reason it takes the demodulator as one: it has no `radio.h`
+dependency, and its harnesses link without `radio.c`. It also genuinely
+cannot work the mode out for itself — `radio_set_mode()` maps both USB and
+DIGITAL to `RX_DEMOD_USB`, since they receive identically, so the demod
+enum does not distinguish the mode that needs this from the mode that
+doesn't.
+
+### Why the request is remembered rather than cleared
+
+Clearing it would have been one line shorter and would have quietly cost
+the operator their filter on every trip through DIGITAL — turn it on for
+CW, check the waterfall in DIGITAL, come back to CW deaf. So the two pieces
+of state stay separate:
+
+- `narrow_filter_enabled` — what the operator asked for, changed only by
+  `rx_audio_set_narrow_filter()` (`U NARROW`).
+- `narrow_filter_inhibited` — what the mode says, changed only by
+  `radio_set_mode()`.
+- `narrow_filter_active()` — the AND of them, and the only thing the
+  sample loop and the readbacks consult.
+
+A `U NARROW 1` that arrives during DIGITAL is remembered, logged as such,
+and takes effect on the way out.
+
+### What a client sees
+
+`u NARROW` reports the **effective** state, not the request, so it reads 0
+in DIGITAL however it was last set. That is the honest answer to the
+question the command actually asks — *is the filter in circuit* — and it is
+what lets the panel's existing poll do the right thing with no special
+case: the checkbox unchecks itself on entering DIGITAL and comes back on
+the way out. A client that wants to distinguish "the operator turned it
+off" from "the mode took it away" has `rx_audio_narrow_filter_inhibited()`;
+over the wire, the mode itself says which.
+
+### Scope: DIGITAL only
+
+USB and LSB were considered and left alone. A 150–600 Hz filter on SSB is
+extreme but it is a legitimate operator choice, and unlike DIGITAL there is
+no second consumer downstream whose whole purpose it defeats. CW and CWR
+are what stage 3 is for. So the gate is one mode wide, which is also the
+narrowest change that fixes the actual hazard.
+
+### Proof
+
+`rx_audio_test.c` Case I, on a tone 900 Hz off dial center (reaching stage
+3 as 1600 Hz audio, well into the stopband, where the filter is worth 77 dB
+— a large and unambiguous difference):
+
+```
+I. Mode-level inhibit (DIGITAL), tone -900 Hz off dial center
+   filter in circuit RMS=1573.6, bypassed RMS=11262376.9 (77.1 dB of rejection)
+   inhibited RMS=11258192.7 - wanted the bypass value, -0.00 dB away
+   re-requested while inhibited RMS=11285784.3 (must stay bypassed)
+   inhibit lifted RMS=1571.0 - wanted the in-circuit value, -0.01 dB away
+   readback while inhibited: narrow=0 inhibited=1 (want 0 and 1), after lifting: narrow=1 (want 1)
+```
+
+Four separate claims, because the dangerous failure here is a partial one.
+An inhibit that bypasses but never restores is worse than no inhibit at
+all: it fails silently, in the mode the operator cares most about, and
+looks like a filter that stopped working. The case also refuses to pass
+vacuously — it asserts the filter was worth more than 6 dB at that offset
+in the first place, so a future change that accidentally stopped filtering
+altogether cannot make the comparison trivially true. The AGC cannot skew
+it either: its gain comes from the raw I/Q magnitude, identical across all
+five runs (`rx_narrow_filter_fft_vs_elliptic.md` §15).
+
+The panel side is checked separately, headless under Xvfb: the group's
+widget states and the frame title follow the mode across
+CW/DIGITAL/USB/LSB/CWR, the comboboxes return to `readonly` rather than
+becoming free-text entries, `apply_mode("PKTUSB")` gates the group (that
+being the path a WSJT-X-initiated mode change arrives on), and the window's
+requested geometry is unchanged at 596x1180 in both states — the longer
+DIGITAL title does not widen a window that `resizable(False, False)` has
+frozen, which is the bug that has bitten this panel twice before.
+
+### Still open
+
+- **On air.** Whether decodes actually improve for an operator who would
+  previously have left the filter in. Nobody has been caught by this trap
+  on purpose to find out.
+- The S-meter reads stage 3's output (`l STRENGTH`), so in DIGITAL it
+  becomes a wideband reading of the whole passband rather than one signal.
+  That is arguably more useful for a digital mode, and it is what a
+  bypassed filter has always done, but it is a behavior change nobody
+  asked for and it is recorded here rather than presented as a decision.
