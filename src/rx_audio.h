@@ -83,12 +83,18 @@ void rx_audio_set_narrow_filter(int enable);
 int rx_audio_get_narrow_filter(void);
 
 // Which stage-3 implementation is selected when the narrow filter above
-// is enabled: 0 = the original elliptic IIR (the default - not yet
-// verified on air), 1 = the new shared FFT filter (src/rx_filter.c,
-// docs/ARCHITECTURE.md step 6). Wired to rigctld's "u"/"U FFTFILT"
-// (hamlib.c) for the same remote on-air A/B comparison this exists for -
-// see rx_audio.c's rx_audio_process() for how both implementations stay
-// warm regardless of which is selected.
+// is enabled: 1 = the shared FFT filter (src/rx_filter.c, the default,
+// always minimum phase), 0 = an elliptic IIR from the pre-designed bank.
+//
+// The FFT filter is the default because it tunes pitch and width
+// continuously instead of to the bank's rungs. The bank is not deprecated:
+// it is four biquads per sample against a 4096-point transform every block,
+// which is why it stays available on a Pi Zero 2W, and it is what
+// rx_audio_process() falls back to for a block that isn't
+// RX_FILTER_BLOCK_LEN long. Both run every block regardless of which is
+// selected, so switching never thumps.
+//
+// Wired to rigctld's "u"/"U FFTFILT" (hamlib.c) and the control panel.
 void rx_audio_set_narrow_filter_impl(int use_fft);
 
 // Current implementation selection, 0 or 1 (same meaning as
@@ -96,29 +102,29 @@ void rx_audio_set_narrow_filter_impl(int use_fft);
 // reasoning as rx_audio_get_narrow_filter().
 int rx_audio_get_narrow_filter_impl(void);
 
-// Which realization the FFT implementation above uses: 1 = minimum phase
-// (the default), 0 = linear phase. Same passband either way; what changes
-// is the time domain, and on CW that difference is large - a keyed
-// element reaches -3dB of its settled level in 8.7ms instead of 20.3ms,
-// and the filter's group delay drops from 16.0ms to 4.5ms
-// (rx_filter_test.c Case E). That attack, not the magnitude response, is
-// what made the FFT filter sound duller than the elliptic despite
-// measuring better on the bench - see
-// docs/dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md.
+// BENCH ONLY - no control surface reaches this, and the daemon never calls
+// it. Selects which realization the FFT implementation uses: 1 = minimum
+// phase (what the radio always runs), 0 = linear phase.
 //
-// Minimum phase is the default because a narrow filter centered on the CW
-// pitch exists to hear CW through. Linear phase stays reachable so
-// the two can be compared on air, and because the step 6 bench numbers
-// were all measured against it. No effect while the elliptic
-// implementation is selected.
+// Linear phase is not an operator choice. It has the same passband but
+// 16.0ms of group delay against minimum phase's 4.5ms, and a keyed element
+// takes 20.3ms to settle instead of 8.8ms - nobody listening to CW would
+// pick it, so the rigctld "U MINPHASE" command and the control panel's
+// checkbox were both retired.
 //
-// Not for the audio thread: switching re-designs the response, which
-// allocates and builds FFTW plans. Wired to rigctld's "u"/"U MINPHASE"
-// (hamlib.c), i.e. called on an interface thread.
+// The capability stays because two harnesses need it, and deleting it would
+// cost more than it saves:
+//   - rx_filter_test.c Case E proves filter_min_phase() is correct by
+//     comparing its magnitude response against the linear-phase filter's
+//     (0.49dB worst-case deviation). Without a reachable linear-phase
+//     realization there is nothing to compare against, and the strongest
+//     check on that transformation disappears.
+//   - rx_audio_impulse_test.c uses linear phase as the extreme case that
+//     makes the AGC's group-delay misalignment visible at all.
+//
+// Not for the audio thread either way: switching re-designs the response,
+// which allocates and builds FFTW plans.
 void rx_audio_set_narrow_filter_min_phase(int min_phase);
-
-// Current realization, 0 or 1 (same meaning as the setter's argument) -
-// same readback reasoning as rx_audio_get_narrow_filter().
 int rx_audio_get_narrow_filter_min_phase(void);
 
 // Stage 3's pitch and width, in Hz. Elliptic coefficients can't be
