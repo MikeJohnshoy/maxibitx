@@ -180,7 +180,17 @@ already used in `antialias_filter_design.md`.
   sign was checked directly (+100Hz dial step moves signals left), and
   a simultaneous A/B against SparkSDR now matches it (~40 decodes
   each in one 20m interval, SNRs typically within 1dB) - the ~10x
-  deficit is closed.
+  deficit is closed. §11 then closes the trap §2 identified and §7
+  retired as an explanation: nothing tied the narrow CW filter to the
+  mode, so an operator arriving from a CW session could hand WSJT-X a
+  300Hz slice of a 2.7kHz mode, with poor decodes as the only symptom.
+  `radio_set_mode()` now holds stage 3 out of circuit in `DIGITAL` and
+  releases it on the way out, remembering whatever the operator had set,
+  and `u NARROW` reports the effective state so no client is told the
+  filter is in when it isn't. Enforced in the daemon rather than the
+  panel deliberately: WSJT-X sets the mode itself over CAT and never
+  opens the panel, so a greyed-out checkbox would have guarded the one
+  client that doesn't need guarding.
 - [`cw_break_in_and_i2c_timing.md`](cw_break_in_and_i2c_timing.md) — two
   investigations run together because they share a call path: what I2C
   activity costs the RX/TX chains, and what actually limits break-in CW.
