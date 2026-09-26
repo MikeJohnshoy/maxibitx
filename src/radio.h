@@ -78,7 +78,10 @@ int radio_rit_enabled(void);
 // mode_to_kenwood_digit()/kenwood_digit_to_mode()). The mode selects TX's
 // audio source and sideband (sound.c) and RX's demodulator (rx_audio.c,
 // via radio_set_mode()). DIGITAL is external audio - WSJT-X etc. over the
-// USB audio gadget - transmitted and received as USB.
+// USB audio gadget - transmitted and received as USB. It is also the one
+// mode that holds rx_audio.c's narrow CW filter out of circuit, because the
+// audio it exists to serve is taken downstream of that filter - see
+// radio_set_mode() below.
 //
 // CWR is CW-reverse: the same key, hang timer and transmitted carrier as
 // CW, receiving the other side of the BFO. Transmit is identical because
@@ -95,6 +98,13 @@ enum radio_mode {
 // Sets the mode and updates rx_audio.c's demodulator to match. No validity
 // check: callers translate their protocol's value and handle unknown ones
 // themselves (hamlib.c replies RPRT -1; usb_gadget.c ignores it).
+//
+// Also the one place that decides whether stage 3, the narrow CW filter, is
+// allowed in circuit: DIGITAL holds it out and every other mode releases it
+// (rx_audio_inhibit_narrow_filter()). The operator's own on/off setting is
+// untouched by this and comes back when the mode does. Every mode change -
+// rigctld M, Kenwood MD, the control panel - already funnels through here,
+// which is what makes one call enough.
 void radio_set_mode(enum radio_mode m);
 
 // The current mode; RADIO_MODE_CW until something sets it.
