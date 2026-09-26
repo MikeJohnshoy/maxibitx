@@ -1597,10 +1597,13 @@ for keying an external accessory's PTT, not this input line.)
      factorization, then a faded truncation back into the M-tap budget
      overlap-save needs): group delay 4.5ms, -3dB in 8.7ms, magnitude
      within 0.06dB in the passband and 0.5dB anywhere in the stopband,
-     and no pre-response at all. `rx_filter_set_min_phase()` /
-     `rx_audio_set_narrow_filter_min_phase()` / rigctld `u`/`U MINPHASE`
-     select it, on by default when the FFT implementation is chosen;
-     `rx_filter_test.c` Case E is the bench proof. Full derivation and
+     and no pre-response at all. `rx_filter_set_min_phase()` selects it, and
+     it is the only realization the FFT filter ships with - rigctld's
+     `u`/`U MINPHASE` and the panel's checkbox were retired once it was
+     clear nobody copying CW would choose 16ms of group delay over 4.5ms.
+     The capability stays reachable for the bench, because
+     `rx_filter_test.c` Case E proves the conversion correct by comparing
+     the two realizations' magnitude responses against each other. Full derivation and
      every measurement:
      [`dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md`](dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md)
      §11. **What this does not settle:** whether the FFT path should now
