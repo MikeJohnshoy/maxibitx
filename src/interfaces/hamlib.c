@@ -330,9 +330,10 @@ static int handle_line(int fd, char *line)
     }
 
     if (cmd[0] == 'u' && (cmd[1] == '\0' || cmd[1] == ' ')) {
-        // get_func <name>: NARROW (rx_audio.c's narrow stage-3 filter, on/off),
-        // FFTFILT (which stage-3 implementation it uses) and TONE (the TX
-        // test-tone generator, 0-2). Not Hamlib RIG_FUNC names - extensions
+        // get_func <name>: NARROW (rx_audio.c's narrow stage-3 filter - its
+        // EFFECTIVE state, so it reads 0 in DIGITAL however it was last set,
+        // see rx_audio.h), FFTFILT (which stage-3 implementation it uses) and
+        // TONE (the TX test-tone generator, 0-2). Not Hamlib RIG_FUNC names - extensions
         // for tools/rigctl_panel.py. There is no MINPHASE: the FFT filter
         // always runs minimum phase, since nobody listening to CW would pick
         // 16ms of group delay over 4.5ms (rx_audio.h).
@@ -372,8 +373,15 @@ static int handle_line(int fd, char *line)
         } else if (strcmp(func_name, "NARROW") == 0) {
             rx_audio_set_narrow_filter(val != 0);
             send_rprt(fd, 0);
-            printf("rigctl: U NARROW %d -> narrow filter %s\n", val,
-                   val ? "on" : "off");
+            // Logged from the readback, not from val: DIGITAL holds stage 3
+            // out of circuit whatever is requested (rx_audio.h), and a line
+            // claiming "on" for a filter the operator cannot hear is the kind
+            // of thing that costs an evening.
+            printf("rigctl: U NARROW %d -> narrow filter %s%s\n", val,
+                   rx_audio_get_narrow_filter() ? "on" : "off",
+                   rx_audio_narrow_filter_inhibited()
+                       ? " (held out by the current mode - request remembered)"
+                       : "");
         } else if (strcmp(func_name, "FFTFILT") == 0) {
             rx_audio_set_narrow_filter_impl(val != 0);
             send_rprt(fd, 0);
