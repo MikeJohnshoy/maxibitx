@@ -22,7 +22,12 @@ beyond the commands it actually exercises:
                             same as a real rig's S-meter)
     u NARROW / U NARROW <0|1>  get / set the post-demod CW filter
                                 (rx_audio.c stage 3) in or out of circuit.
-                                Its width is selectable - see CWWIDTH
+                                Its width is selectable - see CWWIDTH.
+                                DIGITAL holds it out whatever is set, since
+                                WSJT-X reads its audio downstream of it; the
+                                get reports the EFFECTIVE state, so it reads
+                                0 there, and the setting comes back on the
+                                way out of DIGITAL
     t  / T <0|1>           get / set PTT (the TX Test section)
     u TONE / U TONE <0|1|2>  get / set the TX test-tone generator: off,
                               1 kHz, or two-tone 700 + 1900 Hz
@@ -32,10 +37,11 @@ beyond the commands it actually exercises:
                                   minimum phase), 0 = an elliptic IIR from
                                   the pre-designed bank. Pitch and width
                                   below apply to either one
-    l CWPITCH / L CWPITCH <hz>   get / set stage 3's center pitch - 600,
-                                  700 or 800 Hz. Moves the RX BFO with it,
-                                  so the tone you hear moves too. A real
-                                  Hamlib level
+    l CWPITCH / L CWPITCH <hz>   get / set stage 3's center pitch - 500 to
+                                  1000 Hz in 100 Hz steps. Moves the RX BFO
+                                  and the TX sidetone with it, so the tone
+                                  you hear moves and your carrier stays on
+                                  the dial. A real Hamlib level
     l CWWIDTH / L CWWIDTH <hz>   get / set stage 3's width - 150, 300, 450
                                   or 600 Hz. Both settings snap to the
                                   nearest value the filter bank carries
@@ -528,9 +534,15 @@ class Panel(tk.Tk):
         # selectivity filter - a plain on/off toggle (not a runtime-
         # adjustable width, see rx_audio.h), reached over rigctld's
         # u/U NARROW (this server's own extension, not a real Hamlib
-        # function - see hamlib.c's u/U comment).
+        # function - see hamlib.c's u/U comment). The whole group is
+        # disabled in DIGITAL - see set_rx_filter_gate() below.
         nf = ttk.LabelFrame(self, text="RX Filter", padding=8)
         nf.grid(row=6, column=0, sticky="ew", padx=8, pady=(0, 8))
+        # Kept for set_rx_filter_gate() below, which retitles this frame in
+        # DIGITAL. The title carries the explanation because the window is
+        # 1174px tall and frozen by resizable(False, False) - an extra
+        # explanatory label would cost a row of height the panel doesn't have.
+        self.narrow_frame = nf
         # One checkbox for whether the filter is in circuit, then one choice
         # of which filter, then its pitch and width. An earlier layout had
         # three checkboxes - on/off, elliptic-vs-FFT, and which realization of
@@ -541,8 +553,9 @@ class Panel(tk.Tk):
         # linear-phase realization is gone from the server too (rx_audio.h),
         # so the third box had nothing left to select.
         self.narrow_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(nf, text="CW filter", variable=self.narrow_var,
-                         command=self.on_narrow_toggled).grid(row=0, column=0, sticky="w")
+        self.narrow_check = ttk.Checkbutton(nf, text="CW filter", variable=self.narrow_var,
+                                             command=self.on_narrow_toggled)
+        self.narrow_check.grid(row=0, column=0, sticky="w")
 
         # Which filter, as two radio buttons rather than a checkbox: the
         # choice is between two named things, and a checkbox labelled with one
@@ -551,16 +564,21 @@ class Panel(tk.Tk):
         # because it means nothing while the filter is out of circuit.
         #
         # The FFT filter is the server's default. The elliptic bank is not a
-        # legacy option - it is far cheaper per sample, which matters on a Pi
-        # Zero 2W, and it is what the server falls back to for an odd-sized
-        # block.
+        # legacy option - it settles faster on a keyed element, and it is what
+        # the server falls back to for an odd-sized block. It is NOT the way to
+        # save CPU: the server runs both filters on every block whatever is
+        # selected, so selecting this one frees nothing (rx_audio.h).
         self.fftfilt_var = tk.BooleanVar(value=True)
         frow = ttk.Frame(nf)
         frow.grid(row=1, column=0, sticky="w", padx=(16, 0))
-        ttk.Radiobutton(frow, text="FFT (tunable)", variable=self.fftfilt_var, value=True,
-                         command=self.on_fftfilt_toggled).pack(side="left")
-        ttk.Radiobutton(frow, text="Elliptic bank", variable=self.fftfilt_var, value=False,
-                         command=self.on_fftfilt_toggled).pack(side="left", padx=(12, 0))
+        self.fftfilt_radios = (
+            ttk.Radiobutton(frow, text="FFT (tunable)", variable=self.fftfilt_var, value=True,
+                             command=self.on_fftfilt_toggled),
+            ttk.Radiobutton(frow, text="Elliptic bank", variable=self.fftfilt_var, value=False,
+                             command=self.on_fftfilt_toggled),
+        )
+        self.fftfilt_radios[0].pack(side="left")
+        self.fftfilt_radios[1].pack(side="left", padx=(12, 0))
 
         # Stage 3's pitch and width - rigctld's l/L CWPITCH (a real Hamlib
         # level) and l/L CWWIDTH (this server's extension). Both apply to
@@ -943,6 +961,34 @@ class Panel(tk.Tk):
         self._syncing_mode = True
         self.mode_var.set(name)
         self._syncing_mode = False
+        self.set_rx_filter_gate(name)
+
+    # The server holds stage 3 out of circuit in DIGITAL and refuses to put it
+    # back until the mode changes (rx_audio.h, radio.c's radio_set_mode()), so
+    # these controls would be writing to a setting the server is overriding.
+    # Disabled and retitled rather than hidden: an operator who came looking
+    # for the CW filter should find out why it isn't available, not find the
+    # group missing.
+    #
+    # This only reflects the server's decision - it does not enforce anything.
+    # The enforcement is deliberately server-side, because WSJT-X sets the mode
+    # over CAT itself and never opens this panel; a guard that lived here would
+    # be bypassed by exactly the client the protection is for.
+    #
+    # The CW filter checkbox itself is left to the u NARROW poll, which reports
+    # the EFFECTIVE state: it unchecks on its own in DIGITAL, and comes back
+    # checked on the way out if that is what the operator had.
+    def set_rx_filter_gate(self, mode_name):
+        gated = (mode_name == "DIGITAL")
+        state = "disabled" if gated else "!disabled"
+        for w in (self.narrow_check,) + self.fftfilt_radios:
+            w.state([state])
+        # Comboboxes go back to "readonly", not plain enabled - that is what
+        # keeps them a dropdown rather than a free-text entry.
+        for combo in (self.pitch_combo, self.width_combo):
+            combo.configure(state="disabled" if gated else "readonly")
+        self.narrow_frame.configure(
+            text="RX Filter - held out of circuit in DIGITAL" if gated else "RX Filter")
 
     def apply_narrow(self, reply):
         try:
@@ -1099,6 +1145,13 @@ class Panel(tk.Tk):
     def on_mode_changed(self):
         if self._syncing_mode:
             return  # apply_mode() is syncing from a poll reply, not an operator click
+        # Gate the RX Filter group on this click rather than waiting for the
+        # next poll to report the mode back: the operator is looking at those
+        # controls now, and a second of them still appearing live in DIGITAL
+        # invites exactly the wrong conclusion about what the server is doing.
+        # Ahead of the connected() check below, because the radio button has
+        # already moved whether or not there is a server to tell.
+        self.set_rx_filter_gate(self.mode_var.get())
         if not self.client.connected():
             return
         name = self.mode_var.get()
