@@ -15,8 +15,9 @@
 // is.
 enum rx_narrow_filter_impl {
 	RX_NARROW_FILTER_ELLIPTIC, // 8-pole elliptic IIR from the pre-designed
-	                            // bank, src/narrow_filter_bank.h (default)
-	RX_NARROW_FILTER_FFT,      // the shared FFT overlap-save filter (src/rx_filter.c)
+	                            // bank, src/narrow_filter_bank.h
+	RX_NARROW_FILTER_FFT,      // the shared FFT overlap-save filter
+	                            // (src/rx_filter.c) - the default
 };
 
 // Call once at startup, after vfo_init_phase_table().
@@ -63,10 +64,10 @@ int rx_audio_get_volume(void);
 // enable/bypass toggle already used, just extended to cover switching
 // BETWEEN implementations too, not only on/off) - see
 // rx_audio_set_narrow_filter_impl() below and rx_audio.c's own comment
-// on why. The elliptic bank stays the default; the FFT path is there for an
-// on-air listening comparison (§10 step 7), not as a cutover in waiting -
-// the bank stays whatever that comparison concludes, since it is also the
-// faster-attacking of the two.
+// on why. The FFT path is the default: the on-air comparison this
+// paragraph used to be waiting on (§10 step 7) came out in its favour, on
+// continuous tuning. The bank stays selectable regardless, being the
+// faster-attacking of the two and the odd-block-size fallback.
 
 // Enable (1, the default) or bypass (0) stage 3, the narrow filter
 // above. The filter itself keeps running either way (its history stays
@@ -75,12 +76,41 @@ int rx_audio_get_volume(void);
 // rigctld's "u"/"U NARROW" (hamlib.c) so the control panel (tools/
 // rigctl_panel.py) can toggle it remotely - see rx_audio.c for why this
 // is a plain on/off rather than a runtime-adjustable width.
+//
+// This is the operator's REQUEST. It is always remembered, but it only
+// reaches the audio when the mode-level inhibit below is clear.
 void rx_audio_set_narrow_filter(int enable);
 
-// Current narrow-filter enable state, 0 or 1 - same "let a client read
-// back what it didn't itself just set" reasoning as
-// rx_audio_get_volume().
+// Whether stage 3 is in circuit right now, 0 or 1 - the request above AND
+// no inhibit, so it answers "am I hearing the filter" rather than "what is
+// the setting". Same "let a client read back what it didn't itself just
+// set" reasoning as rx_audio_get_volume(); a client that sets the request
+// and reads back 0 is being told the current mode is overriding it.
 int rx_audio_get_narrow_filter(void);
+
+// Suppress stage 3 regardless of the request above, for a mode where a
+// ~300Hz filter centered on the CW pitch is not a narrow choice but a
+// wrong one. radio.c's radio_set_mode() owns this: it is called on every
+// mode change with (mode == RADIO_MODE_DIGITAL), which is the only mode
+// that inhibits it today.
+//
+// Why the daemon has to enforce this rather than the control panel greying
+// a checkbox: DIGITAL's whole point is uac_out (rx_audio_process() below),
+// WSJT-X's audio feed, which is taken downstream of stage 3 - and WSJT-X
+// sets the mode itself over CAT, so a panel-side guard would be bypassed
+// by the very client that needs the protection. Leaving a CW session's
+// 300Hz filter in hands the decoder a fraction of the ~2.7kHz window FT8
+// occupies. docs/dsp_design_notes/rx_uac_out_digital_mode_bandwidth.md
+// §2/§6 identified the trap; §11 records closing it.
+//
+// The operator's request survives the inhibit, so returning to CW restores
+// the filter they had rather than making them re-enable it.
+void rx_audio_inhibit_narrow_filter(int inhibit);
+
+// Whether the inhibit above is set, 0 or 1. Distinguishes "the operator
+// turned stage 3 off" from "the mode took it away", which a control surface
+// needs in order to say which one it is showing.
+int rx_audio_narrow_filter_inhibited(void);
 
 // Which stage-3 implementation is selected when the narrow filter above
 // is enabled: 1 = the shared FFT filter (src/rx_filter.c, the default,
