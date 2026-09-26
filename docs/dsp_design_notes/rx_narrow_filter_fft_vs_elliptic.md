@@ -685,3 +685,208 @@ have the largest dial offsets (−21.9 Hz at 500 Hz), since the quantization
 residual grows with distance from wherever the bin grid happens to align.
 Still far inside CW practice, and still the same argument for the
 tone-chosen-to-land-on-a-bin fix in §13 if it ever matters.
+
+## 15. The AGC and the filter, measured together
+
+Every measurement above this section looks at a filter on its own. §7 raised
+a loose end — the AGC derives its gain from the raw undelayed I/Q and applies
+it to filtered audio that is one group delay behind — and guessed the
+consequence. `src/rx_audio_impulse_test.c` (`make test-rx-audio-impulse`)
+exists to stop guessing: it runs the real `rx_audio_process()`, both stages
+in circuit, and measures two different things the guess had conflated.
+
+### The guess was wrong, and here is the correction
+
+§7 predicted a *pre-duck*: the gain falling before an interferer becomes
+audible, dipping the noise floor ahead of a crash you have not heard yet.
+Measured, the deepest dip anywhere in the 40 ms before a burst arrives is
+**0.00 dB**, for all three realizations. There is no pre-duck. The gain never
+moves before the event reaches the antenna, because it is derived from the
+antenna signal — a delay on the audio cannot make the gain anticipate
+anything.
+
+What is true is narrower. The duck *begins* when the interferer arrives at
+the input, while the interferer becomes *audible* one group delay later. So
+with the linear-phase filter there is a 16 ms window where the level has
+dropped and nothing explains it yet, against 3.6 ms for the elliptic. The
+depth is identical:
+
+| filter | group delay | wanted signal ducked by a burst it cannot hear |
+|---|---|---|
+| elliptic | 3.6 ms | −14.56 dB |
+| FFT minimum phase | 4.5 ms | −14.57 dB |
+| FFT linear phase | 16.0 ms | −14.56 dB |
+
+Identical to 0.01 dB, and necessarily so: the AGC is upstream of the filter
+selection, so it cannot depend on which filter is chosen. The harness asserts
+that, because a difference appearing there would mean something had broken.
+
+This also settles a question §8 left open. The AGC cannot explain why the two
+filters sound different from each other — it treats them identically. Any
+elliptic-versus-FFT difference has to come from the filters themselves.
+
+### What the misalignment actually costs: the wanted signal's own onset
+
+The effect is real, but it is on the wanted signal rather than on
+interference. When a CW element rises, the AGC sees it undelayed and starts
+reducing gain; the element's audio does not emerge until a group delay later,
+by which time the gain has already fallen. The longer the filter holds the
+audio, the less of the element's natural attack survives.
+
+Keyed CW at 20 WPM, through the full chain:
+
+| filter | group delay | attack to −3 dB | onset transient |
+|---|---|---|---|
+| elliptic | 3.6 ms | 4.63 ms | **+2.22 dB** |
+| FFT minimum phase | 4.5 ms | 5.33 ms | **+1.74 dB** |
+| FFT linear phase | 16.0 ms | 5.98 ms | **+0.82 dB** |
+
+The onset transient — how far the element's peak rises above its own settled
+level — falls monotonically as the group delay grows. That is the AGC
+flattening the leading edge of every element, in proportion to how long the
+filter delays it.
+
+**And it reframes every filter-only attack number in this note.** On their
+own these filters settle a keyed element in 5.2, 8.8 and 20.3 ms (§11, §12).
+Through the real chain they land within 1.4 ms of each other. The AGC does
+not remove the difference — it *converts* it, from a difference in time into
+a difference in level. A 15 ms spread in attack becomes a 1.4 dB spread in
+punch. That is why the bench numbers and the listening impressions have been
+so hard to reconcile: they are measuring the same physics in different units.
+
+### Does aligning the gain help?
+
+Tested by patching a scratch copy of `rx_audio.c` to delay the gain by the
+selected filter's group delay — applying `gain[k − D]` instead of `gain[k]`,
+so the gain reaching a sample is the gain computed for the input that sample
+came from. Not committed; the shipped code is unchanged.
+
+| filter | onset transient, shipped | with the gain aligned | recovered |
+|---|---|---|---|
+| elliptic | +2.22 dB | +3.47 dB | +1.25 dB |
+| FFT minimum phase | +1.74 dB | +2.82 dB | +1.08 dB |
+| FFT linear phase | +0.82 dB | +2.36 dB | +1.54 dB |
+
+Every realization gets a crisper element onset, and the spread between them
+narrows from 1.40 dB to 1.11 dB. The linear-phase filter gains most, which
+follows — it had the most to lose.
+
+On the interferer, alignment does exactly what the mechanism says and no
+more. The duck's depth 20 ms after the burst is unchanged (−14.68, −14.67,
+−14.84 dB); only its onset moves, from the moment the burst hits the antenna
+to the moment it becomes audible. At 5 ms after the burst the shipped code is
+already fully ducked (−14.94 dB) while the aligned version has barely started
+(−4.37 dB elliptic, +0.57 dB linear phase). Better aligned, not quieter.
+
+### What this justifies, and what it does not
+
+It is a real, measured, one-to-one-and-a-half dB improvement in transient
+punch on every CW element, and it costs one circular buffer of `double` on a
+path that already has the audio delayed anyway. It does not move the AGC's
+tap point, so the frequency-independence that tap was chosen for
+(`rx_audio_demod_design.md` §8.8) is untouched — which is what makes it worth
+preferring over the obvious alternative of measuring the filter output.
+
+What it is **not** is proven audible. 1.25 dB of onset transient is a
+plausible difference between a crisp and a slightly soft element, and the
+direction matches every listening report in this note, but nobody has
+switched it on air. It also will not make the FFT filter sound like the
+elliptic: the ranking is unchanged, both simply get crisper.
+
+Implementation notes for whoever takes it up. The delay has to track the
+*selected* realization, so it changes with `U FFTFILT` and `U MINPHASE` and
+with width — the group delays in the table above are all at 300 Hz. The
+elliptic bank's group delay varies with width too, so a single constant is
+wrong; it wants a per-configuration figure, which is exactly what
+`rx_filter_test.c` Case E and `tools/gen_narrow_filters.py` already measure.
+And the delay line must be cleared when the selection changes, or the first
+few ms after a switch get a gain computed for the previous filter.
+
+### A harness mistake worth recording
+
+The first version of this experiment put the bursts 250 ms apart and took its
+baseline from the gap between them. The AGC's release is 300 ms, so the
+baseline sat inside the recovery from the *previous* burst — a lower gain than
+settled. Every pre-burst window then read 3 to 4 dB **high**, which looks
+exactly like a rising envelope before each event and is the opposite of the
+artifact being hunted. The fix was a 1.5 s period, five times the release.
+Recorded because the failure was silent and plausible: with any AGC in
+circuit, a periodic stimulus faster than the release time constant measures
+its own recovery curve rather than the thing under test.
+
+## 16. Decided: the FFT filter is the default, linear phase is retired
+
+The on-air question §8, §11, §12 and §15 each left open has an answer now,
+and it arrived from the operator's side rather than the bench.
+
+For most of this investigation the radio defaulted to the elliptic bank and
+the FFT filter was reached through a control panel whose "Use FFT filter"
+checkbox sat between two others — one for the filter's on/off state, one for
+the FFT filter's realization. The pitch and width selectors applied to both
+implementations, but nothing in the layout said so. The operator spent a long
+stretch of listening believing the pitch/width controls belonged to the FFT
+filter alone, and believing comparisons were between FFT realizations when
+the elliptic bank was in circuit throughout.
+
+That is a UI defect, and what it invalidated was the comparison, not the
+filters. Three things changed as a result.
+
+**The panel asks one question at a time.** A `CW filter` checkbox for in or
+out; beneath it, indented, a two-way radio choice between `FFT (tunable)` and
+`Elliptic bank`; then pitch and width, which sit outside that choice because
+they apply to whichever filter is selected. Radio buttons rather than a
+checkbox, because the choice is between two named things and a checkbox
+labelled with one of them leaves the other unnamed.
+
+**Linear phase is retired from the control surface.** rigctld's
+`u`/`U MINPHASE` and the panel checkbox are gone. Nobody copying CW would
+choose 16.0 ms of group delay and a 20.3 ms settling time over 4.5 ms and
+8.8 ms, so offering it as an operator control created only a state in which
+the radio could be quietly misconfigured.
+
+It is **not** deleted from the code, and that distinction is the interesting
+part. `filter_min_phase()` transforms a linear-phase design into a
+minimum-phase one, so the linear-phase response is an intermediate state that
+must exist regardless — retiring the control removes the ability to stop
+halfway, not the code. Two harnesses need to stop halfway:
+`rx_filter_test.c` Case E proves the transformation correct by measuring the
+two realizations' magnitude responses against each other (0.49 dB worst-case
+deviation), and `rx_audio_impulse_test.c` uses linear phase as the extreme
+group delay that makes §15's AGC misalignment visible at all. Delete the
+capability and both lose their reference, so
+`rx_audio_set_narrow_filter_min_phase()` survives as a documented bench-only
+entry point the daemon never calls.
+
+**The FFT filter is now the default**, on the strength of continuous pitch
+and width against the bank's rungs, now that minimum phase has brought its
+attack within 3.6 ms of the elliptic's.
+
+### The elliptic bank stays, and not out of sentiment
+
+Deleting it was considered and rejected. Two of the three reasons are
+structural rather than matters of taste.
+
+It is the **cheap** filter — four biquads per sample against a 4096-point
+transform every block. Other operators want to run maxibitx on a Pi Zero 2W,
+which is the board whose real-time margin produced the xrun investigation in
+ARCHITECTURE.md §10 step 7. A filter that costs almost nothing is worth
+keeping available there.
+
+It is the **fallback** — `rx_audio_process()` uses the elliptic for any block
+that isn't exactly `RX_FILTER_BLOCK_LEN`, because the FFT filter's
+overlap-save history would be misaligned by any other size. Remove the bank
+and that path needs a new answer; silence is not one. (`rx_audio_test.c`
+Case C had to be taught to re-select the FFT filter explicitly after this
+change, because Case B now leaves the elliptic selected and the fallback only
+engages on the FFT path — it would otherwise have kept passing while testing
+nothing.)
+
+And it is still **faster on attack**: 5.2 ms against 8.8 ms at 300 Hz, and
++2.22 dB of onset transient against +1.74 dB through the full chain (§15).
+Minimum phase closed most of that gap. It did not close it.
+
+So the arrangement is deliberate — the tunable filter by default, the cheap
+fast one a click away, both retuned together so the comparison stays fair.
+What remains genuinely unanswered is which an operator prefers on a crowded
+band. For the first time that question can be asked with controls that say
+what they do.
