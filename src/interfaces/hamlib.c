@@ -331,10 +331,11 @@ static int handle_line(int fd, char *line)
 
     if (cmd[0] == 'u' && (cmd[1] == '\0' || cmd[1] == ' ')) {
         // get_func <name>: NARROW (rx_audio.c's narrow stage-3 filter, on/off),
-        // FFTFILT (which stage-3 implementation it uses), MINPHASE (which
-        // realization the FFT one uses) and TONE (the TX test-tone
-        // generator, 0-2). Not Hamlib RIG_FUNC names - extensions for
-        // tools/rigctl_panel.py.
+        // FFTFILT (which stage-3 implementation it uses) and TONE (the TX
+        // test-tone generator, 0-2). Not Hamlib RIG_FUNC names - extensions
+        // for tools/rigctl_panel.py. There is no MINPHASE: the FFT filter
+        // always runs minimum phase, since nobody listening to CW would pick
+        // 16ms of group delay over 4.5ms (rx_audio.h).
         char func_name[32] = "";
         sscanf(cmd + 1, "%31s", func_name);
         if (strcmp(func_name, "NARROW") == 0) {
@@ -349,12 +350,6 @@ static int handle_line(int fd, char *line)
             send_line(fd, buf);
             printf("rigctl: u FFTFILT -> %s\n",
                    rx_audio_get_narrow_filter_impl() ? "fft" : "elliptic");
-        } else if (strcmp(func_name, "MINPHASE") == 0) {
-            char buf[8];
-            snprintf(buf, sizeof(buf), "%d\n", rx_audio_get_narrow_filter_min_phase());
-            send_line(fd, buf);
-            printf("rigctl: u MINPHASE -> %s\n",
-                   rx_audio_get_narrow_filter_min_phase() ? "minimum phase" : "linear phase");
         } else if (strcmp(func_name, "TONE") == 0) {
             char buf[8];
             snprintf(buf, sizeof(buf), "%d\n", (int)tone_gen_get_mode());
@@ -384,14 +379,6 @@ static int handle_line(int fd, char *line)
             send_rprt(fd, 0);
             printf("rigctl: U FFTFILT %d -> stage-3 implementation %s\n", val,
                    val ? "fft" : "elliptic");
-        } else if (strcmp(func_name, "MINPHASE") == 0) {
-            // Re-designs the FFT filter's response, so it runs here on the
-            // rigctld thread rather than anywhere near the audio thread -
-            // see rx_audio_set_narrow_filter_min_phase().
-            rx_audio_set_narrow_filter_min_phase(val != 0);
-            send_rprt(fd, 0);
-            printf("rigctl: U MINPHASE %d -> FFT filter uses %s\n", val,
-                   val ? "minimum phase" : "linear phase");
         } else if (strcmp(func_name, "TONE") == 0) {
             // Test-tone generator: 0 off, 1 single tone, 2 two-tone
             // (tone_gen.h). Doesn't key the radio - any PTT source does.
