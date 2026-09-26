@@ -88,11 +88,14 @@ int rx_audio_get_narrow_filter(void);
 //
 // The FFT filter is the default because it tunes pitch and width
 // continuously instead of to the bank's rungs. The bank is not deprecated:
-// it is four biquads per sample against a 4096-point transform every block,
-// which is why it stays available on a Pi Zero 2W, and it is what
+// it is the faster of the two on a keyed element's attack, and it is what
 // rx_audio_process() falls back to for a block that isn't
-// RX_FILTER_BLOCK_LEN long. Both run every block regardless of which is
-// selected, so switching never thumps.
+// RX_FILTER_BLOCK_LEN long.
+//
+// Both run every block regardless of which is selected, so switching never
+// thumps - and so selecting the cheaper filter saves no CPU, which is worth
+// knowing before reaching for it on a slow board. The design note's §17 has
+// the measured costs.
 //
 // Wired to rigctld's "u"/"U FFTFILT" (hamlib.c) and the control panel.
 void rx_audio_set_narrow_filter_impl(int use_fft);
