@@ -161,8 +161,7 @@ connected.
 | `L RFPOWER <0.0-1.0>` | `RPRT 0` | Moves the ALC limiter's ceiling. Clamped; it cannot exceed `max_power`. |
 | `l ALC` | `0.00` | ALC gain reduction in **dB**, not Hamlib's 0.0-1.0. Peak-held ~1 s so it reads as a meter. Read-only (extension) |
 | `u NARROW` / `U NARROW <0\|1>` | `0` / `RPRT 0` | Narrow CW filter on/off (extension) |
-| `u FFTFILT` / `U FFTFILT <0\|1>` | `0` / `RPRT 0` | Narrow filter type: 0 elliptic, 1 FFT (extension) |
-| `u MINPHASE` / `U MINPHASE <0\|1>` | `1` / `RPRT 0` | Which realization the FFT filter uses: 1 minimum phase (the default, 4.5 ms group delay), 0 linear phase (16 ms). Same magnitude response either way; no effect while the elliptic is selected (extension) |
+| `u FFTFILT` / `U FFTFILT <0\|1>` | `1` / `RPRT 0` | Which CW filter: 1 the FFT filter (the default, always minimum phase), 0 an elliptic IIR from the pre-designed bank. `CWPITCH`/`CWWIDTH` apply to either (extension) |
 | `l CWPITCH` / `L CWPITCH <hz>` | `700` / `RPRT 0` | CW pitch: 500 to 1000 Hz in 100 Hz steps. Moves four things together — the RX BFO (the tone you hear), stage 3's filter center, the TX sidetone, and the CW IF shift that keeps the carrier on the dial. The transmitted frequency does not change. Refused while transmitting (`RPRT 0`, pitch unchanged — read it back). A real Hamlib level, advertised in `dump_state` |
 | `l CWWIDTH` / `L CWWIDTH <hz>` | `300` / `RPRT 0` | Stage 3's width: 150, 300, 450 or 600 Hz (extension). Both settings snap to the nearest value `src/narrow_filter_bank.h` carries; the log line reports which one was selected, and a client should display the `l` readback rather than what it asked for |
 | `u TONE` / `U TONE <0\|1\|2>` | `0` / `RPRT 0` | TX test-tone generator: 0 off, 1 single 1 kHz, 2 two-tone 700 + 1900 Hz. Doesn't key the radio; any PTT does. Off after 30 s in TX. Out of range: `RPRT -1` (extension) |
@@ -172,7 +171,7 @@ connected.
 | `q`, `Q`, `quit` | (connection closes) | |
 
 Anything else replies `RPRT -1`. The extensions (`MICGAIN`, `ALC`,
-`NARROW`, `FFTFILT`, `MINPHASE`, `CWWIDTH`, `TONE`) aren't Hamlib names or aren't in Hamlib's
+`NARROW`, `FFTFILT`, `CWWIDTH`, `TONE`) aren't Hamlib names or aren't in Hamlib's
 units, so a stock Hamlib client won't use them, but they follow the same
 syntax. `AF`, `CWPITCH`, `RFPOWER` and `STRENGTH` are real Hamlib levels and are
 advertised in `dump_state`.
