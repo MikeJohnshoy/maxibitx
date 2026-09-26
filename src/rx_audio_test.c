@@ -19,9 +19,10 @@
 // precedent as this project's other harnesses); cw.h is a header-only
 // dependency (CW_PITCH_HZ), not cw.c itself.
 //
-// Case A: default state (elliptic selected) - a steady synthetic
-//   complex tone produces finite, non-silent PCM output.
-// Case B: rx_audio_set_narrow_filter_impl(1) switches to the FFT path -
+// Case A: default state (the FFT filter, minimum phase) - a steady
+//   synthetic complex tone produces finite, non-silent PCM output, and the
+//   defaults are what rx_audio.h says they are.
+// Case B: rx_audio_set_narrow_filter_impl(0) switches to the elliptic bank -
 //   still finite, non-silent, and the two implementations' outputs
 //   differ (proving the selector actually changed which buffer feeds
 //   stage 4, not just that nothing crashed).
@@ -124,32 +125,35 @@ int main(void)
 
 	printf("rx_audio.c integration smoke test - docs/ARCHITECTURE.md step 7\n\n");
 
-	// --- Case A: default (elliptic) ------------------------------------
-	if (rx_audio_get_narrow_filter() != 1 || rx_audio_get_narrow_filter_impl() != 0) {
-		fprintf(stderr, "A. Unexpected default state (narrow=%d impl=%d, want 1/0) - FAIL\n",
-		        rx_audio_get_narrow_filter(), rx_audio_get_narrow_filter_impl());
+	// --- Case A: default (the FFT filter, minimum phase) ----------------
+	if (rx_audio_get_narrow_filter() != 1 || rx_audio_get_narrow_filter_impl() != 1 ||
+	    rx_audio_get_narrow_filter_min_phase() != 1) {
+		fprintf(stderr, "A. Unexpected default state (narrow=%d impl=%d minphase=%d, "
+		        "want 1/1/1) - FAIL\n", rx_audio_get_narrow_filter(),
+		        rx_audio_get_narrow_filter_impl(),
+		        rx_audio_get_narrow_filter_min_phase());
 		return 1;
 	}
-	double rms_elliptic = run_tone(RX_FILTER_BLOCK_LEN, 8, 0.0);
-	printf("A. Default state (elliptic), steady on-dial-center tone (-> %d Hz audio): RMS=%.1f "
-	       "(want finite, > 0)\n", CW_PITCH_HZ, rms_elliptic);
-	if (!(rms_elliptic > 0)) {
+	double rms_fft = run_tone(RX_FILTER_BLOCK_LEN, 8, 0.0);
+	printf("A. Default state (FFT, minimum phase), steady on-dial-center tone (-> %d Hz audio): "
+	       "RMS=%.1f (want finite, > 0)\n", CW_PITCH_HZ, rms_fft);
+	if (!(rms_fft > 0)) {
 		fprintf(stderr, "   FAIL: silent output in the default state\n");
 		return 1;
 	}
 
-	// --- Case B: switch to FFT, confirm the selector actually matters --
-	rx_audio_set_narrow_filter_impl(1);
-	if (rx_audio_get_narrow_filter_impl() != 1) {
-		fprintf(stderr, "B. rx_audio_set_narrow_filter_impl(1) didn't take - FAIL\n");
+	// --- Case B: switch to the elliptic bank, confirm the selector matters
+	rx_audio_set_narrow_filter_impl(0);
+	if (rx_audio_get_narrow_filter_impl() != 0) {
+		fprintf(stderr, "B. rx_audio_set_narrow_filter_impl(0) didn't take - FAIL\n");
 		return 1;
 	}
-	double rms_fft = run_tone(RX_FILTER_BLOCK_LEN, 8, 0.0);
-	printf("B. FFT filter selected, steady on-dial-center tone (-> %d Hz audio): RMS=%.1f "
+	double rms_elliptic = run_tone(RX_FILTER_BLOCK_LEN, 8, 0.0);
+	printf("B. Elliptic bank selected, steady on-dial-center tone (-> %d Hz audio): RMS=%.1f "
 	       "(want finite, > 0, and comparable to A's - both are tuned to pass this frequency)\n",
-	       CW_PITCH_HZ, rms_fft);
-	if (!(rms_fft > 0)) {
-		fprintf(stderr, "   FAIL: silent output with the FFT filter selected\n");
+	       CW_PITCH_HZ, rms_elliptic);
+	if (!(rms_elliptic > 0)) {
+		fprintf(stderr, "   FAIL: silent output with the elliptic bank selected\n");
 		return 1;
 	}
 	// Loosely comparable (both filters are unity-ish gain AT their tuned
@@ -158,13 +162,19 @@ int main(void)
 	// here (e.g. an order of magnitude off) would mean the selector
 	// picked the wrong buffer or a scaling bug, not just a shape
 	// difference.
-	double ratio = rms_fft / rms_elliptic;
-	printf("   (ratio FFT:elliptic = %.2f - want roughly comparable, not an order of magnitude off)\n",
+	double ratio = rms_elliptic / rms_fft;
+	printf("   (ratio elliptic:FFT = %.2f - want roughly comparable, not an order of magnitude off)\n",
 	       ratio);
 
 	// --- Case C: block-size mismatch, FFT selected ----------------------
 	// n=500 != RX_FILTER_BLOCK_LEN - should fall back to elliptic output
 	// for this one call rather than crash or emit garbage.
+	//
+	// Re-select the FFT filter first: Case B left the elliptic selected, and
+	// the fallback only engages for the FFT path, so without this the case
+	// would pass while testing nothing. (It tested the fallback by accident
+	// before, when the FFT filter was what Case B switched TO.)
+	rx_audio_set_narrow_filter_impl(1);
 	double rms_mismatch = run_tone(500, 1, 0.0);
 	printf("\nC. Block-size mismatch (n=500) with FFT selected: RMS=%.1f (want finite - fallback path)\n",
 	       rms_mismatch);
