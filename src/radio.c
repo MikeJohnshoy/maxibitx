@@ -109,6 +109,17 @@ void radio_set_mode(enum radio_mode m) {
   case RADIO_MODE_CW:
   default:                 rx_audio_set_demod(RX_DEMOD_CW);  break;
   }
+
+  // DIGITAL takes stage 3 (the narrow CW filter) out of circuit and holds
+  // it out. Not a preference: DIGITAL exists to feed WSJT-X through
+  // rx_audio.c's uac_out tap, which sits downstream of stage 3, so a filter
+  // carried in from a CW session gives the decoder a ~300Hz slice of the
+  // ~2.7kHz window FT8 spreads across. The demod switch above deliberately
+  // treats DIGITAL as USB, which means rx_audio.c cannot tell the two
+  // apart - this call is how it learns the difference. It remembers the
+  // operator's own setting and restores it as soon as the mode leaves
+  // DIGITAL. docs/dsp_design_notes/rx_uac_out_digital_mode_bandwidth.md §11.
+  rx_audio_inhibit_narrow_filter(m == RADIO_MODE_DIGITAL);
 }
 
 int radio_set_cw_pitch(int hz) {
