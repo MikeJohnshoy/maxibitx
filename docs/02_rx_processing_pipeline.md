@@ -269,6 +269,19 @@ The mode is set by `radio_set_mode()` in `radio.c`, which calls
 `rx_audio_set_demod()`; every mode change (rigctld `M`, Kenwood `MD`,
 the control panel) goes through there.
 
+That is also where DIGITAL takes stage 3 out of circuit and holds it
+out, via `rx_audio_inhibit_narrow_filter()`. `uac_out` below is taken
+downstream of stage 3, so a narrow filter left in from a CW session
+would give WSJT-X a ~300 Hz slice of the ~2.7 kHz window FT8 spreads
+across — and WSJT-X sets the mode itself over CAT, which is why the
+daemon enforces this rather than the control panel greying a checkbox.
+The operator's own setting is remembered and restored on leaving
+DIGITAL, and `u NARROW` reports the effective state so a client is
+never told the filter is in circuit when it isn't
+([`dsp_design_notes/rx_uac_out_digital_mode_bandwidth.md`](dsp_design_notes/rx_uac_out_digital_mode_bandwidth.md)
+§11). USB and LSB are untouched: a very narrow filter there is extreme
+but it is the operator's choice to make.
+
 After AGC the audio goes two ways. The local speaker output applies
 `rx_volume`, a log taper (0-100% maps onto −50..0 dB below
 `RX_VOLUME_MAX`; 0% mutes; the default is 67%). The USB audio output
