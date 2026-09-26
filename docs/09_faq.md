@@ -161,13 +161,12 @@ describe, and it measures *sharper* than the elliptic, with a stopband
 30–55 dB deeper. The real cost was in the time domain, where nobody had
 looked: a linear-phase FIR of that length delays everything by 16 ms, and
 a keyed CW element took 20 ms to settle against the elliptic's 7 ms. A
-minimum-phase realization of the same response (`u MINPHASE`, on by
-default) brings those to 4.5 ms and 8.7 ms with the magnitude response
-intact. The unification still isn't complete — the elliptic IIR remains
-the *default* receive narrow filter, with the FFT implementation
-selectable at runtime (`u FFTFILT`), because it sounded worse on real
-signals than the bench predicted, and whether minimum phase closes that
-gap is an on-air question nobody has answered yet.
+minimum-phase realization of the same response brings those to 4.5 ms and
+8.8 ms with the magnitude response intact, and it is now the only
+realization the FFT filter offers — the linear-phase one has no operator
+control, because 16 ms of group delay is not something anyone copying CW
+would choose. The FFT filter became the *default* receive narrow filter at
+the same time.
 
 There's a second twist. The FFT filter existed on the receive side to make
 pitch and width adjustable, and elliptic coefficients merely can't be
@@ -175,9 +174,13 @@ designed *at runtime* — nothing stopped stage 3 from carrying more than one
 of them. It now carries 24, six pitches by four widths, designed
 offline and switched by loading a coefficient set. That gives the elliptic
 the adjustability the migration was for, at quantized values instead of
-continuous ones, and keeps its faster attack. So the receive side has two
-working answers now, and the shared-pipeline argument is weaker on receive
-than it looked.
+continuous ones, and keeps its faster attack — 5.2 ms against the
+minimum-phase FFT filter's 8.8 ms at the same width. So the receive side has
+two working answers, and the elliptic bank is kept deliberately rather than
+as legacy: four biquads per sample against a 4096-point transform every
+block matters on a Pi Zero 2W, and it is what the odd-block-size path falls
+back to. Which one sounds better on a crowded band is still an on-air
+question.
 
 ### Why is the raw I/Q spectrally inverted?
 
@@ -506,8 +509,8 @@ proof that [`06_api.md`](06_api.md) is sufficient. Second, it is a
 development instrument: the `u FFTFILT` switch exists so an operator can
 A/B the elliptic and FFT narrow filters on real signals, which is how
 the FFT version was found to sound worse than the bench predicted — and
-`u MINPHASE` is there for the follow-up A/B, between the two realizations
-of that same FFT filter.
+the pitch and width selectors let that comparison be made at any of the
+bank's 24 settings.
 
 ### Could `rigctl_panel.py` be replaced by a full-featured SDR application?
 
