@@ -141,7 +141,14 @@ already used in `antialias_filter_design.md`.
   question at a time after a UI defect led to a long stretch of comparing the
   wrong things, and the elliptic bank is kept deliberately - the cheap filter
   for a Pi Zero 2W, the odd-block-size fallback, and still the faster of the
-  two on attack.
+  two on attack. §17 then corrects §16's own cost argument, prompted by an
+  operator seeing no change in `top` when switching filters: both filters run
+  every block whatever is selected, so the cheap one's cheapness is never
+  collected, the measured gap is only 2.6x (19.9us against 7.6us per block on
+  x86, both under 0.2% of the block period), and on a Cortex-A53 the serial
+  double-precision biquad cascade is the *less* favourable of the two - so
+  the retention argument rests on the odd-block-size fallback and the attack,
+  not on cost. Includes the shape of a fix if the saving is ever wanted.
 - [`iq_stream_design.md`](iq_stream_design.md) — a third, minimal I/Q
   export path (`iq_stream.c`), independent of both `hpsdr_p1.c` (single-
   client - a second HPSDR client would silently steal its stream) and
