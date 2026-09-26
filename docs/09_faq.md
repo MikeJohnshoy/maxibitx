@@ -475,6 +475,16 @@ serial port with FLRig closed, or let FLRig own the port and set WSJT-X's
 rig to "FLRig" pointing at its XML-RPC server. The same rule applies to
 any other application that wants that port.
 
+One trap that used to be waiting there is now closed in code. WSJT-X reads
+its audio from a tap downstream of the narrow CW filter, so an operator
+coming off a CW session with a 300 Hz filter engaged would have handed the
+decoder a fraction of FT8's ~2.7 kHz window, with poor decodes as the only
+symptom. Selecting DIGITAL — from the panel, over CAT, or by WSJT-X itself
+— now takes that filter out of circuit and holds it out, and gives it back
+when the mode changes again
+([`dsp_design_notes/rx_uac_out_digital_mode_bandwidth.md`](dsp_design_notes/rx_uac_out_digital_mode_bandwidth.md)
+§11).
+
 ### How does maxibitx work with a key and a microphone?
 
 It uses the sBitx hardware's own connections. The straight key is a GPIO
@@ -507,10 +517,16 @@ protocol for control and subscribes to `iq_stream` for the spectrum, so
 everything it does, any other application can do. It is the working
 proof that [`06_api.md`](06_api.md) is sufficient. Second, it is a
 development instrument: the `u FFTFILT` switch exists so an operator can
-A/B the elliptic and FFT narrow filters on real signals, which is how
-the FFT version was found to sound worse than the bench predicted — and
-the pitch and width selectors let that comparison be made at any of the
-bank's 24 settings.
+A/B the elliptic and FFT narrow filters on real signals, and the pitch and
+width selectors let that comparison be made at any of the bank's 24
+settings. That comparison is also where the panel taught its own lesson —
+an earlier layout implied the pitch and width controls belonged to the FFT
+filter alone, so a long stretch of listening compared something other than
+what the operator believed, and the FFT filter was thought to sound worse
+than the bench predicted for as long as that lasted. It is the default now
+([`dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md`](dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md)
+§16). A control surface that misrepresents what it controls costs more than
+a missing feature.
 
 ### Could `rigctl_panel.py` be replaced by a full-featured SDR application?
 
