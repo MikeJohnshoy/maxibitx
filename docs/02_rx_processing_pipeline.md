@@ -240,9 +240,10 @@ ALSA device.
    ([`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md)).
    `rx_audio_test.c` case E measures both, each rejecting the other's
    side by about 40 dB.
-3. An optional narrow filter (an elliptic IIR by default, or
-   `rx_filter.c`'s FFT filter), switched by rigctld `U NARROW` and
-   `U FFTFILT` or the control panel. Its pitch and width are selectable at
+3. An optional narrow filter - `rx_filter.c`'s FFT filter by default,
+   always in its minimum-phase realization, or an elliptic IIR from a
+   pre-designed bank - switched by rigctld `U NARROW` and `U FFTFILT` or the
+   control panel. Its pitch and width are selectable at
    runtime — `L CWPITCH` picks 500 to 1000 Hz in 100 Hz steps and
    `L CWWIDTH` picks
    150, 300, 450 or 600 Hz, defaulting to 700/300. Changing the pitch moves
@@ -252,14 +253,15 @@ ALSA device.
    transmitted frequency stays where it is
    ([`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md)).
 
-   The elliptic can't design coefficients at runtime, so those twelve
-   combinations are pre-designed offline into `src/narrow_filter_bank.h` by
-   `tools/gen_narrow_filters.py` and switched by loading a set; the FFT
-   filter is retuned to the same passband so the two stay comparable. The
-   FFT one runs a minimum-phase realization by default, which keeps a keyed
-   CW element's attack close to the elliptic's while measuring 30-55 dB
-   deeper in the stopband; `U MINPHASE 0` returns the linear-phase
-   realization for comparison
+   The FFT filter tunes to any pitch and width directly. The elliptic can't
+   design coefficients at runtime, so its 24 combinations are pre-designed
+   offline into `src/narrow_filter_bank.h` by `tools/gen_narrow_filters.py`
+   and switched by loading a set; both are retuned together, so the two
+   always face the same passband. The FFT filter always runs its
+   minimum-phase realization, which keeps a keyed CW element's attack close
+   to the elliptic's while measuring 30-55 dB deeper in the stopband — the
+   linear-phase realization has no operator control, since 16 ms of group
+   delay against 4.5 ms is not a choice anyone listening to CW would make
    ([`dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md`](dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md)).
 4. AGC, which measures the raw input, not any filtered stage.
 
