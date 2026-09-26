@@ -71,9 +71,9 @@ check-filters:
 	python3 tools/gen_narrow_filters.py --check
 
 clean:
-	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-upsample48k \
+	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k \
 		src/fft_filter.o src/fft_filter_test.o src/tx_pipeline.o src/tx_pipeline_test.o \
-		src/rx_filter.o src/rx_filter_test.o src/rx_audio_test.o src/upsample48k_test.o
+		src/rx_filter.o src/rx_filter_test.o src/rx_audio_test.o src/rx_audio_impulse_test.o src/upsample48k_test.o
 
 # docs/ARCHITECTURE.md step 2: fft_filter.c/.h's own standalone bench
 # harness (fft_filter_test.c) against synthetic tones - fft_filter.c
@@ -119,6 +119,16 @@ test-rx-filter: src/rx_filter.c src/rx_filter_test.c src/rx_filter.h src/fft_fil
 # (CW_PITCH_HZ), same as the other harnesses.
 test-rx-audio: src/rx_audio.c src/rx_audio_test.c src/rx_audio.h src/vfo.c src/vfo.h src/fft_filter.c src/rx_filter.c src/cw.h
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/rx_audio.c src/vfo.c src/fft_filter.c src/rx_filter.c src/rx_audio_test.c -o $@ -lfftw3f -lm
+
+# Stage 3 and stage 4 together, which neither test-rx-filter (the filter
+# alone) nor test-rx-audio (the plumbing) can see: rx_audio.c derives its AGC
+# gain from the raw undelayed I/Q and applies it to filtered audio that is one
+# group delay behind, so the gain runs ahead of what it modulates - by a
+# different amount per filter realization. Measures what that does to an
+# interferer the filter removes, and to a keyed CW element's own onset. See
+# docs/dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md.
+test-rx-audio-impulse: src/rx_audio.c src/rx_audio_impulse_test.c src/rx_audio.h src/vfo.c src/vfo.h src/fft_filter.c src/rx_filter.c src/cw.h
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/rx_audio.c src/vfo.c src/fft_filter.c src/rx_filter.c src/rx_audio_impulse_test.c -o $@ -lfftw3f -lm
 
 # WSJT-X TX audio bridge: upsample48k.c/.h's own standalone bench harness
 # (upsample48k_test.c) against synthetic tones, the interpolation-side
