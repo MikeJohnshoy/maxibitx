@@ -370,14 +370,20 @@ static double rx_volume = 0.03;
 // 1 = stage 3 applied (default), 0 = bypassed. See rx_audio_set_narrow_filter().
 static int narrow_filter_enabled = 1;
 
-// Which stage 3 implementation runs when enabled. Elliptic is the
-// default; the FFT filter is there for on-air A/B comparison
-// (ARCHITECTURE.md §10 step 7).
-static enum rx_narrow_filter_impl narrow_filter_impl = RX_NARROW_FILTER_ELLIPTIC;
+// Which stage 3 implementation runs when enabled. The FFT filter is the
+// default: it tunes pitch and width continuously rather than to the bank's
+// rungs, and its minimum-phase realization brought a keyed element's
+// settling time to 8.8ms against the elliptic's 5.2ms - close enough that
+// continuous tuning wins. The elliptic bank stays selectable and is NOT
+// deprecated: it is four biquads per sample against a 4096-point transform
+// every block, which matters on a Pi Zero 2W, and it is what the
+// odd-block-size path in rx_audio_process() falls back to. See
+// docs/dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md.
+static enum rx_narrow_filter_impl narrow_filter_impl = RX_NARROW_FILTER_FFT;
 
-// 1 = the FFT implementation uses its minimum-phase realization (the
-// default), 0 = linear phase. Only audible while that implementation is
-// the selected one. See rx_audio_set_narrow_filter_min_phase().
+// The FFT implementation always runs minimum phase now; linear phase has no
+// operator-facing control. See rx_audio_set_narrow_filter_min_phase() in
+// rx_audio.h for why the setter still exists.
 static int narrow_filter_min_phase = 1;
 
 // maxibitx's raw baseband I/Q is spectrally inverted: a station +d Hz
