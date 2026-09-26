@@ -47,6 +47,12 @@
 //   bounded. The bank keeps the biquad history across the swap, so this is
 //   the case that would catch a high-Q section being handed a state it
 //   can't reconcile - the failure mode would be a loud thump, not a crash.
+// Case I: the mode-level inhibit (radio.c sets it for DIGITAL) bypasses
+//   stage 3 however the operator last set it, reads back as off while it
+//   holds, refuses a request to re-enable, and hands their setting back
+//   when it lifts. The partial failure is the dangerous one - an inhibit
+//   that bypasses but doesn't restore silently costs the operator their
+//   CW filter on every trip through DIGITAL.
 
 #include <stdio.h>
 #include <math.h>
@@ -422,6 +428,89 @@ int main(void)
 		}
 		rx_audio_set_narrow_width(300);
 		(void)settled;
+	}
+
+	// --- Case I: the mode-level inhibit -----------------------------------
+	// radio.c's radio_set_mode() sets this for DIGITAL, where stage 3 would
+	// hand WSJT-X a 300 Hz slice of a 2.7 kHz mode (rx_audio.h). Three
+	// separate claims, because the interesting failure is a partial one:
+	// the inhibit really bypasses, the readback tells the truth about it,
+	// and the operator's own setting survives it.
+	//
+	// Measured on a tone 900 Hz off dial center, which reaches stage 3 as
+	// 1600 Hz audio - well into the stopband, so bypassing the filter is a
+	// large, unambiguous change. The AGC can't confuse the comparison: its
+	// gain comes from the RAW I/Q magnitude, identical in all three runs
+	// (rx_narrow_filter_fft_vs_elliptic.md §15).
+	{
+		const double off_pitch = -900.0;
+		printf("\nI. Mode-level inhibit (DIGITAL), tone %.0f Hz off dial center\n", off_pitch);
+
+		rx_audio_set_narrow_filter(1);
+		rx_audio_set_narrow_filter_impl(1);
+		rx_audio_inhibit_narrow_filter(0);
+		double filtered = run_tone(RX_FILTER_BLOCK_LEN, 16, off_pitch);
+
+		// What a bypass measures, for the inhibit to be compared against.
+		rx_audio_set_narrow_filter(0);
+		double bypassed = run_tone(RX_FILTER_BLOCK_LEN, 16, off_pitch);
+
+		// The request back ON, then inhibited: this is the DIGITAL case.
+		rx_audio_set_narrow_filter(1);
+		rx_audio_inhibit_narrow_filter(1);
+		double inhibited = run_tone(RX_FILTER_BLOCK_LEN, 16, off_pitch);
+		int reads_off = (rx_audio_get_narrow_filter() == 0);
+		int reports_inhibited = (rx_audio_narrow_filter_inhibited() == 1);
+
+		// A client asking for it again while inhibited must not get it.
+		rx_audio_set_narrow_filter(1);
+		double still_inhibited = run_tone(RX_FILTER_BLOCK_LEN, 16, off_pitch);
+
+		// Leaving the mode: the request the operator never withdrew returns.
+		rx_audio_inhibit_narrow_filter(0);
+		double restored = run_tone(RX_FILTER_BLOCK_LEN, 16, off_pitch);
+		int reads_on = (rx_audio_get_narrow_filter() == 1);
+
+		printf("   filter in circuit RMS=%.1f, bypassed RMS=%.1f (%.1f dB of rejection)\n",
+		       filtered, bypassed, 20.0 * log10(bypassed / filtered));
+		printf("   inhibited RMS=%.1f - wanted the bypass value, %.2f dB away\n",
+		       inhibited, 20.0 * log10(inhibited / bypassed));
+		printf("   re-requested while inhibited RMS=%.1f (must stay bypassed)\n", still_inhibited);
+		printf("   inhibit lifted RMS=%.1f - wanted the in-circuit value, %.2f dB away\n",
+		       restored, 20.0 * log10(restored / filtered));
+		// Printed from the values captured at the time, not re-read here -
+		// the inhibit has since been lifted, and re-reading would print the
+		// wrong moment's answer while the assertions below checked the right
+		// one.
+		printf("   readback while inhibited: narrow=%d inhibited=%d (want 0 and 1),"
+		       " after lifting: narrow=%d (want 1)\n",
+		       reads_off ? 0 : 1, reports_inhibited, reads_on ? 1 : 0);
+
+		// 0.1 dB, not equality: the filters keep running while bypassed, so
+		// the two runs differ only by their AGC/meter envelope histories.
+		if (fabs(20.0 * log10(inhibited / bypassed)) > 0.1) {
+			fprintf(stderr, "   FAIL: the inhibit didn't bypass stage 3\n");
+			return 1;
+		}
+		if (fabs(20.0 * log10(still_inhibited / bypassed)) > 0.1) {
+			fprintf(stderr, "   FAIL: a request while inhibited put the filter back in circuit\n");
+			return 1;
+		}
+		if (fabs(20.0 * log10(restored / filtered)) > 0.1) {
+			fprintf(stderr, "   FAIL: lifting the inhibit didn't restore the operator's setting\n");
+			return 1;
+		}
+		// The whole case is vacuous if the filter wasn't doing anything at
+		// this offset to begin with.
+		if (!(20.0 * log10(bypassed / filtered) > 6.0)) {
+			fprintf(stderr, "   FAIL: stage 3 barely attenuated this offset - "
+			                "the comparison above proves nothing\n");
+			return 1;
+		}
+		if (!reads_off || !reports_inhibited || !reads_on) {
+			fprintf(stderr, "   FAIL: readback disagreed with the inhibit state\n");
+			return 1;
+		}
 	}
 
 	printf("\nAll cases completed without a crash or out-of-range sample.\n");
