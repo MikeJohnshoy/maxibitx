@@ -244,5 +244,6 @@ already used in `antialias_filter_design.md`.
   reversal; and 1:1 weighting from the unchanged table by starting every
   fall 150 samples after key-up. Status: **study and specification,
   nothing implemented**. The playback queue is measured on a Pi 4
-  (28.0-28.8ms, within 1ms of the derivation); the T/R race is still
-  derived.
+  (28.0-28.8ms, within 1ms of the derivation), and so is the T/R race,
+  with `MAXIBITX_TR_TIMING`: 6-10ms spare at four periods, ~13ms clipped
+  at two, as predicted.
