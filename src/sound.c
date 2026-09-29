@@ -700,6 +700,38 @@ struct loop_timing_tracker {
 // leave it: the linear-phase FIR's group delay plus the limiter's look-ahead.
 #define TX_PIPELINE_DELAY_FRAMES ((TX_PIPELINE_IMPULSE_LEN - 1) / 2 + TX_ALC_LOOKAHEAD_SAMPLES)
 
+// For tr_warn_if_clipping() below, both measured on a Pi 4 with
+// MAXIBITX_TR_TIMING: the audio loop's processing time before each write
+// (the playback queue is the buffer less one period less this), and the
+// TX-up sequence's own time apart from ext_ptt_delay_ms - two mixer calls,
+// two Si5351 writes and the worker's wake-up. A slower board has more of
+// both, so on a Pi Zero 2W the estimate below errs on the hopeful side.
+#define TR_EST_PROCESS_MS 3.1
+#define TR_EST_TX_UP_MS 7.0
+
+// Warns at start-up when this playback depth and hw_settings.ini's
+// ext_ptt_delay_ms together mean the first keyed sample of a transmission
+// will reach the DAC before the TX-up sequence has unmuted the exciter
+// drive - i.e. the start of every transmission's first element is lost.
+// Sidetone and RF share the playback queue, so a shorter buffer that
+// speeds up the sidetone also shortens that head start.
+// docs/dsp_design_notes/cw_keyer_design_study.md §8.
+static void tr_warn_if_clipping(snd_pcm_uframes_t playback_buffer) {
+  double frame_ms = 1000.0 / SAMPLE_RATE;
+  double queue_ms = ((double)playback_buffer - PERIOD_FRAMES) * frame_ms - TR_EST_PROCESS_MS;
+  double rf_ms = queue_ms + TX_PIPELINE_DELAY_FRAMES * frame_ms;
+  double drive_ms = tx_ext_ptt_delay_ms + TR_EST_TX_UP_MS;
+  if (rf_ms >= drive_ms)
+    return;
+  fprintf(stderr,
+          "sound: WARNING - with a %.0f ms playback buffer and ext_ptt_delay_ms=%d, the first "
+          "~%.0f ms of each transmission's first element will not reach the air: RF gets to "
+          "the DAC ~%.0f ms after TX is requested, but the exciter drive is only up after "
+          "~%.0f ms. Use a longer buffer (MAXIBITX_PLAYBACK_PERIODS), or ext_ptt_delay_ms=0 "
+          "if nothing is connected to EXT_PTT. MAXIBITX_TR_TIMING=1 measures it.\n",
+          playback_buffer * frame_ms, tx_ext_ptt_delay_ms, drive_ms - rf_ms, rf_ms, drive_ms);
+}
+
 // Written by the audio thread once per transmission start, read by the TX
 // worker ~20ms later. written_ns is stored last and loaded first, so a
 // reader that sees it also sees the other two.
@@ -1098,6 +1130,7 @@ int sound_thread_start(const char *device_name) {
       primed += chunk;
     }
     printf("sound: primed playback with %lu frames of silence\n", (unsigned long)primed);
+    tr_warn_if_clipping(playback_buffer);
   }
 
   g_running = 1;
