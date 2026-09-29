@@ -141,7 +141,9 @@ produce a carrier.
 `radio_tx_apply(1)` then runs, in order: mute RX capture
 (`sound_set_rx_capture(0)`, before any TX RF exists), set clk1 to
 `bfo_freq` and clk2 to `freq_hdr + xtal_filter_center`, raise PTT
-(`EXT_PTT`), wait 20 ms, switch the T/R relay (`TX_LINE`), and open the
+(`EXT_PTT`), wait `ext_ptt_delay_ms` from `hw_settings.ini` (20 ms by
+default, for an external amplifier's relay; 0 for a station with nothing on
+`EXT_PTT`), switch the T/R relay (`TX_LINE`), and open the
 exciter feed (`sound_set_tx_drive(TX_MASTER_VOL)`). Returning to RX is
 the reverse: exciter feed to 0, PTT off, 5 ms, relay off, clk1 back to
 `xtal_filter_center + RX_IF_FREQ_HZ`, clk2 back to its RX value (with
