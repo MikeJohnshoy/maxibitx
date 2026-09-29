@@ -679,9 +679,9 @@ widget states and the frame title follow the mode across
 CW/DIGITAL/USB/LSB/CWR, the comboboxes return to `readonly` rather than
 becoming free-text entries, `apply_mode("PKTUSB")` gates the group (that
 being the path a WSJT-X-initiated mode change arrives on), and the window's
-requested geometry is unchanged at 596x1180 in both states — the longer
-DIGITAL title does not widen a window that `resizable(False, False)` has
-frozen, which is the bug that has bitten this panel twice before.
+requested geometry is unchanged in both states — the longer DIGITAL title
+does not widen a window whose width `resizable()` keeps frozen, which is
+the bug that has bitten this panel twice before.
 
 ### Still open
 
