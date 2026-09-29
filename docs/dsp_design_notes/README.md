@@ -242,8 +242,11 @@ already used in `antialias_filter_design.md`.
   runnable in `keyer_spec_model.c`; paddle edges read by a thread woken on
   each edge, which also requests TX early; mono-plug detection; paddle
   reversal; and 1:1 weighting from the unchanged table by starting every
-  fall 150 samples after key-up. Status: **study and specification,
-  nothing implemented**. The playback queue is measured on a Pi 4
+  fall 150 samples after key-up. Status: **study and specification; the
+  weighting correction is implemented in `cw.c`** and checked by
+  `test-cw` (every mark and space within 0.23 samples of the key times),
+  and the paddle default is tip = dot, ring = dash; the keyer itself is
+  not built yet. The playback queue is measured on a Pi 4
   (28.0-28.8ms, within 1ms of the derivation), and so is the T/R race,
   with `MAXIBITX_TR_TIMING`: 6-10ms spare at four periods, ~13ms clipped
   at two, as predicted.
