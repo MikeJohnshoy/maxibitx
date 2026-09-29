@@ -111,7 +111,11 @@ means that many milliseconds of the first element were generated into a
 muted path. Only a transmission starting from receive goes through the
 TX-up sequence, so leave more than the 300 ms hang between tests. It times
 the software sequence only; anything the T/R switch or PA needs after
-`TX_LINE` is outside it. Background:
+`TX_LINE` is outside it. maxibitx also checks the combination at start-up:
+if the playback depth and `ext_ptt_delay_ms` together predict clipping, it
+prints a `sound: WARNING` with the estimated milliseconds lost and the two
+fixes. The estimate uses Pi 4 timings, so on a slower board it errs on the
+hopeful side — the timing line above is the real figure. Background:
 [`dsp_design_notes/cw_keyer_design_study.md`](dsp_design_notes/cw_keyer_design_study.md) §8.
 
 **Playback must be fed continuously, not just during a CW burst.**
