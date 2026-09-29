@@ -243,4 +243,6 @@ already used in `antialias_filter_design.md`.
   each edge, which also requests TX early; mono-plug detection; paddle
   reversal; and 1:1 weighting from the unchanged table by starting every
   fall 150 samples after key-up. Status: **study and specification,
-  nothing implemented**; latency and T/R figures derived, not measured.
+  nothing implemented**. The playback queue is measured on a Pi 4
+  (28.0-28.8ms, within 1ms of the derivation); the T/R race is still
+  derived.
