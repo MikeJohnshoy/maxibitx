@@ -252,6 +252,14 @@ evenly spaced dits and compare the first against the rest. If the first is
 short and the others are not, this is confirmed; if all five are equal,
 something in this reasoning is wrong and worth finding.
 
+**Revised by [`cw_keyer_design_study.md`](cw_keyer_design_study.md) §8.**
+The reasoning above leaves out the ALSA playback queue: the tone generated
+at the key-down poll reaches the DAC about 29 ms later (four primed
+periods, less one period and the process time), plus 7.3 ms in the TX
+pipeline. That is roughly the length of the TX-up sequence, so the race is
+close rather than lost — the first element may be intact, or short by a
+few milliseconds. The five-dit test still decides it.
+
 ## 8. Why full break-in is out of reach, and that being fine
 
 A T/R round trip costs ~44 ms of sequencing alone — 20 ms up, ~9.5 ms of
