@@ -281,7 +281,7 @@ restructuring how `cw.c` is driven.
 accepted design. Recording the arithmetic so the choice is visible as a
 choice, not an accident, and so nobody re-derives it later.
 
-## 9. Proposed, not implemented: `ext_ptt_delay_ms`
+## 9. `ext_ptt_delay_ms` — proposed here, now implemented
 
 The one change this investigation recommends. Make the §6 delay a
 `hw_settings.ini` value instead of a compiled-in 20 ms:
@@ -303,6 +303,22 @@ keying path. And the RX-side `usleep(5000)` is a separate question with a
 separate justification — it is not obviously the same delay in reverse and
 should not be folded into the same setting without its own look.
 
+**Implemented as proposed.** `hw_settings.c` reads `ext_ptt_delay_ms` as a
+top-level key, 20 ms when absent, clamped to 0–100 ms with a console
+message if it was out of range, and a reminder on the console whenever it
+is set to 0. The shipped `data/hw_settings.ini` carries the line at 20, so
+behaviour is unchanged until someone edits it. The RX-side 5 ms is left
+alone, per the caution above. Two things came with it: the parser now
+accepts `key = value` as well as `key=value` — a space before the `=` used
+to make any key silently not match — and a top-level key found inside a
+`[section]`, easily done by appending it to the end of the file, is now
+reported rather than silently ignored.
+
+Its effect is measurable with `MAXIBITX_TR_TIMING`
+([`cw_keyer_design_study.md`](cw_keyer_design_study.md) §8), whose
+"drive up" figure should fall by the 20 ms removed. That still says nothing
+about what `TX_LINE` gates (§10).
+
 ## 10. What is still open
 
 - **The bus rate is assumed, not measured** (§2). Every I2C figure scales
@@ -311,7 +327,8 @@ should not be folded into the same setting without its own look.
   five-dit test.
 - **What `TX_LINE` gates** beyond the solid-state switch (§6) — the one
   fact that decides whether `ext_ptt_delay_ms=0` is actually safe on a DE
-  board.
+  board. The setting exists now (§9); this question is what stands between
+  it and being used.
 - **Whether the redundant clk2 write is worth removing** (§2). It costs
   ~9.5 ms per T/R cycle and the cache variables already exist, but it is
   a change to the TX sequencing path, which is the last place to want an
