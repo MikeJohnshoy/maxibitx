@@ -34,8 +34,19 @@ int cw_tx_active(void);
 
 // Call exactly once per audio sample while transmitting in CW - it
 // owns the envelope advance. Returns the current-pitch tone times the
-// attack/decay envelope, approximately [-1, 1].
+// attack/decay envelope, approximately [-1, 1]. Each fall starts
+// cw_weighting_hold_samples() after key-up, which makes the transmitted mark
+// equal the key-down time at the envelope's 50% points (cw.c).
 double cw_get_sample(void);
+
+// The keying envelope's value, 0 to 1, as cw_get_sample() last applied it -
+// for measuring the envelope directly (test-cw) rather than recovering it
+// from the tone.
+double cw_envelope_level(void);
+
+// Samples each fall is held off after key-up for 1:1 weighting, derived from
+// the envelope table at cw_init(): 150 (1.56 ms) for the current table.
+int cw_weighting_hold_samples(void);
 
 // Retunes the keyed tone. Not a control in its own right: the sidetone has
 // to equal the pitch the receiver is rendering, or zero-beating by ear puts
