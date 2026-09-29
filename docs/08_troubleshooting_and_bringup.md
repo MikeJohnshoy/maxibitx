@@ -66,6 +66,36 @@ different fixes:
   short breather so the retry loop doesn't itself worsen the CPU
   contention causing it.
 
+**Playback buffer depth is settable, for measuring.** `sound.c` gives
+playback four periods (42.7 ms) by default and keeps it primed full, so
+about three periods less the processing time — 28.0–28.8 ms measured on a
+Pi 4 — sit queued ahead of every block written. That queue is both the
+local sidetone's latency and the loop's margin against an underrun.
+`MAXIBITX_PLAYBACK_PERIODS=2`..`8` overrides the default, to find out what
+a given board can hold:
+
+```
+MAXIBITX_PLAYBACK_PERIODS=3 ./maxibitx
+```
+
+The console confirms it (`sound: MAXIBITX_PLAYBACK_PERIODS=3 ...`, then
+the granted buffer on the `sound: opened ... playback` line); anything
+outside 2–8 is refused with a message and the default used. Capture stays
+at four periods either way, since its depth adds no latency. What the
+queue actually is, while running:
+
+```
+for i in $(seq 300); do
+  awk '$1=="delay"{print $3}' /proc/asound/card0/pcm0p/sub0/status
+  sleep 0.013
+done | sort -n | awk 'NR==1{min=$1} {max=$1} END{printf "min %d frames (%.1f ms)  max %d frames (%.1f ms)\n", min, min/96, max, max/96}'
+```
+
+The minimum is the queue just before a write. Any `sound: xrun` line means
+this board can't hold that depth under that load; test under the heaviest
+load you run (TX, the panel's spectrum, WSJT-X on the gadget). The why:
+[`dsp_design_notes/cw_keyer_design_study.md`](dsp_design_notes/cw_keyer_design_study.md) §7.
+
 **Playback must be fed continuously, not just during a CW burst.**
 ALSA's underrun detection is tied to the hardware clock draining the
 ring buffer against the software pointer, not to whether `writei()` is
