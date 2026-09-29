@@ -1,7 +1,9 @@
 # CW keyer: a feasibility study
 
-Status: **study only — nothing is implemented.** Written as the precursor
-to building a keyer, to find out before any code exists whether the
+Status: **study, with the first pieces implemented** — the playback-queue
+setting, the T/R measurement and `ext_ptt_delay_ms` (§7, §8), and the 1:1
+weighting correction in `cw.c` (§17). The keyer itself is not built yet.
+Written as the precursor to building a keyer, to find out before any code exists whether the
 requested design holds up, and where it doesn't, what to do instead.
 §1–§13 are the study as first written. **§14 records the decisions taken
 after reading it**, and §15–§17 are the resulting specification — the
@@ -130,9 +132,9 @@ a millisecond old, and sometimes older.
 low on BCM 5 means *dot* — so the line named `DASH` carries the dot
 paddle — and `cw_reverse` swaps them. In straight-key mode either
 line low is key-down. maxibitx already claims BCM 4 as `CW_KEY`; BCM 5 is
-unused. Which contact is the jack's tip and which its ring on a DE board
-is not recoverable from the code and should be checked with a meter before
-the lines are named in `radio_hw.h`.
+unused. Which line the jack's tip reaches and which its ring on a DE board
+is not recoverable from the code; §16 records the paddle convention chosen
+and how to confirm the wiring.
 
 **The envelope table has a hole in it.** `cw_envelope_data` is declared
 `[480]` but initialised with 479 values, so C zero-fills element 479. The
@@ -671,7 +673,8 @@ Each step stands alone and is useful even if the keyer is never finished.
    three, so both remedies are needed before the buffer shrinks. The
    five-dit test on air remains the check on the hardware side.*
 3. **Weighting correction in `cw.c`** (§17), derived from the table — the
-   straight key gets 1:1 immediately.
+   straight key gets 1:1 immediately. *Done: `test-cw` measures every mark
+   and space within 0.23 samples of the key-down and key-up times (§17).*
 4. **`key_input.c`** (§16): the edge-woken thread, timestamped events,
    early TX request, mono-plug detection and reversal — first driving the
    existing straight key, which gains exact timing.
@@ -900,9 +903,16 @@ which is reported and clears the exclusion. None of this needs to know which
 jack contact is the tip: whichever line is held closed is the grounded one.
 
 **Reversal.** One flag swaps which contact is the dot and which the dash,
-in paddle modes only — for a straight key it has no meaning. The default
-follows sbitx's mapping (BCM 5 dot, BCM 4 dash, §3) until the DE board's
-jack has been checked with a meter. There is no Kenwood CAT command for it
+in paddle modes only — for a straight key it has no meaning. **The default
+is tip = dot, ring = dash**, the usual paddle convention. Which BCM line
+each contact reaches is still to be confirmed on a DE board. The working
+assumption is tip = BCM 4, since that is the line a straight key already
+keys, which would make the default dot = BCM 4 and dash = BCM 5: the
+reverse of sbitx's `key_poll()` (§3). To confirm, stop maxibitx (it holds
+both lines), insert a mono plug with the key open, and read both lines
+(`gpioget gpiochip0 4 5` with libgpiod 1.x, `gpioget -c gpiochip0 4 5`
+with 2.x): the line that reads 0 is the ring, grounded by the plug's
+sleeve. If it is BCM 4, the assumption is wrong and the default swaps. There is no Kenwood CAT command for it
 (the TS-480 sets it from a menu), so it is a rigctld extension alongside
 `NARROW` and `FFTFILT` — `u`/`U PADREV` — and a checkbox on the panel.
 
@@ -939,3 +949,25 @@ manual dash, which have no WPM to correct against.
 
 It holds while the fall completes before the next rise, `T − C ≥ N − 1`,
 so `T ≥ 629` samples: up to 183 WPM, three times the required range.
+
+**Implemented.** `cw_init()` finds the table's 50% crossing, rounds `C`
+from it and prints it:
+
+```
+cw: weighting correction 150 samples (1.56 ms) - each fall starts that long after key-up, for 1:1 at the envelope's 50% points
+```
+
+`cw_get_sample()` keeps the envelope rising or at full for `C` samples
+after key-up before the fall begins; a key-down during that time simply
+continues the mark. `test-cw` (`src/cw_envelope_test.c`) drives the key a
+block at a time through `cw_poll_key()`, as `sound.c` does, and measures
+the envelope at its 50% points: every mark and space is within 0.23
+samples of the key-down and key-up time (the rounding of `C` from 150.23),
+the envelope returns to the floor after the last element, and TX is
+requested and released once per burst, the release after the fall. With the
+hold removed the same harness reports marks 150.23 samples short and spaces
+150.23 long.
+
+For the straight key this is 1:1 now, but the key is still read once per
+block, so each edge still lands on a block boundary (§5) until
+`key_input.c` (§16) places it at its timestamp.
