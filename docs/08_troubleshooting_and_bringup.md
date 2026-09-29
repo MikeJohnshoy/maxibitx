@@ -96,6 +96,24 @@ this board can't hold that depth under that load; test under the heaviest
 load you run (TX, the panel's spectrum, WSJT-X on the gadget). The why:
 [`dsp_design_notes/cw_keyer_design_study.md`](dsp_design_notes/cw_keyer_design_study.md) §7.
 
+**Whether the first element reaches the air.** Sidetone and RF share the
+playback queue, so the queue is also how long the TX-up sequence has to
+unmute the exciter drive before the first keyed sample arrives at the DAC.
+`MAXIBITX_TR_TIMING=1` prints one line per transmission start saying which
+wins, timed from the moment TX was requested:
+
+```
+tr: drive up at +27.9 ms, first TX sample at the DAC at +14.4 ms (written +0.1, queue 7.0, pipeline 7.3) -> CLIPPED 13.5 ms
+```
+
+`spare` means the drive was up before the first sample arrived; `CLIPPED`
+means that many milliseconds of the first element were generated into a
+muted path. Only a transmission starting from receive goes through the
+TX-up sequence, so leave more than the 300 ms hang between tests. It times
+the software sequence only; anything the T/R switch or PA needs after
+`TX_LINE` is outside it. Background:
+[`dsp_design_notes/cw_keyer_design_study.md`](dsp_design_notes/cw_keyer_design_study.md) §8.
+
 **Playback must be fed continuously, not just during a CW burst.**
 ALSA's underrun detection is tied to the hardware clock draining the
 ring buffer against the software pointer, not to whether `writei()` is
