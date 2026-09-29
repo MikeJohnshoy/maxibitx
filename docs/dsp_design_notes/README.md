@@ -236,5 +236,11 @@ already used in `antialias_filter_design.md`.
   neither: the ~29ms ALSA playback queue, which sidetone and RF share -
   so cutting it also cuts the T/R switch's head start, answered by a
   right-channel-only RF delay. Proposes one seam (`keyer_run_block()`)
-  with a straight-key stub for removal. Status: **study only, nothing
-  implemented**; latency and T/R figures derived, not measured.
+  with a straight-key stub for removal. §14-§17 record the decisions taken
+  after review and are the build specification: a keyer written from
+  scratch (iambic A/B, ultimatic, bug, straight, text) with golden cases
+  runnable in `keyer_spec_model.c`; paddle edges read by a thread woken on
+  each edge, which also requests TX early; mono-plug detection; paddle
+  reversal; and 1:1 weighting from the unchanged table by starting every
+  fall 150 samples after key-up. Status: **study and specification,
+  nothing implemented**; latency and T/R figures derived, not measured.
