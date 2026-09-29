@@ -347,8 +347,9 @@ F ≈ (periods − 1) × 1024 − (thread start + process time) × 96 frames/ms
 
 using the 3.08 ms process time measured on the Pi and taking the thread
 start as negligible (a slower start only lowers `F`). The first sample of a
-newly written block reaches the DAC about 29 ms later. So key-to-sidetone
-latency, derived, not measured:
+newly written block reaches the DAC about 29 ms later — measured on the
+Pi 4 at 28.0–28.8 ms, below. So key-to-sidetone latency, the four-period
+row confirmed by that measurement and the others derived from it:
 
 | playback buffer | queue | + plain polling | + timestamped edges |
 |---|---:|---:|---:|
@@ -376,10 +377,37 @@ steady-state margin problem (ARCHITECTURE.md §10 step 7), so fewer periods
 may well be fine — but it has to be measured, on both boards, before a
 keyer depends on it.
 
-This is also why the figure above is labelled derived: `F` is set once by
-the start-up phase between capture and playback, and one call to
-`snd_pcm_delay()` in the existing `MAXIBITX_LOOP_TIMING` report would
-replace the arithmetic with a measurement.
+**Measured on the Pi 4, and it matches.** The kernel publishes the running
+playback stream's queue as `delay` in
+`/proc/asound/card0/pcm0p/sub0/status`, so no code change is needed.
+Sampling it 300 times, 13 ms apart so the readings walk across the whole
+block cycle:
+
+```
+for i in $(seq 300); do
+  awk '$1=="delay"{print $3}' /proc/asound/card0/pcm0p/sub0/status
+  sleep 0.013
+done | sort -n | awk 'NR==1{min=$1} {max=$1} END{printf "min %d frames (%.1f ms)  max %d frames (%.1f ms)\n", min, min/96, max, max/96}'
+```
+
+| run | minimum | maximum |
+|---|---:|---:|
+| 1 | 2688 frames, 28.0 ms | 3848 frames, 40.1 ms |
+| 2 | 2768 frames, 28.8 ms | 3844 frames, 40.0 ms |
+| 3 | 2736 frames, 28.5 ms | 3836 frames, 40.0 ms |
+
+The minimum is the queue just before a write — `F`, the wait for the first
+sample of a key-down — and at 28.0–28.8 ms it is within 1 ms of the 28.9 ms
+derived above, slightly under it as a real thread start should make it.
+The maximum is the queue just after a write. It sits 1076–1160 frames
+above the minimum rather than exactly one 1024-frame period, because the
+write itself lands a little earlier or later in each cycle as process
+time varies: that spread, about 0.5–1.4 ms, is the loop's own timing
+jitter showing through. Key-to-sidetone latency on this board today is
+therefore about 28–39 ms with plain polling, as the table says.
+
+The same recipe, run on a Pi Zero 2W and with fewer playback periods, is
+what the next step in §12 needs.
 
 ## 8. Sidetone and RF share one queue — the T/R consequence
 
@@ -522,8 +550,9 @@ text line with Send and Stop.
 
 ## 11. Risks and unknowns
 
-- **The playback queue depth** (§7) is derived. Measure it with
-  `snd_pcm_delay()` before designing around it.
+- **The playback queue depth** (§7) is measured on a Pi 4 at four
+  periods (28.0–28.8 ms); the Pi Zero 2W and the shorter buffers are not
+  yet.
 - **The T/R race** (§8) depends on two unmeasured mixer calls and the
   assumed I2C rate. The five-dit test settles it.
 - **Fewer playback periods on a Pi Zero 2W** may not hold without xruns.
@@ -546,9 +575,11 @@ text line with Send and Stop.
 
 Each step stands alone and is useful even if the keyer is never finished.
 
-1. **Measure the playback queue** with `snd_pcm_delay()`, and try three
-   and two periods on a Pi 4 and a Pi Zero 2W. Nothing else in this list
-   decides the feel of the paddle as much.
+1. **Measure the playback queue**, and try three and two periods on a Pi 4
+   and a Pi Zero 2W. Nothing else in this list decides the feel of the
+   paddle as much. *Four periods on the Pi 4 is done (§7): 28.0–28.8 ms.
+   Fewer periods needs the buffer depth made settable, since `sound.c`
+   fixes it at four.*
 2. **Run the five-dit test**; add the right-channel delay line and
    `ext_ptt_delay_ms` if the first element is short.
 3. **Weighting correction in `cw.c`** (§17), derived from the table — the
