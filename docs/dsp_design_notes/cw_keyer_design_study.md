@@ -490,11 +490,11 @@ predicted does not happen at four periods, at least in the software
 sequence — and **any cut in sidetone latency below about three periods
 needs one of the two remedies above first**:
 
-- **`ext_ptt_delay_ms = 0`** (break-in note §9), for a station with no
-  amplifier on `EXT_PTT`: drive-up falls to about 5–10 ms, which at two
-  periods would leave roughly 5–9 ms spare. Small, already specified, and
-  checkable with the same line — but it is safe only once it is known what
-  `TX_LINE` gates on a DE board, which is outside what this measures.
+- **`ext_ptt_delay_ms = 0`** (break-in note §9, now implemented), for a
+  station with no amplifier on `EXT_PTT`: drive-up falls to about 5–10 ms,
+  which at two periods would leave roughly 5–9 ms spare. Checkable with the
+  same line — but it is safe only once it is known what `TX_LINE` gates on
+  a DE board, which is outside what this measures.
 - **The right-channel RF delay**, for everyone else: 20 ms of it at two
   periods restores about the margin four periods has today, whatever
   `EXT_PTT` is driving.
