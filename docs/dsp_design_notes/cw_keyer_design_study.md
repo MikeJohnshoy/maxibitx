@@ -3,6 +3,11 @@
 Status: **study only — nothing is implemented.** Written as the precursor
 to building a keyer, to find out before any code exists whether the
 requested design holds up, and where it doesn't, what to do instead.
+§1–§13 are the study as first written. **§14 records the decisions taken
+after reading it**, and §15–§17 are the resulting specification — the
+keyer's modes, its input path, and its weighting — which is what the
+implementation should be built and tested against. Where §14–§17 and an
+earlier section differ, the later section is the decision.
 
 The request, as stated:
 
@@ -463,18 +468,21 @@ take it as one more parameter if it ever is.
 ## 10. Proposed structure: one seam, three pieces
 
 ```
-key_input.c   GPIO v2 edge events for BCM 4 and BCM 5, drained once per block,
-              timestamps mapped to sample offsets. Knows nothing of Morse.
-                 │  events[] for this block
+key_input.c   GPIO v2 edge events for BCM 4 and BCM 5, read by its own thread
+              woken on each edge (§16): paddle reversal, mono-plug detection,
+              early TX request. Queues events with their kernel timestamps.
+              Knows nothing of Morse.
+                 │  timestamped events, mapped to sample offsets
+                 │  by the audio thread once per block
                  ▼
-keyer.c       mode state machines, WPM, reverse, text queue and Morse table.
-              Emits a key-down/up value per sample for the block, plus
-              "TX wanted". Knows nothing of GPIO or audio.
+keyer.c       mode logic (§15), WPM, text queue and Morse table. Emits a
+              key-down/up value per sample for the block, plus "TX wanted".
+              Knows nothing of GPIO or audio.
                  │  key[n]
                  ▼
-cw.c          envelope (with the §4 compensation) and oscillator, per sample;
-              hang timer and radio_set_tx(). As today, with key[i] in place
-              of the single key_down.
+cw.c          envelope (with the §17 weighting correction) and oscillator, per
+              sample; hang timer and radio_set_tx(). As today, with key[i] in
+              place of the single key_down.
 ```
 
 The audio-thread interface is one call per block:
@@ -486,8 +494,9 @@ int keyer_run_block(const struct key_event *ev, int n_events,
 ```
 
 plus control-side setters (`keyer_set_mode()`, `keyer_set_wpm()`,
-`keyer_set_reverse()`, `keyer_send_text()`, `keyer_abort()`,
-`keyer_busy()`), called from the rigctld and CAT threads. Text reaches the
+`keyer_send_text()`, `keyer_abort()`, `keyer_busy()`, and
+`key_input_set_reverse()` on the input side), called from the rigctld and
+CAT threads. Text reaches the
 audio thread through a ring buffer: the two writers serialise between
 themselves on the control side, and the audio thread's reading side never
 takes a lock.
@@ -526,9 +535,9 @@ text line with Send and Stop.
 - **Which jack contact is dot and which dash** on a DE board (§3).
 - **The reference state machines have quirks** — for example, in the DOT
   and DASH states an idle paddle leaves the state unchanged, and the text
-  path's paddle handling (§3). Port to a written specification of each mode
-  with `iambic_sim.c`'s scenarios as regression cases, rather than
-  transliterating.
+  path's paddle handling (§3). *Decided (§14): the keyer is written from
+  scratch against the specification in §15, whose golden cases are in
+  `keyer_spec_model.c`.*
 - **Whether 5 ms of average latency matters** between plain polling and
   timestamped edges is a feel question. If it does, the start-from-idle
   refinement in §6 recovers it.
@@ -542,14 +551,15 @@ Each step stands alone and is useful even if the keyer is never finished.
    decides the feel of the paddle as much.
 2. **Run the five-dit test**; add the right-channel delay line and
    `ext_ptt_delay_ms` if the first element is short.
-3. **Weighting compensation in `cw.c`**, derived from the table — the
+3. **Weighting correction in `cw.c`** (§17), derived from the table — the
    straight key gets 1:1 immediately.
-4. **`key_input.c` with timestamped edges**, first for the existing
-   straight key: exact timing, plus the mono-plug check.
-5. **`keyer.c` and a `keyer_test` harness**: scripted events in, element
-   sequences and timings out, 1–60 WPM, all modes, with `iambic_sim.c`'s
-   scenarios as golden cases and `keyer_straight.c` built alongside to
-   keep the seam honest.
+4. **`key_input.c`** (§16): the edge-woken thread, timestamped events,
+   early TX request, mono-plug detection and reversal — first driving the
+   existing straight key, which gains exact timing.
+5. **`keyer.c` and a `keyer_test` harness**, written from §15: scripted
+   events in, element sequences and timings out, 1–60 WPM, all modes, with
+   `keyer_spec_model.c`'s golden cases as the acceptance test and
+   `keyer_straight.c` built alongside to keep the seam honest.
 6. **Text**: table, queue, spacing, `b`/`KY`/`KS`/`KEYSPD`, abort on
    paddle, the speed-dependent hang floor.
 7. **Panel controls.**
@@ -559,10 +569,239 @@ Each step stands alone and is useful even if the keyer is never finished.
 ```
 python3 tools/keyer_study/envelope_study.py --ref PATH/TO/modem_cw.c --limiter
 gcc -O2 -std=gnu11 tools/keyer_study/iambic_sim.c -o iambic_sim && ./iambic_sim
+gcc -O2 -std=gnu11 tools/keyer_study/keyer_spec_model.c -o keyer_spec_model && ./keyer_spec_model
 ```
 
 The first covers §3's envelope defect and all of §4, including the pass
 through the real `tx_pipeline.c`; it needs numpy and scipy, and gcc with
 fftw3f for `--limiter`. The second produces §5's tables and takes a few
-minutes. The reference file is `src/modem_cw.c` from
+minutes. The third runs §15's golden cases against the model of the
+specification and exits non-zero if any fails. The reference file is `src/modem_cw.c` from
 `github.com/MikeJohnshoy/sbitx`, branch `dev-54bugfixes`.
+
+## 14. Decisions after review
+
+Taken after reading §1–§13, and binding on the implementation:
+
+- **The keyer is written from scratch, not ported.** The reference state
+  machines work, but they fold mode logic into per-sample counter
+  bookkeeping and carry behaviours nobody would specify on purpose (§3,
+  §11). A keyer built around timestamped events has a simpler natural
+  shape anyway: a handful of decision instants per element, each looking at
+  a known paddle history. What *is* kept from the reference is what was
+  never in question — the Morse table and its lookup, the dit as
+  1.2 s ÷ WPM, and the text spacing rules. §15 is the specification, and
+  `tools/keyer_study/keyer_spec_model.c` is that specification in
+  executable form with its golden cases.
+- **Paddle edges are timestamped by the kernel and read by a thread woken
+  on each edge** (§16). Once every edge carries its own timestamp, how
+  often the queue is emptied no longer affects keying accuracy or sidetone
+  latency — elements can only be rendered once per audio block, and the
+  timestamps place them exactly within it. What the read rate does decide
+  is how soon the T/R sequence can start after the first closure. Waking on
+  the edge is sooner than any polling interval, and costs nothing at all
+  while the key is idle, where a 1 ms timer would wake a thousand times a
+  second to find nothing.
+- **The existing Blackman-Harris table stays**, unchanged, and 1:1
+  weighting comes from correcting the mark length by an amount derived
+  from the table (§17).
+- **A mono straight-key plug in the stereo jack is detected and reported
+  on the console** (§16).
+- **Dot and dash paddles can be reversed** (§16).
+
+## 15. Keyer specification
+
+Written for a from-scratch implementation. Every paddle and key behaviour
+below is exercised by a golden case in `keyer_spec_model.c`; the text,
+speed-change and mode-change rules are specified here but not yet
+modelled, and belong in the real harness's first cases.
+
+**Units.** The dit, `T`, is 1.2 s ÷ WPM rounded to a whole sample:
+`T = round(115200 / WPM)` at 96 kHz (1920 samples at 60 WPM, 115 200 at
+1 WPM; the rounding is at most half a sample, 5 µs). A dot is a mark of
+`T`, a dash a mark of `3T`. Every element the keyer times is followed by a
+space of `T`, and the end of that space is the element's **decision
+point**. An element is *in progress* from the start of its mark to its
+decision point. All times are the kernel timestamps of the edges (§16),
+so "before" and "during" are exact.
+
+**Paddles.** Two contacts, dot and dash, after reversal (§16).
+
+**Iambic A and B.**
+
+- From idle: one paddle closed sends its element. Both closed sends the
+  element of the paddle that closed *first*; a tie goes to the dot.
+- A closure of the opposite paddle while an element is in progress sets
+  that paddle's memory. Memories clear whenever an element starts.
+- **Mode B only:** the opposite paddle being already closed when an element
+  starts also sets its memory — so in B, closed at *any* point during the
+  element counts, while in A only a fresh closure does.
+- At the decision point: if the opposite paddle's memory is set or that
+  paddle is closed, send the opposite element; otherwise if the same paddle
+  is closed, send it again; otherwise stop.
+
+That is the whole of the difference between the modes, and it produces
+the textbook behaviour: release a squeeze during an element and A
+finishes the element and stops, while B finishes it and sends one more
+opposite element. Sending C (`-.-.`) with a dah-first squeeze, A needs the
+release in the final dit; B allows it in the second dah. Both are golden
+cases, as is the release in the second dah under A, which gives K
+(`-.-`).
+
+**Ultimatic.**
+
+- Both closed: the paddle closed *most recently* wins, and its element
+  repeats while both stay closed.
+- One closed: its element repeats. So releasing the winning paddle hands
+  control back to the one still held.
+- A closure of the other paddle during an element sets its memory, and if
+  neither paddle is closed at the decision point, one element of the
+  memorised kind is sent. This is a choice rather than part of the classic
+  definition: it means a quick tap is never silently dropped. Deleting that
+  one rule gives the pure form.
+
+**Bug.** The dot contact sends automatic dots (mark `T`, space `T`) for as
+long as it is closed; releasing mid-dot completes that dot. The dash
+contact keys directly with no timing at all, OR'd with the automatic dots,
+exactly as the two contacts of a mechanical bug are wired.
+
+**Straight key.** The key follows the contact. Either contact keys it,
+unless one is excluded as a grounded ring (§16).
+
+**Text.** Characters come from the Morse table; `T` between elements,
+`3T` between characters, `7T` between words. A character the table lacks
+is skipped and reported. Prosigns arrive in the keyer's own internal form,
+each control surface translating its own convention (§9). Queued text
+requests TX as soon as it is queued, since the keyer knows what is coming.
+**Any paddle or key closure aborts the message:** the element in progress
+completes, the rest of the queue is discarded, and the closure is then
+handled as ordinary paddle input from its own timestamp.
+
+**Changes while sending.** A speed change takes effect at the next element
+start, never mid-element. A mode change takes effect once the keyer is
+idle.
+
+**Weighting.** The keyer times nominal 1:1 marks and spaces. The
+correction that makes the transmitted envelope 1:1 at its 50% points
+belongs to the envelope table, and is applied where the table is (§17).
+
+**Golden cases** (`keyer_spec_model.c`, all passing against the model):
+
+| mode | input | sends |
+|---|---|---|
+| iambic A | dot tapped from idle | `.` |
+| iambic A | dot held for 5 dits | `...` |
+| iambic A | dah-first squeeze, released in the last dit | `-.-.` |
+| iambic A | same squeeze, released in the second dah | `-.-` |
+| iambic B | same squeeze, released in the second dah | `-.-.` |
+| iambic A, B | dah, with the dot tapped inside it | `-.` |
+| iambic B | squeeze from idle, dot closed 0.1 dit first | `.-` |
+| iambic B | squeeze from idle, dah closed 0.1 dit first | `-.` |
+| ultimatic | dot held, dah added, dah released, dot released | `..--..` |
+| ultimatic | dah held, dot tapped inside it | `-.` |
+| bug | dot held for 5 dits, then a 2-dit dash closure | `...` + manual |
+| straight | two closures | two manual marks |
+| iambic A, 1 WPM | C, as above | `-.-.` |
+| iambic B, 60 WPM | C, as above | `-.-.` |
+
+Each case also checks that every mark the keyer times is exactly `T` or
+`3T` and every space between elements exactly `T`, in samples.
+
+## 16. Input path
+
+**One line request, one thread.** `key_input.c` requests BCM 4 and BCM 5
+together (§6): inputs, pull-ups, both edges, kernel debounce, and an event
+buffer well beyond anything a paddle can fill. A dedicated thread blocks in
+`poll()` on that one fd — no CPU at all while the key is idle — and on each
+wake reads every waiting event. For each one it:
+
+1. checks `line_seqno` for a gap, and warns on the console if the kernel
+   ever dropped an event;
+2. skips a line excluded as a grounded ring (below);
+3. maps the physical line to *dot* or *dash*, applying reversal in paddle
+   modes;
+4. pushes `{timestamp, contact, closed/open}` into a single-producer,
+   single-consumer ring — this thread writes, the audio thread reads,
+   neither ever blocks;
+5. on a closure in CW or CWR with TX idle, **requests TX immediately**, up
+   to one block sooner than the audio thread would notice.
+
+The debounce period is a bench setting against a real paddle. If the
+kernel stamps a debounced edge at the end of the period rather than the
+start, that costs latency equal to the period on both edges alike, and no
+timing accuracy (§6).
+
+**TX ownership.** Two threads can now start a transmission, so the
+idle→active transition becomes a single atomic compare-and-swap in `cw.c`
+that both paths go through; whichever wins calls `radio_set_tx(1)`, and the
+other finds TX already active. Releasing TX — the hang timer — stays solely
+with the audio thread, as today.
+
+**Into the audio thread.** Once per block, where `cw_poll_key()` runs now,
+the audio thread takes every event stamped up to this block's capture
+timestamp (`t_read1`) and converts each to a sample offset measured from
+the *previous* block's `t_read1`: the block about to be generated replays
+the last block's interval, one block late and sample-exact (§6). An event
+stamped after `t_read1` stays in the ring for the next block. One that
+arrives too late for its interval — only possible if this thread was
+starved — is placed at offset 0 rather than lost.
+
+**Levels.** `key_input.c` keeps each contact's current state, read once at
+start-up and then followed from the events. The mic-PTT path in USB and
+LSB reads BCM 4's state from there.
+
+**Mono plug in the stereo jack.** At start-up, and again whenever the keyer
+mode changes, both contacts are sampled over a short window (a quarter of a
+second is ample). If exactly one is closed for the whole window, it is
+taken to be a ring grounded by a mono plug: that contact is excluded, the
+input is treated as a straight key on the other, and the console says so —
+
+```
+key: BCM 5 closed since start-up - treating as a mono straight-key plug; that contact is ignored
+```
+
+If both are closed, the console says that instead and detection waits until
+one opens. An excluded contact that later opens means the plug has changed,
+which is reported and clears the exclusion. None of this needs to know which
+jack contact is the tip: whichever line is held closed is the grounded one.
+
+**Reversal.** One flag swaps which contact is the dot and which the dash,
+in paddle modes only — for a straight key it has no meaning. The default
+follows sbitx's mapping (BCM 5 dot, BCM 4 dash, §3) until the DE board's
+jack has been checked with a meter. There is no Kenwood CAT command for it
+(the TS-480 sets it from a menu), so it is a rigctld extension alongside
+`NARROW` and `FFTFILT` — `u`/`U PADREV` — and a checkbox on the panel.
+
+## 17. Weighting with the existing table
+
+The table's rise crosses 50% at index `i50` = 314.6 of `N − 1` = 479, and
+the fall, reading the same table backwards, crosses 50% at `N − 1 − i50`
+samples after it starts. So a key-down of `n·T` produces a 50%-to-50% mark
+of `n·T − C`, where
+
+```
+C = 2·i50 − (N − 1) = 150 samples (1.562 ms) for the current table
+```
+
+computed from the table at start-up, never written down, so a future table
+change carries its own correction.
+
+**The corrected mark length at each WPM** is therefore `n·T + C` samples of
+key-down, and the following space `n·T − C`, for a dot (`n` = 1), a dash
+(`n` = 3) and every element space alike. At 60 WPM that is 2070 samples
+(21.56 ms) of key-down and 1770 (18.44 ms) of key-up, which the table's
+edges turn into exactly 20.00 ms and 20.00 ms at the 50% points; at
+20 WPM, 5910 and 5610 samples for 60.00 and 60.00 ms (§4's table, "with
+compensation"). The correction is the same number of samples at every
+speed — 0.13% of a dit at 1 WPM, 7.8% at 60 — because it is a property of
+the edge, not of the speed.
+
+**Where it is applied: in `cw.c`, as "every fall starts `C` samples after
+the key-up"**, which is exactly the mark-length correction above, done in
+one place. Doing it in the envelope stage rather than the keyer keeps the
+table's property next to the table — the keyer then needs no knowledge of
+which table is in use — and it covers the straight key and the bug's
+manual dash, which have no WPM to correct against.
+
+It holds while the fall completes before the next rise, `T − C ≥ N − 1`,
+so `T ≥ 629` samples: up to 183 WPM, three times the required range.
