@@ -735,7 +735,13 @@ Taken after reading §1–§13, and binding on the implementation:
   `EXT_PTT` can opt in to low sidetone latency with
   `MAXIBITX_PLAYBACK_PERIODS=2` and `ext_ptt_delay_ms = 0` together; either
   one alone is no gain (four periods) or clips the first element (two
-  periods at 20 ms).
+  periods at 20 ms). maxibitx warns at start-up when the combination in
+  use predicts clipping — two or three periods with the 20 ms delay, or a
+  long amplifier delay even at four — using §8's measured timings: 7 ms of
+  TX-up sequence besides the delay, and 3.1 ms of processing before each
+  write. Against the measurements, it predicts 12 ms clipped at two
+  periods (measured 11–15), 1 ms at three (0.2–4.3), 9 ms spare at four
+  (6–10) and 8 ms spare at two with the delay at 0 (5–9).
 
 ## 15. Keyer specification
 
