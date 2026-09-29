@@ -227,8 +227,12 @@ static void radio_tx_apply(int tx_on) {
     sound_set_rx_capture(0);
     si5351bx_setfreq(1, bfo_freq);
     si5351bx_setfreq(2, freq_hdr + xtal_filter_center);
+    // EXT_PTT first and TX_LINE after hw_settings.ini's ext_ptt_delay_ms, so
+    // an external amplifier's relay has closed before RF arrives
+    // (hw_settings.h). 0 skips the wait, for a station with nothing there.
     radio_hw_set_ptt(1);
-    usleep(20000); // let PTT assert before keying the relay
+    if (tx_ext_ptt_delay_ms > 0)
+      usleep((useconds_t)tx_ext_ptt_delay_ms * 1000);
     radio_hw_set_tx_relay(1);
     // Only 'Master' RIGHT feeds the exciter; LEFT (the local speaker) is
     // never touched here.
