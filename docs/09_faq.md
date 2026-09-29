@@ -580,7 +580,7 @@ would be good at.
 ### How do I know a change hasn't broken the DSP?
 
 Run the bench tests — `make test-fft-filter`, `test-tx-pipeline`,
-`test-rx-filter`, `test-rx-audio`, `test-upsample48k`. They link the DSP
+`test-rx-filter`, `test-rx-audio`, `test-upsample48k`, `test-cw`. They link the DSP
 files without any hardware code, so they run anywhere, and they print
 measured numbers against expected ones rather than just passing or
 failing. `make check-comments` flags comments that have drifted into
