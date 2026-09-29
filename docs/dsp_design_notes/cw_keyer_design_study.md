@@ -414,6 +414,17 @@ Predicted minimums, from the same arithmetic less the ~0.5 ms the Pi 4 came
 in under it: about 17.7 ms at three periods and 7.1 ms at two — the second
 also being all the margin the loop would have against an underrun.
 
+**Two periods, measured on the Pi 4:** four runs of the same recipe gave
+minimums of 640, 676, 688 and 764 frames (6.7–8.0 ms) and maximums of
+1676–1784 frames (17.5–18.6 ms), with **no xruns**. The prediction holds to
+within a millisecond. Key-to-sidetone latency at two periods is therefore
+about 7–19 ms with plain polling, against 28–39 ms at four — the whole
+difference being queue, none of it polling. What the no-xrun result covers
+is only the load it was run under; the margin it leaves is the ~7 ms
+minimum itself, against ~0.5–1.4 ms of observed write-time jitter, so it
+should be confirmed while transmitting, retuning, changing filter settings,
+and with WSJT-X on the gadget, and separately on a Zero 2W.
+
 ## 8. Sidetone and RF share one queue — the T/R consequence
 
 Because the exciter feed is the right channel of the same write, **RF is
@@ -436,6 +447,25 @@ a few milliseconds either way, depending on the mixer calls and the real
 bus rate. The five-dit test in that note is still the arbiter. It also
 means **any cut in playback latency eats the head start**: at two periods
 the tone would reach the DAC roughly 15 ms before the drive is unmuted.
+
+With two periods now measured (§7), that is a sharp, testable prediction:
+**at two periods the first element on air should be about 15 ms short**,
+while at four it should be intact or nearly so. The five-dit test at each
+setting — same remote receiver, first dit against the other four — checks
+the whole §8 model at once. Until it has been run, two periods is a
+sidetone setting, not one to transmit CW with.
+
+A first listen on a WebSDR at two periods heard all five dits clean, which
+does not settle it: 15 ms off a hand-keyed dit is within a straight key's
+own variation, a WebSDR's AGC can hide it, and bursts less than the hang
+time apart only expose the very first dit. So the race is now measured in
+software on every transmission start: `MAXIBITX_TR_TIMING=1` has the TX
+worker print, when it unmutes the drive, how long after the TX request that
+happened and when the first TX sample reaches the DAC — the write time,
+the queue from `snd_pcm_delay()` at that write, and the pipeline's 7.3 ms —
+and whether the drive won (`spare`) or lost (`CLIPPED`) and by how much
+([`08_troubleshooting_and_bringup.md`](../08_troubleshooting_and_bringup.md)).
+The prediction is spare at four periods and about 13–15 ms clipped at two.
 
 The clean decoupling is a **delay line on the right channel only**, in
 CW: the sidetone leaves immediately, the RF follows a fixed D ms later.
@@ -582,7 +612,8 @@ Each step stands alone and is useful even if the keyer is never finished.
 
 1. **Measure the playback queue**, and try three and two periods on a Pi 4
    and a Pi Zero 2W. Nothing else in this list decides the feel of the
-   paddle as much. *Four periods on the Pi 4 is done (§7): 28.0–28.8 ms.
+   paddle as much. *Four and two periods on the Pi 4 are done (§7):
+   28.0–28.8 ms and 6.7–8.0 ms, no xruns at two under the load tried.
    Fewer periods: `MAXIBITX_PLAYBACK_PERIODS=2`..`8` sets the depth at
    start-up (default 4), with the same measurement recipe.*
 2. **Run the five-dit test**; add the right-channel delay line and
