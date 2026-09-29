@@ -22,11 +22,24 @@ int tx_band_scale_count = 0;
 
 double tx_full_scale_power = HW_DEFAULT_FULL_SCALE_POWER;
 double tx_max_power = HW_DEFAULT_MAX_POWER;
+int tx_ext_ptt_delay_ms = HW_DEFAULT_EXT_PTT_DELAY_MS;
 
 // Section state while scanning the file - only [tx_band] sections are
 // acted on today; [tcxo] and any others are recognized (so their key=value
 // lines aren't mistaken for top-level keys) but not yet applied.
 enum hw_section { HW_SECTION_TOP, HW_SECTION_TCXO, HW_SECTION_TX_BAND, HW_SECTION_OTHER };
+
+// Keys that only take effect above the first [section]. One written further
+// down - most easily by appending it to the end of the file, which is inside
+// the last [tx_band] - would otherwise be skipped without a word.
+static int is_top_level_key(const char *key) {
+  static const char *const keys[] = { "bfo_freq", "xtal_filter_center", "full_scale_power",
+                                      "max_power", "ext_ptt_delay_ms" };
+  for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
+    if (!strcmp(key, keys[i]))
+      return 1;
+  return 0;
+}
 
 double hw_settings_power_ratio(void) {
   if (tx_full_scale_power <= 0.0 || tx_max_power <= 0.0)
@@ -83,6 +96,11 @@ void hw_settings_load(void) {
     long value;
     if (sscanf(p, "%63[^=]=%ld", key, &value) != 2)
       continue;
+    // "key = value" as well as "key=value": the scan above stops at '=', so
+    // any space before it is still on the key, where it would stop the
+    // comparisons below from matching and the line would be skipped silently.
+    for (size_t k = strlen(key); k > 0 && isspace((unsigned char)key[k - 1]); k--)
+      key[k - 1] = '\0';
 
     if (!strcmp(key, "cal") && (section == HW_SECTION_TCXO || section == HW_SECTION_TOP)) {
       // The si5351's reference frequency as measured on this board, the
@@ -103,6 +121,22 @@ void hw_settings_load(void) {
         xtal_filter_center = (int)value;
         printf("init: xtal_filter_center loaded from %s: %d Hz\n",
                HW_SETTINGS_PATH, xtal_filter_center);
+      } else if (!strcmp(key, "ext_ptt_delay_ms")) {
+        long ms = value;
+        if (ms < 0)
+          ms = 0;
+        if (ms > HW_MAX_EXT_PTT_DELAY_MS)
+          ms = HW_MAX_EXT_PTT_DELAY_MS;
+        tx_ext_ptt_delay_ms = (int)ms;
+        if (ms != value)
+          printf("init: ext_ptt_delay_ms=%ld in %s is outside 0-%d - using %ld ms\n", value,
+                 HW_SETTINGS_PATH, HW_MAX_EXT_PTT_DELAY_MS, ms);
+        else if (ms == 0)
+          printf("init: ext_ptt_delay_ms loaded from %s: 0 ms - no settling time for an "
+                 "amplifier on EXT_PTT, only safe with nothing connected there\n",
+                 HW_SETTINGS_PATH);
+        else
+          printf("init: ext_ptt_delay_ms loaded from %s: %ld ms\n", HW_SETTINGS_PATH, ms);
       } else if (!strcmp(key, "full_scale_power") || !strcmp(key, "max_power")) {
         // Watts, and fractional on a real board (5.5) - re-parse as a
         // double, the %ld above only captured the integer truncation.
@@ -117,6 +151,9 @@ void hw_settings_load(void) {
         }
       }
       // ssb_val and any other top-level keys: read past, not applied yet.
+    } else if (is_top_level_key(key)) {
+      printf("init: %s in %s is inside a [section], so it is ignored - move it above "
+             "the first [section]\n", key, HW_SETTINGS_PATH);
     } else if (section == HW_SECTION_TX_BAND && tx_band_scale_count < HW_MAX_TX_BANDS) {
       struct tx_band_scale *b = &tx_band_scales[tx_band_scale_count];
       if (!strcmp(key, "f_start")) {
