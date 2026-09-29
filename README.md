@@ -47,7 +47,7 @@ the USB gadget providing an audio connection and CAT control interface (~ 1,300 
 
 The DSP is bench-tested on its own (`make test-fft-filter`,
 `test-tx-pipeline`, `test-rx-filter`, `test-rx-audio`,
-`test-upsample48k`), without any hardware attached.
+`test-upsample48k`, `test-cw`), without any hardware attached.
 
 ## What works
 
