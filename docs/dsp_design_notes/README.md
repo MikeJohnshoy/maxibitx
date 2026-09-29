@@ -191,7 +191,7 @@ already used in `antialias_filter_design.md`.
   panel deliberately: WSJT-X sets the mode itself over CAT and never
   opens the panel, so a greyed-out checkbox would have guarded the one
   client that doesn't need guarding.
-- [`cw_break_in_and_i2c_timing.md`](cw_break_in_and_i2c_timing.md) — two
+- [`cw_breakin_and_i2c_costs.md`](cw_breakin_and_i2c_costs.md) — two
   investigations run together because they share a call path: what I2C
   activity costs the RX/TX chains, and what actually limits break-in CW.
   Both answers are "not the thing you'd expect." **I2C:** no I2C exists
@@ -215,4 +215,26 @@ already used in `antialias_filter_design.md`.
   transmission is truncated by 30-40ms, the arithmetic showing why full
   QSK is out of reach, and a proposed (not implemented)
   `ext_ptt_delay_ms` setting. Status: **investigation only, nothing
-  measured on hardware** - measurement recipes included.
+  measured on hardware** - measurement recipes included. The truncation
+  prediction is revised by `cw_keyer_design_study.md` §8, which counts
+  the ALSA playback queue this note left out.
+- [`cw_keyer_design_study.md`](cw_keyer_design_study.md) — feasibility
+  of an electronic keyer (straight, bug, ultimatic, iambic A/B, text to
+  CW, 1-60 WPM) built on the reference sbitx `dev-54bugfixes` keyer, with
+  block-level key handling and sample-level envelope and oscillator.
+  Feasible, and `cw.c` already has the requested structure. Measured with
+  tools in `tools/keyer_study/`: the reference keyer reads its paddles
+  every ~1ms from the GTK timer, not at 96kHz; its envelope table is one
+  value short, leaving a single zero sample at the top of every rise and
+  the start of every fall; both tables give marks 1.56ms light (46%
+  weighting at 60 WPM), fixable with a 150-sample compensation derived
+  from the table; plain block polling leaves a 3-5ms zone per keyer
+  decision in which the outcome can flip (about a fifth of a dit at
+  60 WPM) and can miss sub-block taps; kernel-timestamped GPIO edges,
+  drained once per block through the uAPI maxibitx already uses, remove
+  all of that for a fixed one-block delay. The dominant latency is
+  neither: the ~29ms ALSA playback queue, which sidetone and RF share -
+  so cutting it also cuts the T/R switch's head start, answered by a
+  right-channel-only RF delay. Proposes one seam (`keyer_run_block()`)
+  with a straight-key stub for removal. Status: **study only, nothing
+  implemented**; latency and T/R figures derived, not measured.
