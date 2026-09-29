@@ -501,6 +501,21 @@ needs one of the two remedies above first**:
 
 Either way, `MAXIBITX_TR_TIMING` is the acceptance test.
 
+**`ext_ptt_delay_ms = 0` at two periods, measured on the Pi 4:** drive-up
+at +9.1, 6.9, 6.8, 6.8, 6.8 ms and the first TX sample at the DAC at
++14.4–15.7 ms, so **spare 5.2, 8.8, 8.9, 8.9, 8.8 ms** — the predicted
+5–9 ms. With the delay at 20 on the same run, drive-up was +26.7–28.9 ms
+and 11–15 ms was clipped, so removing the delay moved drive-up by exactly
+the 20 ms and nothing else. The first transmission after start-up is
+consistently about 2 ms slower to drive-up than the rest.
+
+For a station with nothing on `EXT_PTT`, then, two periods and
+`ext_ptt_delay_ms = 0` together give 7–19 ms of sidetone latency with the
+first element intact, as far as software can see — a margin similar to the
+default's. What remains is the hardware side, the five-dit test on air at
+exactly this setting, and for stations that do run an amplifier, the
+right-channel RF delay.
+
 The clean decoupling is a **delay line on the right channel only**, in
 CW: the sidetone leaves immediately, the RF follows a fixed D ms later.
 Sidetone latency is then free to fall with the buffer depth while the T/R
