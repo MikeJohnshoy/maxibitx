@@ -10,11 +10,21 @@
 // at 96kHz), from ~0 to 1.0 - similar to sBitx's own keyer (modem_cw.c).
 // Read forward for attack and backward for decay. A different keying
 // shape is a table swap, not a logic change.
+//
+// Weighting: the table is the rising half of a Blackman-Harris window, so it
+// crosses 50% well past its midpoint. Read forward it reaches 50% late, read
+// backward it reaches 50% early, and a mark measured between the 50% points
+// comes out shorter than the key was down - by 150 samples (1.56ms) for this
+// table. So every fall is held off by that many samples after key-up
+// (weighting_hold below, computed from the table at cw_init()), which makes
+// the transmitted mark equal the key-down time at the 50% points: 1:1
+// weighting. docs/dsp_design_notes/cw_keyer_design_study.md §4 and §17.
 
 #include "cw.h"
 #include "radio.h"
 #include "radio_hw.h"
 #include "vfo.h"
+#include <math.h>
 #include <stdio.h>
 
 #define CW_ENVELOPE_LEN 480
@@ -86,6 +96,18 @@ static int key_down = 0;       // last polled key state
 static int tx_active = 0;      // PTT/relay currently asserted for a keying burst
 static int hang_counter = 0;   // polls remaining before TX releases
 
+// Samples each fall is held off after key-up, for 1:1 weighting (above).
+static int weighting_hold = 0;
+static int hold_remaining = 0; // samples of the current hold still to run
+
+// Where the table crosses 0.5, as a fractional index.
+static double envelope_half_index(void) {
+    for (int i = 0; i < CW_ENVELOPE_LEN - 1; i++)
+        if (cw_envelope[i] < 0.5 && cw_envelope[i + 1] >= 0.5)
+            return i + (0.5 - cw_envelope[i]) / (cw_envelope[i + 1] - cw_envelope[i]);
+    return (CW_ENVELOPE_LEN - 1) / 2.0; // unreachable for a 0-to-1 table
+}
+
 void cw_init(void) {
     cw_pitch_hz = CW_PITCH_HZ;
     vfo_start(&cw_tone, cw_pitch_hz, 0);
@@ -93,6 +115,22 @@ void cw_init(void) {
     key_down = 0;
     tx_active = 0;
     hang_counter = 0;
+
+    // The rise reaches 50% at half_index samples after key-down and the fall,
+    // reading the same table backwards, at (N - 1 - half_index) after it
+    // starts. Delaying the fall by the difference makes the two equal.
+    double half = envelope_half_index();
+    weighting_hold = (int)lround(2.0 * half - (CW_ENVELOPE_LEN - 1));
+    if (weighting_hold < 0)
+        weighting_hold = 0; // a table that falls early would need a shorter mark instead
+    hold_remaining = 0;
+    printf("cw: weighting correction %d samples (%.2f ms) - each fall starts that long "
+           "after key-up, for 1:1 at the envelope's 50%% points\n",
+           weighting_hold, weighting_hold * 1000.0 / 96000.0);
+}
+
+int cw_weighting_hold_samples(void) {
+    return weighting_hold;
 }
 
 void cw_set_pitch(int hz) {
@@ -156,7 +194,20 @@ int cw_tx_active(void) {
 }
 
 double cw_get_sample(void) {
+    // The envelope follows the key, except that after key-up it keeps rising
+    // or holding for weighting_hold samples before it starts to fall.
+    int keyed;
     if (key_down) {
+        keyed = 1;
+        hold_remaining = weighting_hold;
+    } else if (hold_remaining > 0) {
+        keyed = 1;
+        hold_remaining--;
+    } else {
+        keyed = 0;
+    }
+
+    if (keyed) {
         if (envelope_pos < CW_ENVELOPE_LEN - 1) envelope_pos++;
     } else {
         if (envelope_pos > 0) envelope_pos--;
@@ -165,4 +216,8 @@ double cw_get_sample(void) {
     int tone = vfo_read(&cw_tone);           // Q30 fixed-point sine (vfo.c)
     double tone_f = (double)tone / 1073741824.0;
     return tone_f * cw_envelope[envelope_pos];
+}
+
+double cw_envelope_level(void) {
+    return cw_envelope[envelope_pos];
 }
