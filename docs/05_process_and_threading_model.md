@@ -58,7 +58,7 @@ reading `sound.c`.
   the calling thread — audio thread included — never blocks.
   What that sequence actually costs, and which of its delays are real, is
   budgeted in
-  [`dsp_design_notes/cw_break_in_and_i2c_timing.md`](dsp_design_notes/cw_break_in_and_i2c_timing.md):
+  [`dsp_design_notes/cw_breakin_and_i2c_costs.md`](dsp_design_notes/cw_breakin_and_i2c_costs.md):
   the 20ms turns out to be external-amplifier sequencing rather than T/R
   settling, and no I2C reaches the audio thread at all.
 - Graceful shutdown: `main()` installs a `SIGINT`/`SIGTERM` handler
