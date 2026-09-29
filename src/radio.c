@@ -10,7 +10,9 @@
 #include "rx_audio.h" // rx_audio_set_demod() - radio_set_mode() below
 #include "hw_settings.h" // hw_settings_tx_allowed() - radio_set_tx() below
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
+#include <time.h>
 #include <unistd.h>
 
 int freq_hdr = 7030000;
@@ -178,6 +180,42 @@ static int tx_pending = 0;    // 1 = worker has a state change to apply
 static int tx_pending_on = 0; // the state to apply (1 = TX, 0 = RX)
 static pthread_once_t tx_worker_once = PTHREAD_ONCE_INIT;
 
+static int64_t monotonic_ns(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+// When radio_set_tx(1) was last called, for the T/R timing report below.
+static _Atomic int64_t tx_requested_ns = 0;
+
+// MAXIBITX_TR_TIMING (sound.h): one line per transmission start, saying
+// whether the first TX sample reaches the DAC as RF before or after the
+// exciter drive is unmuted - i.e. how much of the first element, if any,
+// never makes it to air. Times are from the radio_set_tx(1) call. It covers
+// the software sequence only: whatever the T/R switch and PA need after
+// TX_LINE is outside it. docs/dsp_design_notes/cw_keyer_design_study.md §8.
+static void tr_timing_report(int64_t drive_up_ns) {
+  int64_t req = atomic_load(&tx_requested_ns);
+  int64_t written, rf_at_dac, queue;
+  double drive_ms = (drive_up_ns - req) / 1e6;
+  // A block written before this request belongs to an earlier transmission
+  // (CAT/network MOX in CW has no TX audio at all): nothing to compare.
+  if (!sound_tx_first_block(&written, &rf_at_dac, &queue) || written < req) {
+    printf("tr: drive up at +%.1f ms; no TX audio started with this transmission\n",
+           drive_ms);
+    return;
+  }
+  double written_ms = (written - req) / 1e6;
+  double queue_ms = queue / 1e6;
+  double rf_ms = (rf_at_dac - req) / 1e6;
+  double margin_ms = rf_ms - drive_ms;
+  printf("tr: drive up at +%.1f ms, first TX sample at the DAC at +%.1f ms "
+         "(written +%.1f, queue %.1f, pipeline %.1f) -> %s %.1f ms\n",
+         drive_ms, rf_ms, written_ms, queue_ms, rf_ms - written_ms - queue_ms,
+         margin_ms >= 0 ? "spare" : "CLIPPED", margin_ms >= 0 ? margin_ms : -margin_ms);
+}
+
 static void radio_tx_apply(int tx_on) {
   if (tx_on) {
     // Mute RX capture first - before PTT, the relay or the clocks, i.e.
@@ -195,6 +233,8 @@ static void radio_tx_apply(int tx_on) {
     // Only 'Master' RIGHT feeds the exciter; LEFT (the local speaker) is
     // never touched here.
     sound_set_tx_drive(TX_MASTER_VOL);
+    if (sound_tr_timing_enabled())
+      tr_timing_report(monotonic_ns());
   } else {
     sound_set_tx_drive(0); // mute the exciter feed before dropping the relay
     radio_hw_set_ptt(0);
@@ -253,6 +293,9 @@ int radio_set_tx(int tx_on) {
   }
 
   pthread_once(&tx_worker_once, radio_tx_worker_start);
+
+  if (tx_on && sound_tr_timing_enabled())
+    atomic_store(&tx_requested_ns, monotonic_ns());
 
   in_tx = tx_on ? 1 : 0; // set synchronously so other threads' guards
                          // (cw_tx_active(), network MOX) see it at once -
