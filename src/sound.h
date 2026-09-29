@@ -83,4 +83,19 @@ double sound_get_alc_db(void);
    placement in force. */
 int sound_update_cw_if_placement(void);
 
+/* T/R timing instrumentation, on only when MAXIBITX_TR_TIMING is set.
+
+   sound_tr_timing_enabled(): whether it is set (read once, cached).
+
+   sound_tx_first_block(): for the transmission now starting, when the
+   audio thread wrote its first TX block and when that block's first sample
+   reaches the DAC as RF - the write time plus the playback queue ahead of
+   it (snd_pcm_delay()) plus tx_pipeline.c's own delay, and how long that
+   queue was. CLOCK_MONOTONIC nanoseconds throughout. Returns 0 if no TX block has been
+   written since start-up. radio.c's TX worker compares these against the
+   moment it unmutes the exciter drive:
+   docs/dsp_design_notes/cw_keyer_design_study.md §8. */
+int sound_tr_timing_enabled(void);
+int sound_tx_first_block(int64_t *written_ns, int64_t *rf_at_dac_ns, int64_t *queue_ns);
+
 #endif /* SOUND_H */
