@@ -54,11 +54,19 @@ port 4536, no relation to rigctld's TCP port above, and no relation to
 the HPSDR Protocol 1 link WSJT-X/Thetis use for their own I/Q - see
 iq_stream.h/.c's file headers for why this is its own third, minimal
 path rather than reusing either). That stream carries the same native
-96kHz baseband I/Q docs/02_rx_processing_pipeline.md describes, so what
-the spectrum plot shows spans the full ±48kHz around dial center - the
-same range docs/dsp_design_notes/antialias_filter_design.md's crystal-
-filter analysis and rx_audio_demod_design.md's AGC-placement work were
-both reasoning about, now actually visible.
+96kHz baseband I/Q docs/02_rx_processing_pipeline.md describes, so the
+FFT covers the full ±48kHz around dial center - the same range
+docs/dsp_design_notes/antialias_filter_design.md's crystal-filter
+analysis and rx_audio_demod_design.md's AGC-placement work were both
+reasoning about. The display draws a selectable slice of it (±2.5, ±5 or
+±15kHz), which is a crop of the same bins rather than a finer FFT - see
+SPECTRUM_SPAN_CHOICES_HZ.
+
+The window scrolls, so it can be made shorter than its ~1180px of
+content and still reach every control - a short laptop screen or the
+Pi's own small touchscreen. The mouse wheel scrolls it, and does so even
+over a slider or a dropdown, so scrolling past a control can never
+change what it is set to.
 
 Meant to run on a laptop, or on the Pi's own desktop if it has one - this
 is a *client*, completely separate from the maxibitx binary itself. Point
@@ -135,15 +143,25 @@ SPECTRUM_DB_FLOOR = -100.0     # y-axis floor, dBFS-style (0dB ~= one full-scale
 # regularly, and use the peak/floor readout in the status line to pick a
 # window that matches your own band conditions rather than these.
 SPECTRUM_DB_CEILING = -37.5
-# The FFT itself still covers the full native +-48kHz (FFT_SIZE stays
-# 2048 either way - resolution is unaffected), but only the middle
-# +-15kHz gets drawn: docs/dsp_design_notes/antialias_filter_design.md's
-# crystal-filter analysis puts the genuinely flat passband at only
-# +-17.4/17.5kHz, with an asymmetric, increasingly attenuated skirt past
-# that - so displaying the full +-48kHz mostly just shows the filter's
-# own rolloff shape rather than real signal content, which is what
-# prompted narrowing this.
-SPECTRUM_DISPLAY_HALF_SPAN_HZ = 15000
+# The FFT itself always covers the full native +-48kHz (FFT_SIZE stays
+# 2048 whatever is selected - resolution is unaffected), and only the
+# middle slice gets drawn. The widest choice is +-15kHz because
+# docs/dsp_design_notes/antialias_filter_design.md's crystal-filter
+# analysis puts the genuinely flat passband at only +-17.4/17.5kHz, with
+# an asymmetric, increasingly attenuated skirt past that - so displaying
+# the full +-48kHz mostly just shows the filter's own rolloff shape
+# rather than real signal content, which is what prompted cropping it.
+#
+# The two narrower choices are for placing one signal rather than
+# surveying a band: at +-15kHz a 300Hz CW filter's passband is 11px wide
+# on a 560px canvas, which is not enough to see where a signal sits
+# inside it. Since the FFT is unchanged, zooming spreads the same bins
+# wider instead of resolving finer - 46.875Hz/bin throughout, about 107
+# bins on screen at +-2.5kHz against 640 at +-15kHz. redraw_spectrum()
+# reports the count so a blocky trace reads as "bin-limited" rather than
+# as a fault.
+SPECTRUM_SPAN_CHOICES_HZ = (2500, 5000, 15000)
+SPECTRUM_DISPLAY_HALF_SPAN_HZ = 15000  # the default; the operator picks from the tuple above
 
 # --- Signal strength ("l STRENGTH") ---
 # Mirrors rx_audio.c's RX_STRENGTH_MIN_DB/MAX_DB exactly, so the bar
@@ -169,6 +187,18 @@ def s_unit_label(db):
         s = max(0, min(9, s))
         return f"S{s}"
     return f"S9+{db}"
+
+
+def span_khz_label(hz):
+    """Format a span or offset in Hz as compact kHz: 15000 -> "15k",
+    2500 -> "2.5k". One decimal at most, and a trailing ".0" dropped, so
+    the spectrum's own span buttons and its frequency ticks read the same
+    way. Written as one helper rather than an f-string at each site
+    because a plain "{hz/1000:.0f}k" turns the +-2.5kHz span's ticks into
+    "2k" and "1k", which are both wrong by more than the CW filter is
+    wide."""
+    txt = f"{hz / 1000.0:.1f}".rstrip("0").rstrip(".")
+    return f"{txt}k"
 
 
 def load_config():
@@ -369,7 +399,15 @@ class Panel(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("maxibitx control panel")
-        self.resizable(False, False)
+        # Width stays fixed - every control group is sized by a canvas or an
+        # entry, so there is nothing to gain from a wider window, and fixing it
+        # keeps the one runtime-variable label (the spectrum status line) from
+        # being able to drag the window wider. Height is now adjustable,
+        # because the content is taller than a 1080p screen's usable area once
+        # the title bar and taskbar are counted, and the whole point of the
+        # scroll container below is to let the operator make the window as
+        # short as their display requires.
+        self.resizable(False, True)
 
         self.client = RigctlClient()
         self.poll_thread = None
@@ -402,8 +440,33 @@ class Panel(tk.Tk):
 
         cfg = load_config()
 
+        # --- scroll container ---
+        # Everything below lives in self.body, a frame inside a Canvas, so the
+        # whole panel scrolls vertically. Without it the window is ~1180px of
+        # content, which does not fit a 1080p screen once the title bar and
+        # taskbar are counted, and on a smaller display (a Pi's own 7"
+        # touchscreen, a laptop at 768px) the TX Power group at the bottom was
+        # simply unreachable - the window could not be shrunk and the content
+        # could not be scrolled.
+        #
+        # A Canvas is the standard way to do this in Tk: a Frame has no
+        # scrolling of its own, while a Canvas has a scrollregion. The frame
+        # goes inside it as a canvas window item, keeps its natural size (so
+        # nothing about the layout changes), and the <Configure> binding below
+        # keeps the scrollregion matched to it as widgets appear.
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        self.body_canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0)
+        self.body_canvas.grid(row=0, column=0, sticky="nsew")
+        body_vsb = ttk.Scrollbar(self, orient="vertical", command=self.body_canvas.yview)
+        body_vsb.grid(row=0, column=1, sticky="ns")
+        self.body_canvas.configure(yscrollcommand=body_vsb.set)
+        self.body = ttk.Frame(self.body_canvas)
+        self.body_canvas.create_window((0, 0), window=self.body, anchor="nw")
+        self.body.bind("<Configure>", self.on_body_configure)
+
         # --- connection row ---
-        conn = ttk.Frame(self, padding=8)
+        conn = ttk.Frame(self.body, padding=8)
         conn.grid(row=0, column=0, sticky="ew")
         ttk.Label(conn, text="Host:").grid(row=0, column=0)
         self.host_var = tk.StringVar(value=cfg.get("host", ""))
@@ -418,7 +481,7 @@ class Panel(tk.Tk):
         self.status_label.grid(row=0, column=5, padx=4)
 
         # --- frequency ---
-        freq = ttk.LabelFrame(self, text="Frequency (Hz)", padding=8)
+        freq = ttk.LabelFrame(self.body, text="Frequency (Hz)", padding=8)
         freq.grid(row=1, column=0, sticky="ew", padx=8, pady=4)
         self.freq_display_var = tk.StringVar(value="—")
         ttk.Label(freq, textvariable=self.freq_display_var, font=("monospace", 20)).grid(
@@ -452,7 +515,7 @@ class Panel(tk.Tk):
         # talk), which is exactly the kind of mixup this control exists
         # to make obvious and quick to fix. DIGITAL transmits the USB
         # gadget's audio (WSJT-X).
-        mode = ttk.LabelFrame(self, text="Mode", padding=8)
+        mode = ttk.LabelFrame(self.body, text="Mode", padding=8)
         mode.grid(row=2, column=0, sticky="ew", padx=8, pady=4)
         self.mode_var = tk.StringVar(value="CW")
         # CWR is CW-reverse: the same key and the same transmitted
@@ -469,7 +532,7 @@ class Panel(tk.Tk):
         # bit to sync from the server - "off" IS 0 Hz, same convention
         # real Hamlib rigs use - so Clear is just "J 0" spelled out as
         # its own button for a one-click reset mid-QSO.
-        rit = ttk.LabelFrame(self, text="RIT - receive only (Hz)", padding=8)
+        rit = ttk.LabelFrame(self.body, text="RIT - receive only (Hz)", padding=8)
         rit.grid(row=3, column=0, sticky="ew", padx=8, pady=4)
         self.rit_display_var = tk.StringVar(value="—")
         ttk.Label(rit, textvariable=self.rit_display_var, font=("monospace", 16)).grid(
@@ -491,7 +554,7 @@ class Panel(tk.Tk):
                        command=lambda d=delta: self.on_rit_step_clicked(d)).pack(side="left", padx=2)
 
         # --- volume ---
-        vol = ttk.LabelFrame(self, text="Volume", padding=8)
+        vol = ttk.LabelFrame(self.body, text="Volume", padding=8)
         vol.grid(row=4, column=0, sticky="ew", padx=8, pady=(4, 8))
         self.vol_var = tk.IntVar(value=50)
         self.vol_scale = ttk.Scale(vol, from_=0, to=100, orient="horizontal",
@@ -516,7 +579,7 @@ class Panel(tk.Tk):
         # between trials - the first on-air SSB test found real audio
         # reaching the local monitor speaker but no measurable power out,
         # consistent with this needing to go up from its 1.0 default.
-        mg = ttk.LabelFrame(self, text="Mic Gain (TX, USB/LSB)", padding=8)
+        mg = ttk.LabelFrame(self.body, text="Mic Gain (TX, USB/LSB)", padding=8)
         mg.grid(row=5, column=0, sticky="ew", padx=8, pady=(0, 8))
         self.micgain_var = tk.DoubleVar(value=1.0)
         self.micgain_scale = ttk.Scale(mg, from_=0.0, to=64.0, orient="horizontal",
@@ -536,12 +599,12 @@ class Panel(tk.Tk):
         # u/U NARROW (this server's own extension, not a real Hamlib
         # function - see hamlib.c's u/U comment). The whole group is
         # disabled in DIGITAL - see set_rx_filter_gate() below.
-        nf = ttk.LabelFrame(self, text="RX Filter", padding=8)
+        nf = ttk.LabelFrame(self.body, text="RX Filter", padding=8)
         nf.grid(row=6, column=0, sticky="ew", padx=8, pady=(0, 8))
         # Kept for set_rx_filter_gate() below, which retitles this frame in
-        # DIGITAL. The title carries the explanation because the window is
-        # 1174px tall and frozen by resizable(False, False) - an extra
-        # explanatory label would cost a row of height the panel doesn't have.
+        # DIGITAL. The title carries the explanation rather than a separate
+        # label: the panel is already ~1200px of content, and every row added
+        # here is a row someone on a small display has to scroll past.
         self.narrow_frame = nf
         # One checkbox for whether the filter is in circuit, then one choice
         # of which filter, then its pitch and width. An earlier layout had
@@ -594,9 +657,10 @@ class Panel(tk.Tk):
         # silently wrong behavior - apply_pitch()/apply_width() below add any
         # value the server reports that isn't already in the list.
         #
-        # Both on one row: the window is already 1174px tall with
-        # resizable(False, False), so a stacked row per control would push
-        # the Power/ALC section below a 1080p screen's usable height.
+        # Both on one row. The panel scrolls now, so this is no longer the
+        # difference between reachable and not, but the content is still
+        # ~1200px against a 1080p screen's usable height and a row saved here
+        # is a row nobody has to scroll past.
         pwrow = ttk.Frame(nf)
         pwrow.grid(row=2, column=0, sticky="w", padx=(16, 0), pady=(6, 0))
         ttk.Label(pwrow, text="Pitch").pack(side="left")
@@ -618,7 +682,7 @@ class Panel(tk.Tk):
         # Read-only, like a real rig's S-meter - no slider/checkbox to
         # drive a network write, just a bar + label kept current by
         # refresh_once()'s poll, same as the frequency readout above.
-        sm = ttk.LabelFrame(self, text="Signal Strength (uncalibrated)", padding=8)
+        sm = ttk.LabelFrame(self.body, text="Signal Strength (uncalibrated)", padding=8)
         sm.grid(row=7, column=0, sticky="ew", padx=8, pady=(0, 8))
         self.smeter_canvas_w = 380
         self.smeter_canvas_h = 40
@@ -632,21 +696,38 @@ class Panel(tk.Tk):
         self.draw_smeter(None)
 
         # --- spectrum ---
-        spec = ttk.LabelFrame(self, text="Spectrum (±15kHz around dial)", padding=8)
+        spec = ttk.LabelFrame(self.body, text="Spectrum", padding=8)
         spec.grid(row=8, column=0, sticky="ew", padx=8, pady=(0, 8))
         self.spectrum_canvas_w = 560
         self.spectrum_canvas_h = 180
         self.spectrum_canvas = tk.Canvas(spec, width=self.spectrum_canvas_w,
                                           height=self.spectrum_canvas_h,
                                           background="#111", highlightthickness=0)
+        # Displayed span, as a row of radio buttons above the trace. Purely a
+        # display crop - the FFT is unchanged (still FFT_SIZE points over the
+        # full native +-48kHz at 46.875 Hz/bin), so a narrower span shows the
+        # same bins spread wider, not finer resolution. At +-2.5kHz that is
+        # about 107 bins across 560px, so the trace goes visibly blocky; the
+        # status line reports the bin count for exactly that reason. Narrowing
+        # it is still what makes a CW signal's position against a 300Hz filter
+        # legible, which at +-15kHz occupies 11px.
+        self.spectrum_span_var = tk.IntVar(value=SPECTRUM_DISPLAY_HALF_SPAN_HZ)
+        spanrow = ttk.Frame(spec)
+        spanrow.pack(anchor="w", pady=(0, 4))
+        ttk.Label(spanrow, text="Span").pack(side="left", padx=(0, 6))
+        for i, hz in enumerate(SPECTRUM_SPAN_CHOICES_HZ):
+            ttk.Radiobutton(spanrow, text=f"±{span_khz_label(hz)}",
+                             variable=self.spectrum_span_var, value=hz,
+                             command=self.on_spectrum_span_changed
+                             ).pack(side="left", padx=(0 if i == 0 else 10, 0))
         self.spectrum_canvas.pack()
         self.spectrum_status_var = tk.StringVar(value="no spectrum data yet")
         # wraplength pinned to the canvas width: this label's text is the only
-        # thing in the window whose length varies at runtime, and the window
-        # is sized to its contents and then frozen by resizable(False, False).
-        # Without the cap, a long status line silently widens the whole panel
-        # and there is no way for the operator to drag it back - measured at
-        # 891px against the normal 596px before this was added.
+        # thing in the window whose length varies at runtime, and the window's
+        # width is fixed by resizable(False, True). Without the cap, a long
+        # status line silently widens the whole panel and there is no way for
+        # the operator to drag it back - measured at 891px against the normal
+        # 596px before this was added.
         ttk.Label(spec, textvariable=self.spectrum_status_var,
                    wraplength=self.spectrum_canvas_w).pack(anchor="w", pady=(4, 0))
 
@@ -656,7 +737,7 @@ class Panel(tk.Tk):
         # in any mode; the sideband follows the mode. maxibitx turns the
         # tone off and drops PTT after TONE_GEN_TIMEOUT_S (30 s).
         # docs/dsp_design_notes/tx_test_tones_and_alc.md.
-        txt = ttk.LabelFrame(self, text="TX Test - dummy load or low power", padding=8)
+        txt = ttk.LabelFrame(self.body, text="TX Test - dummy load or low power", padding=8)
         txt.grid(row=9, column=0, sticky="ew", padx=8, pady=(0, 8))
         self.tone_var = tk.IntVar(value=0)
         for i, (label, val) in enumerate((("Off", 0), ("1 kHz tone", 1),
@@ -679,7 +760,7 @@ class Panel(tk.Tk):
         # a couple of dB and no further. Turning Power down lowers output;
         # turning Mic Gain up drives harder into the ceiling and shows up
         # here instead. docs/03_tx_processing_pipeline.md, "Setting power".
-        pw = ttk.LabelFrame(self, text="TX Power", padding=8)
+        pw = ttk.LabelFrame(self.body, text="TX Power", padding=8)
         pw.grid(row=10, column=0, sticky="ew", padx=8, pady=(0, 8))
         self.power_var = tk.DoubleVar(value=100.0)
         self.power_scale = ttk.Scale(pw, from_=0, to=100, orient="horizontal",
@@ -699,7 +780,77 @@ class Panel(tk.Tk):
         self.alc_label = ttk.Label(pw, text="0.0 dB", width=8)
         self.alc_label.grid(row=2, column=1)
 
+        self.bind_scroll_wheel()
+        self.size_to_screen()
+
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    # ---- scrolling ----
+
+    def on_body_configure(self, _event):
+        # The scrollregion has to follow the content, not be set once: the
+        # body's requested height changes as widgets are built and again
+        # whenever the spectrum status line wraps to a second line.
+        self.body_canvas.configure(scrollregion=self.body_canvas.bbox("all"))
+
+    def size_to_screen(self):
+        """Open at the content's natural size, or as tall as the screen
+        usefully allows, whichever is smaller - so a short display gets a
+        window that fits and scrolls rather than one whose bottom controls
+        are off-screen and unreachable."""
+        self.update_idletasks()
+        body_w = self.body.winfo_reqwidth()
+        body_h = self.body.winfo_reqheight()
+        # The canvas is the viewport; it must be the body's full width or the
+        # right-hand edge of every group is clipped (there is no horizontal
+        # scrollbar, by choice - see resizable() in __init__).
+        self.body_canvas.configure(width=body_w, height=body_h)
+        # 120px covers a title bar plus a taskbar/panel with room to spare.
+        # Erring large costs a little unused screen; erring small puts a
+        # control back off the bottom edge, which is the bug being fixed.
+        usable_h = max(400, self.winfo_screenheight() - 120)
+        self.geometry(f"{body_w + 18}x{min(body_h, usable_h)}")
+
+    def scroll_body(self, event):
+        """One wheel notch. Windows and macOS send <MouseWheel> with a
+        signed delta (120 per notch on Windows, small values on macOS); X11
+        sends Button-4 (up) and Button-5 (down) with no delta, which is what
+        the Pi itself uses."""
+        if getattr(event, "num", None) == 4:
+            step = -1
+        elif getattr(event, "num", None) == 5:
+            step = 1
+        else:
+            delta = getattr(event, "delta", 0)
+            if not delta:
+                return
+            step = -1 if delta > 0 else 1
+        self.body_canvas.yview_scroll(step, "units")
+
+    def scroll_body_only(self, event):
+        """The wheel over a combobox or a slider scrolls the page and does
+        NOT change the control's value. Deliberate: ttk gives a readonly
+        combobox its own wheel binding on some platforms, so without this a
+        scroll down the panel could silently retune the CW filter's pitch or
+        move TX power on the way past. A control surface that changes a
+        setting the operator did not mean to touch has cost this project real
+        time before (docs/09_faq.md, on what the filter A/B comparison
+        taught). Returning "break" stops the widget's class binding, so this
+        is the only handler that runs."""
+        self.scroll_body(event)
+        return "break"
+
+    def bind_scroll_wheel(self):
+        # bind_all so the wheel works wherever the pointer happens to be,
+        # then the value-carrying widgets get their own binding that wins
+        # over both their class binding and this one.
+        self.bind_all("<MouseWheel>", self.scroll_body)
+        self.bind_all("<Button-4>", self.scroll_body)
+        self.bind_all("<Button-5>", self.scroll_body)
+        for w in (self.pitch_combo, self.width_combo, self.vol_scale,
+                  self.micgain_scale, self.power_scale):
+            for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+                w.bind(seq, self.scroll_body_only)
 
     # ---- connection handling ----
 
@@ -1204,6 +1355,20 @@ class Panel(tk.Tk):
         threading.Thread(target=lambda: self.client.query(f"L CWWIDTH {hz}"),
                           daemon=True).start()
 
+    def on_spectrum_span_changed(self):
+        # Nothing to send and nothing to redraw: the span is a display-side
+        # crop, and the next redraw_spectrum() tick (at most
+        # SPECTRUM_REDRAW_MS, ~66ms) reads the variable itself - faster than
+        # anyone notices a button click.
+        #
+        # Deliberately does NOT call redraw_spectrum() to make it instant:
+        # that method ends by scheduling its own self.after(), so calling it
+        # from here would start a second redraw chain alongside the running
+        # one and permanently double the frame rate. Kept as a named handler
+        # rather than dropping the radio buttons' command= so that reason is
+        # written down where someone would otherwise add the call.
+        pass
+
     # ---- spectrum ----
     #
     # Runs entirely on the main/Tk thread via self.after() - SpectrumClient
@@ -1229,11 +1394,16 @@ class Panel(tk.Tk):
                 "(older maxibitx builds without iq_stream.c won't send any)")
         else:
             # db spans the full native +-48kHz (fftshifted, bin 0 = -48kHz,
-            # bin FFT_SIZE/2 = dial center) - crop to the middle +-15kHz for
-            # display (see SPECTRUM_DISPLAY_HALF_SPAN_HZ's comment on why).
+            # bin FFT_SIZE/2 = dial center) - crop to the middle
+            # +-(the selected span) for display (see
+            # SPECTRUM_SPAN_CHOICES_HZ's comment on why, and on why this is
+            # a crop rather than a zoom).
             bin_hz = 96000.0 / FFT_SIZE
             center = len(db) // 2
-            half_bins = min(int(round(SPECTRUM_DISPLAY_HALF_SPAN_HZ / bin_hz)), center)
+            # At least 2 bins each side even if someone adds a tiny span to
+            # the tuple: create_line needs two points, and a one-bin crop
+            # would raise rather than just look odd.
+            half_bins = min(max(int(round(self.spectrum_span_var.get() / bin_hz)), 2), center)
             db = db[center - half_bins:center + half_bins]
 
             n = len(db)
@@ -1256,27 +1426,51 @@ class Panel(tk.Tk):
                 canvas.create_text(w - 4, 8, text="clipping", anchor="e",
                                     fill="#f55", font=("monospace", 8))
 
-            # Dial-center line plus frequency ticks across the displayed
-            # +-SPECTRUM_DISPLAY_HALF_SPAN_HZ span.
-            span = half_bins * bin_hz  # actual displayed half-span, close to
-                                        # SPECTRUM_DISPLAY_HALF_SPAN_HZ but
-                                        # snapped to a whole number of bins
-            canvas.create_line(w / 2, 0, w / 2, h, fill="#555", dash=(2, 2))
-            for offset_hz, label in ((-span, f"-{span/1000:.0f}k"), (-span / 2, f"-{span/2000:.0f}k"),
-                                      (0, "dial"), (span / 2, f"+{span/2000:.0f}k"),
-                                      (span, f"+{span/1000:.0f}k")):
+            # Dial-center marker plus frequency ticks across the displayed
+            # span.
+            span = half_bins * bin_hz  # actual displayed half-span - the
+                                        # selected value snapped to a whole
+                                        # number of bins, so the tick labels
+                                        # state what is really on screen
+            # The centre marker is the one reference the whole display is read
+            # against - where the dial is, and so where a zero-beat CW signal
+            # or an SSB suppressed carrier belongs. It was a dim grey dash
+            # that disappeared into the trace. Bright amber reads clearly
+            # against both the green trace and the dark ground, and the
+            # triangle at the bottom stays visible even where a strong signal
+            # sits right on top of the line.
+            #
+            # Still dashed, deliberately: a solid line down the middle would
+            # mask the very signal an operator is trying to centre under it.
+            canvas.create_line(w / 2, 0, w / 2, h, fill="#fb3", dash=(4, 4))
+            canvas.create_polygon(w / 2, h - 11, w / 2 - 6, h, w / 2 + 6, h,
+                                   fill="#fb3", outline="")
+            # No "dial" text at the centre any more - the triangle says it,
+            # and the two would have overlapped at h-8.
+            # The two end labels are anchored to the edge they sit against,
+            # not centred on it. Centred-and-clamped loses half the text off
+            # the canvas, which an earlier version did invisibly while the
+            # widest label was only "15k" - "-2.5k" made it obvious.
+            for offset_hz, anchor in ((-span, "w"), (-span / 2, "center"),
+                                       (span / 2, "center"), (span, "e")):
+                label = ("+" if offset_hz > 0 else "-") + span_khz_label(abs(offset_hz))
                 x = (offset_hz + span) / (2 * span) * w
-                x = min(max(x, 4), w - 4)  # keep the end labels from clipping off-canvas
-                canvas.create_text(x, h - 8, text=label, fill="#999", font=("monospace", 8))
+                x = 2 if anchor == "w" else (w - 2 if anchor == "e" else x)
+                canvas.create_text(x, h - 8, text=label, anchor=anchor,
+                                    fill="#999", font=("monospace", 8))
 
             freq_note = f" (dial {self.current_freq_hz:,} Hz)".replace(",", ".") \
                 if self.current_freq_hz is not None else ""
             # Peak and floor of what is actually on screen (pre-clip), so the
             # dB window above can be chosen from measurements rather than
-            # guesses. Kept terse on purpose - see the wraplength comment
-            # where this label is built.
+            # guesses. The bin count is here because it is the honest measure
+            # of how much detail a narrow span is really showing - the FFT
+            # does not get finer when the display is cropped. The span itself
+            # is NOT repeated here: the buttons and the tick labels both
+            # already state it, and this line has to stay inside one
+            # wraplength - a second line pushes every group below it down.
             self.spectrum_status_var.set(
-                f"live - {FFT_SIZE}-pt, {bin_hz:.1f} Hz/bin, "
+                f"live - {n} bins, {bin_hz:.1f} Hz/bin, "
                 f"peak {peak_db:.1f}, floor {floor_db:.1f} dB{freq_note}")
 
         self.after(SPECTRUM_REDRAW_MS, self.redraw_spectrum)
