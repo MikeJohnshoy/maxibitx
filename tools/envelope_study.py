@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """envelope_study.py - keying-envelope measurements behind
-docs/dsp_design_notes/cw_keyer_design_study.md §4-§5.
+docs/dsp_design_notes/cw_keyer_design_study.md §3, §4 and §17.
 
   python3 tools/keyer_study/envelope_study.py [--ref PATH] [--limiter]
 
