@@ -402,7 +402,11 @@ void sound_set_tx_drive(int percent) {
 /* ------------------------------------------------------------------ */
 /*  ALSA PCM helpers                                                  */
 /* ------------------------------------------------------------------ */
-static snd_pcm_t *open_pcm(const char *dev, snd_pcm_stream_t dir) {
+// Opens dev for dir with a ring buffer of `periods` periods, and reports
+// the buffer size the driver actually granted through *buffer_frames (it
+// may round). NULL on failure.
+static snd_pcm_t *open_pcm(const char *dev, snd_pcm_stream_t dir, int periods,
+                           snd_pcm_uframes_t *buffer_frames) {
   snd_pcm_t *pcm = NULL;
   int err;
 
@@ -426,8 +430,7 @@ static snd_pcm_t *open_pcm(const char *dev, snd_pcm_stream_t dir) {
   snd_pcm_uframes_t period = PERIOD_FRAMES;
   snd_pcm_hw_params_set_period_size_near(pcm, hw, &period, 0);
 
-  /* 4 periods = ~43ms of buffer */
-  snd_pcm_uframes_t buffer = period * 4;
+  snd_pcm_uframes_t buffer = period * (snd_pcm_uframes_t)periods;
   snd_pcm_hw_params_set_buffer_size_near(pcm, hw, &buffer);
 
   if ((err = snd_pcm_hw_params(pcm, hw)) < 0) {
@@ -437,11 +440,45 @@ static snd_pcm_t *open_pcm(const char *dev, snd_pcm_stream_t dir) {
     return NULL;
   }
 
-  printf("sound: opened %s %s @ %u Hz, period %lu, buffer %lu\n", dev,
+  printf("sound: opened %s %s @ %u Hz, period %lu, buffer %lu (%.1f ms)\n", dev,
          dir == SND_PCM_STREAM_CAPTURE ? "capture" : "playback", rate, (unsigned long)period,
-         (unsigned long)buffer);
+         (unsigned long)buffer, 1000.0 * (double)buffer / rate);
 
+  if (buffer_frames)
+    *buffer_frames = buffer;
   return pcm;
+}
+
+// Capture keeps four periods whatever playback uses: its depth is only
+// headroom against a late read, since snd_pcm_readi() returns as soon as
+// one period is in, so it adds nothing to any latency.
+#define CAPTURE_PERIODS 4
+
+// Playback buffer depth, in periods. The loop keeps this buffer primed
+// full, so (periods - 1) periods, less the processing time, sit queued
+// ahead of every block written - which is what the local sidetone waits
+// behind, and also how late the loop can run before the DAC underruns.
+// Four by default. MAXIBITX_PLAYBACK_PERIODS=2..8 overrides it, for
+// measuring that trade on a given board: fewer periods is less sidetone
+// latency and less margin. docs/dsp_design_notes/cw_keyer_design_study.md §7.
+#define PLAYBACK_PERIODS_DEFAULT 4
+#define PLAYBACK_PERIODS_MIN 2 // one period can never be refilled in time
+#define PLAYBACK_PERIODS_MAX 8
+
+static int playback_periods(void) {
+  const char *v = getenv("MAXIBITX_PLAYBACK_PERIODS");
+  if (!v || !*v)
+    return PLAYBACK_PERIODS_DEFAULT;
+  char *end;
+  long n = strtol(v, &end, 10);
+  if (*end != '\0' || n < PLAYBACK_PERIODS_MIN || n > PLAYBACK_PERIODS_MAX) {
+    fprintf(stderr,
+            "sound: MAXIBITX_PLAYBACK_PERIODS='%s' is not %d-%d - using %d\n", v,
+            PLAYBACK_PERIODS_MIN, PLAYBACK_PERIODS_MAX, PLAYBACK_PERIODS_DEFAULT);
+    return PLAYBACK_PERIODS_DEFAULT;
+  }
+  printf("sound: MAXIBITX_PLAYBACK_PERIODS=%ld - playback buffer is %ld periods\n", n, n);
+  return (int)n;
 }
 
 /* Recover from an ALSA xrun/suspend. Returns 0 on success. Callers must
@@ -952,14 +989,15 @@ static void *audio_loop(void *arg) {
 int sound_thread_start(const char *device_name) {
   const char *dev = device_name ? device_name : "hw:0,0";
 
-  pcm_capture = open_pcm(dev, SND_PCM_STREAM_CAPTURE);
+  pcm_capture = open_pcm(dev, SND_PCM_STREAM_CAPTURE, CAPTURE_PERIODS, NULL);
   if (!pcm_capture)
     return -1;
 
   // Playback carries the local speaker and the exciter feed. Not fatal if
   // it fails: audio_loop() checks pcm_playback, so RX still runs, just
   // without local audio or TX.
-  pcm_playback = open_pcm(dev, SND_PCM_STREAM_PLAYBACK);
+  snd_pcm_uframes_t playback_buffer = 0;
+  pcm_playback = open_pcm(dev, SND_PCM_STREAM_PLAYBACK, playback_periods(), &playback_buffer);
   if (!pcm_playback) {
     printf("sound: playback unavailable - no local audio or TX\n");
   }
@@ -988,10 +1026,19 @@ int sound_thread_start(const char *device_name) {
     // planning) may run between priming and pthread_create(), or the buffer
     // drains and the first periods underrun - the cause of the startup xrun
     // flood (ARCHITECTURE.md §10 step 7 follow-ups).
+    // Filled to the size open_pcm() says was granted, not the size asked
+    // for, so a driver that rounds still starts full.
     int32_t silence[PERIOD_FRAMES * CHANNELS] = {0};
-    for (int i = 0; i < 4; i++) // 4 periods == open_pcm()'s own negotiated buffer size
-      snd_pcm_writei(pcm_playback, silence, PERIOD_FRAMES);
-    printf("sound: primed playback with %d frames of silence\n", 4 * PERIOD_FRAMES);
+    snd_pcm_uframes_t primed = 0;
+    while (primed < playback_buffer) {
+      snd_pcm_uframes_t chunk = playback_buffer - primed;
+      if (chunk > PERIOD_FRAMES)
+        chunk = PERIOD_FRAMES;
+      if (snd_pcm_writei(pcm_playback, silence, chunk) < 0)
+        break;
+      primed += chunk;
+    }
+    printf("sound: primed playback with %lu frames of silence\n", (unsigned long)primed);
   }
 
   g_running = 1;
