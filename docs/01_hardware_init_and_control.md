@@ -191,7 +191,7 @@ hardware peripheral, I2C traffic is CPU time. One `si5351bx_setfreq()` is
 17 separate transactions, and a T/R transition writes two clocks. What that
 costs, why none of it reaches the real-time audio path, and which half of
 it is redundant when RIT is zero:
-[`dsp_design_notes/cw_break_in_and_i2c_timing.md`](dsp_design_notes/cw_break_in_and_i2c_timing.md).
+[`dsp_design_notes/cw_breakin_and_i2c_costs.md`](dsp_design_notes/cw_breakin_and_i2c_costs.md).
 
 ## WM8731 audio codec bring-up
 
