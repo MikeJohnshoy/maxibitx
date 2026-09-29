@@ -71,7 +71,7 @@ check-filters:
 	python3 tools/gen_narrow_filters.py --check
 
 clean:
-	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k \
+	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw \
 		src/fft_filter.o src/fft_filter_test.o src/tx_pipeline.o src/tx_pipeline_test.o \
 		src/rx_filter.o src/rx_filter_test.o src/rx_audio_test.o src/rx_audio_impulse_test.o src/upsample48k_test.o
 
@@ -141,3 +141,13 @@ test-rx-audio-impulse: src/rx_audio.c src/rx_audio_impulse_test.c src/rx_audio.h
 # No dependencies beyond upsample48k.c/.h itself - no hardware, no FFTW.
 test-upsample48k: src/upsample48k.c src/upsample48k_test.c src/upsample48k.h
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/upsample48k.c src/upsample48k_test.c -o $@ -lm
+
+# cw.c's keying envelope and its 1:1 weighting correction: drives the key a
+# block at a time through cw_poll_key() and checks each mark and space at the
+# envelope's 50% points against the key-down and key-up times, and that TX is
+# requested and released once per burst. Links cw.c and vfo.c with the radio
+# calls stubbed (cw_envelope_test.c), so no hardware or FFTW. Same "not part
+# of the build" convention as the other test- targets above. See
+# docs/dsp_design_notes/cw_keyer_design_study.md §17.
+test-cw: src/cw.c src/cw.h src/cw_envelope_test.c src/vfo.c src/vfo.h
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/cw.c src/vfo.c src/cw_envelope_test.c -o $@ -lm
