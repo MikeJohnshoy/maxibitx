@@ -27,6 +27,7 @@
 #include <math.h>
 #include <pthread.h>
 #include <sched.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -686,6 +687,61 @@ struct loop_timing_tracker {
 };
 
 // Whether MAXIBITX_LOOP_TIMING is set. Cached, since this runs every block.
+/* ------------------------------------------------------------------ */
+/*  T/R timing instrumentation                                         */
+/* ------------------------------------------------------------------ */
+//
+// Records when each transmission's first TX block goes out and when its
+// first sample reaches the DAC as RF, for radio.c's TX worker to set
+// against the moment it unmutes the exciter drive (sound.h). Off unless
+// MAXIBITX_TR_TIMING is set, so the audio path is untouched normally.
+//
+// TX pipeline delay, for a sample entering tx_pipeline_process_block() to
+// leave it: the linear-phase FIR's group delay plus the limiter's look-ahead.
+#define TX_PIPELINE_DELAY_FRAMES ((TX_PIPELINE_IMPULSE_LEN - 1) / 2 + TX_ALC_LOOKAHEAD_SAMPLES)
+
+// Written by the audio thread once per transmission start, read by the TX
+// worker ~20ms later. written_ns is stored last and loaded first, so a
+// reader that sees it also sees the other two.
+static _Atomic int64_t tr_rf_at_dac_ns = 0;
+static _Atomic int64_t tr_queue_ns = 0;
+static _Atomic int64_t tr_written_ns = 0;
+
+int sound_tr_timing_enabled(void) {
+  static int cached = -1;
+  if (cached < 0) {
+    const char *v = getenv("MAXIBITX_TR_TIMING");
+    cached = (v && *v) ? 1 : 0;
+  }
+  return cached;
+}
+
+int sound_tx_first_block(int64_t *written_ns, int64_t *rf_at_dac_ns, int64_t *queue_ns) {
+  int64_t w = atomic_load_explicit(&tr_written_ns, memory_order_acquire);
+  if (w == 0)
+    return 0;
+  *written_ns = w;
+  *rf_at_dac_ns = atomic_load_explicit(&tr_rf_at_dac_ns, memory_order_relaxed);
+  *queue_ns = atomic_load_explicit(&tr_queue_ns, memory_order_relaxed);
+  return 1;
+}
+
+// Called by the audio thread immediately before writing the first TX block
+// of a transmission.
+static void tr_note_first_tx_block(void) {
+  snd_pcm_sframes_t delay = 0;
+  if (snd_pcm_delay(pcm_playback, &delay) < 0)
+    delay = 0;
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  int64_t now_ns = (int64_t)now.tv_sec * 1000000000LL + now.tv_nsec;
+  int64_t queue_ns = (int64_t)delay * 1000000000LL / SAMPLE_RATE;
+  int64_t pipeline_ns = (int64_t)TX_PIPELINE_DELAY_FRAMES * 1000000000LL / SAMPLE_RATE;
+  atomic_store_explicit(&tr_rf_at_dac_ns, now_ns + queue_ns + pipeline_ns, memory_order_relaxed);
+  atomic_store_explicit(&tr_queue_ns, queue_ns, memory_order_relaxed);
+  atomic_store_explicit(&tr_written_ns, now_ns, memory_order_release);
+}
+
 static int loop_timing_should_print(void) {
   static int cached = -1;
   if (cached < 0) {
@@ -820,7 +876,8 @@ static void *audio_loop(void *arg) {
       // transition in - calling it mid-transmission would break the
       // overlap-save continuity it exists to keep (tx_pipeline.h).
       static int tx_audio_was_active = 0;
-      if (tx_audio_active && !tx_audio_was_active)
+      int first_tx_block = tx_audio_active && !tx_audio_was_active;
+      if (first_tx_block)
         tx_pipeline_reset(cw_tx_pipeline);
       tx_audio_was_active = tx_audio_active;
 
@@ -959,6 +1016,8 @@ static void *audio_loop(void *arg) {
         // CAT/network MOX in CW/USB/LSB): silence rather than RX audio.
         memset(play_buf, 0, (size_t)n * 2 * sizeof(int32_t));
       }
+      if (first_tx_block && sound_tr_timing_enabled())
+        tr_note_first_tx_block();
       snd_pcm_sframes_t wframes = snd_pcm_writei(pcm_playback, play_buf, n);
       if (wframes < 0) {
         // On unrecoverable failure, disable playback rather than stop RX
