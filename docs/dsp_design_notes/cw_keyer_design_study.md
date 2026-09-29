@@ -514,7 +514,7 @@ For a station with nothing on `EXT_PTT`, then, two periods and
 first element intact, as far as software can see — a margin similar to the
 default's. What remains is the hardware side, the five-dit test on air at
 exactly this setting, and for stations that do run an amplifier, the
-right-channel RF delay.
+right-channel RF delay — deferred for now (§14).
 
 The clean decoupling is a **delay line on the right channel only**, in
 CW: the sidetone leaves immediately, the RF follows a fixed D ms later.
@@ -727,6 +727,15 @@ Taken after reading §1–§13, and binding on the implementation:
 - **A mono straight-key plug in the stereo jack is detected and reported
   on the console** (§16).
 - **Dot and dash paddles can be reversed** (§16).
+- **The right-channel RF delay is deferred** (decided after §8's
+  measurements). It is the remedy for stations with an amplifier on
+  `EXT_PTT`, and nothing is built for it yet. Until it is, the default
+  playback depth stays at four periods, which leaves the first element
+  intact with the 20 ms amplifier delay in place. A station with nothing on
+  `EXT_PTT` can opt in to low sidetone latency with
+  `MAXIBITX_PLAYBACK_PERIODS=2` and `ext_ptt_delay_ms = 0` together; either
+  one alone is no gain (four periods) or clips the first element (two
+  periods at 20 ms).
 
 ## 15. Keyer specification
 
