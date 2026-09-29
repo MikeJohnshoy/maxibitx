@@ -467,6 +467,40 @@ and whether the drive won (`spare`) or lost (`CLIPPED`) and by how much
 ([`08_troubleshooting_and_bringup.md`](../08_troubleshooting_and_bringup.md)).
 The prediction is spare at four periods and about 13–15 ms clipped at two.
 
+**Measured on the Pi 4, and the model holds.** Each figure is one
+transmission starting from receive:
+
+| playback periods | result, per transmission | mean |
+|---|---|---:|
+| 4 (default) | spare 9.8, 6.2, 7.6, 10.1 ms | 8.4 ms spare |
+| 3 | clipped 4.3, 0.3, 0.2, 0.2, 3.7, 0.2 ms | 1.5 ms clipped |
+| 2 | clipped 11, 14, 15, 11 ms | 12.8 ms clipped |
+
+Two periods lands inside the predicted 13–15 ms; four has the few
+milliseconds to spare predicted, and three sits almost exactly on the
+boundary. Backing the drive-up time out of the figures gives about
+25–30 ms after the request, of which the amplifier delay is 20 ms. The
+spread within each setting, about 4 ms, is the drive-up sequence's own
+variation plus the queue's start-up phase.
+
+So the default loses nothing to the T/R switch today — the first-element
+truncation that
+[`cw_breakin_and_i2c_costs.md`](cw_breakin_and_i2c_costs.md) §7 first
+predicted does not happen at four periods, at least in the software
+sequence — and **any cut in sidetone latency below about three periods
+needs one of the two remedies above first**:
+
+- **`ext_ptt_delay_ms = 0`** (break-in note §9), for a station with no
+  amplifier on `EXT_PTT`: drive-up falls to about 5–10 ms, which at two
+  periods would leave roughly 5–9 ms spare. Small, already specified, and
+  checkable with the same line — but it is safe only once it is known what
+  `TX_LINE` gates on a DE board, which is outside what this measures.
+- **The right-channel RF delay**, for everyone else: 20 ms of it at two
+  periods restores about the margin four periods has today, whatever
+  `EXT_PTT` is driving.
+
+Either way, `MAXIBITX_TR_TIMING` is the acceptance test.
+
 The clean decoupling is a **delay line on the right channel only**, in
 CW: the sidetone leaves immediately, the RF follows a fixed D ms later.
 Sidetone latency is then free to fall with the buffer depth while the T/R
@@ -616,8 +650,11 @@ Each step stands alone and is useful even if the keyer is never finished.
    28.0–28.8 ms and 6.7–8.0 ms, no xruns at two under the load tried.
    Fewer periods: `MAXIBITX_PLAYBACK_PERIODS=2`..`8` sets the depth at
    start-up (default 4), with the same measurement recipe.*
-2. **Run the five-dit test**; add the right-channel delay line and
-   `ext_ptt_delay_ms` if the first element is short.
+2. **Measure the T/R race**; add the right-channel delay line and
+   `ext_ptt_delay_ms` if the first element is short. *Done in software on
+   the Pi 4 (§8): spare at four periods, clipped at two and marginal at
+   three, so both remedies are needed before the buffer shrinks. The
+   five-dit test on air remains the check on the hardware side.*
 3. **Weighting correction in `cw.c`** (§17), derived from the table — the
    straight key gets 1:1 immediately.
 4. **`key_input.c`** (§16): the edge-woken thread, timestamped events,
