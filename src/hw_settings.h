@@ -84,4 +84,23 @@ extern double tx_max_power;
 // are equal or either is unusable.
 double hw_settings_power_ratio(void);
 
+// ---- External PTT sequencing --------------------------------------------
+//
+// ext_ptt_delay_ms, a top-level key: how long radio.c's TX-up sequence
+// holds EXT_PTT (BCM 12, the line that leaves the radio for an external
+// amplifier or accessory) before it raises TX_LINE and RF can appear. It
+// exists so an amplifier's relay has closed before power arrives -
+// hot-switching an amp relay is how amplifiers are destroyed.
+//
+// 20 ms if the key is absent, which is what this radio always did and a
+// typical amplifier relay figure. A station with nothing on EXT_PTT can
+// set 0, which starts RF that much sooner after a key-down; a slow
+// amplifier may want more. Clamped to 0..HW_MAX_EXT_PTT_DELAY_MS, since a
+// mistyped value lands directly in the keying path.
+// docs/dsp_design_notes/cw_breakin_and_i2c_costs.md §6 and §9.
+#define HW_DEFAULT_EXT_PTT_DELAY_MS 20
+#define HW_MAX_EXT_PTT_DELAY_MS 100
+
+extern int tx_ext_ptt_delay_ms;
+
 #endif /* HW_SETTINGS_H */
