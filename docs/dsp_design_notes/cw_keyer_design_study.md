@@ -407,7 +407,12 @@ jitter showing through. Key-to-sidetone latency on this board today is
 therefore about 28–39 ms with plain polling, as the table says.
 
 The same recipe, run on a Pi Zero 2W and with fewer playback periods, is
-what the next step in §12 needs.
+what the next step in §12 needs. The depth is set at start-up by
+`MAXIBITX_PLAYBACK_PERIODS` (2–8, default 4;
+[`08_troubleshooting_and_bringup.md`](../08_troubleshooting_and_bringup.md)).
+Predicted minimums, from the same arithmetic less the ~0.5 ms the Pi 4 came
+in under it: about 17.7 ms at three periods and 7.1 ms at two — the second
+also being all the margin the loop would have against an underrun.
 
 ## 8. Sidetone and RF share one queue — the T/R consequence
 
@@ -578,8 +583,8 @@ Each step stands alone and is useful even if the keyer is never finished.
 1. **Measure the playback queue**, and try three and two periods on a Pi 4
    and a Pi Zero 2W. Nothing else in this list decides the feel of the
    paddle as much. *Four periods on the Pi 4 is done (§7): 28.0–28.8 ms.
-   Fewer periods needs the buffer depth made settable, since `sound.c`
-   fixes it at four.*
+   Fewer periods: `MAXIBITX_PLAYBACK_PERIODS=2`..`8` sets the depth at
+   start-up (default 4), with the same measurement recipe.*
 2. **Run the five-dit test**; add the right-channel delay line and
    `ext_ptt_delay_ms` if the first element is short.
 3. **Weighting correction in `cw.c`** (§17), derived from the table — the
