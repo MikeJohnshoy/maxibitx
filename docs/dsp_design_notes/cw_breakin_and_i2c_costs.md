@@ -319,10 +319,19 @@ Its effect is measurable with `MAXIBITX_TR_TIMING`
 "drive up" figure should fall by the 20 ms removed. That still says nothing
 about what `TX_LINE` gates (§10).
 
+Measured on the Pi 4: at 0, drive-up comes 6.8–9.1 ms after the TX request,
+against 26.7–28.9 ms at 20 on the same run — exactly the 20 ms removed.
+At two playback periods that turns 11–15 ms of first-element clipping into
+5–9 ms to spare.
+
 ## 10. What is still open
 
 - **The bus rate is assumed, not measured** (§2). Every I2C figure scales
-  with it.
+  with it. It is now bounded from above, though: with `ext_ptt_delay_ms = 0`
+  the whole TX-up sequence — two ALSA mixer calls, both Si5351 writes and
+  the worker's wake-up — takes 6.8 ms (§9), where the 100 kHz assumption
+  gives 9.6 ms for the two Si5351 writes alone. So each write is no more
+  than about 3.4 ms, and the bus is faster than assumed.
 - **The first-element truncation is a prediction** (§7), awaiting the
   five-dit test.
 - **What `TX_LINE` gates** beyond the solid-state switch (§6) — the one
