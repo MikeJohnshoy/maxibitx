@@ -7,6 +7,7 @@ test-rx-filter
 test-rx-audio
 test-rx-audio-impulse
 test-upsample48k
+test-cw
 src/*.o
 *.o
 
