@@ -260,6 +260,13 @@ pipeline. That is roughly the length of the TX-up sequence, so the race is
 close rather than lost — the first element may be intact, or short by a
 few milliseconds. The five-dit test still decides it.
 
+**Measured since, in software** (`MAXIBITX_TR_TIMING`, keyer study §8): at
+the default four playback periods the first keyed sample reaches the DAC
+6–10 ms *after* the drive is unmuted, so in the software sequence nothing
+is clipped. Clipping appears only with a shorter playback buffer — about
+13 ms at two periods. What the T/R switch and PA need after `TX_LINE` is
+outside that measurement; the five-dit test on air still covers it.
+
 ## 8. Why full break-in is out of reach, and that being fine
 
 A T/R round trip costs ~44 ms of sequencing alone — 20 ms up, ~9.5 ms of
