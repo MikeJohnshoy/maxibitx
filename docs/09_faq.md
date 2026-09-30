@@ -500,13 +500,14 @@ at start-up, and the ring doubles as the mic PTT in USB/LSB
 "The key jack"). The microphone arrives through the WM8731 codec and
 is scaled by `mic_tx_gain` on the way into the transmit pipeline.
 
-Remote operation is the incomplete half. Remote PTT works, but in CW it
-transmits no carrier, because there is no remote keying path — a
-computer can assert PTT but has no way to send elements. The test-tone
-generator is the current workaround for making a carrier without a key.
-Remote *audio* input exists only for DIGITAL, through the USB gadget.
-Remote keying and remote voice audio are both real gaps rather than
-oversights; they are listed in
+Remote operation is partly there. A computer sends CW as text — rigctld
+`b` (Hamlib's `send_morse`), Kenwood `KY`, or the control panel's text
+line — which the keyer sends at its own speed, and a touch of the key
+stops it. Remote PTT in CW on its own still transmits no carrier; the
+test-tone generator is the way to make one without a key. Remote *audio*
+input exists only for DIGITAL, through the USB gadget. Remote keying of
+individual elements and remote voice audio are both real gaps rather
+than oversights; they are listed in
 [`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md)'s known
 limitations.
 
@@ -630,7 +631,8 @@ The current list, from
 design notes: two-tone power and IMD measurements to establish this
 board's honest rated output; voice power never checked on a wattmeter;
 `POWER` and `ALC` bench-tested but not yet exercised against a running
-daemon; remote keying and remote voice audio absent; carrier placement a
+daemon; remote element keying and remote voice audio absent (CW text
+works); carrier placement a
 few Hz low from whole-bin rotation (6.25 Hz on SSB, 9.4 Hz on CW); and
 the pipeline carrying about a block of the previous transmission in its
 overlap-save history, with nothing resetting it between bursts.
