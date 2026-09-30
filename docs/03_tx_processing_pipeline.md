@@ -110,9 +110,13 @@ for why). Who calls it:
   (`cw.c`) takes the edges up to that block's capture time and places each
   at its own sample in the block about to be generated, so a mark starts
   and ends where the key did, one block (10.67 ms) late, and a tap shorter
-  than a block is sent rather than lost. In CW and CWR either contact is a
-  straight key with semi break-in: a hang timer (`CW_HANG_POLLS`, ~300 ms)
-  holds TX through the gaps between elements so the relay doesn't chatter.
+  than a block is sent rather than lost. The keyer (`keyer.c`, selected
+  with rigctld `U KEYER`) turns those edges into a key value per sample:
+  in straight-key mode it follows either contact; as a bug, ultimatic or
+  iambic A/B keyer it times dots and dashes at `L KEYSPD` WPM (1-60),
+  exactly `T` and `3T` with `T` spaces. In CW and CWR that keys the
+  transmitter with semi break-in: a hang timer (`CW_HANG_POLLS`, ~300 ms)
+  holds TX through the gaps the keyer leaves so the relay doesn't chatter.
   In USB and LSB the ring is a mic PTT switch — TX follows the switch, no
   hang timer. In DIGITAL the key is ignored.
 - **Remote PTT/MOX:** rigctld `T` (`hamlib.c`), Kenwood `TX`/`RX`/`TQ`
