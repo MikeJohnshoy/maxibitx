@@ -20,6 +20,7 @@
 #include "tone_gen.h" // u/U TONE below
 #include "hw_settings.h" // tx_band_scales[] - dump_state TX ranges
 #include "key_input.h"   // u/U PADREV below
+#include "keyer.h"       // l/L KEYSPD, u/U KEYER below
 
 static int listen_fd = -1;
 static volatile int running = 0;
@@ -224,7 +225,7 @@ static int handle_line(int fd, char *line)
     }
 
     if (cmd[0] == 'l' && (cmd[1] == '\0' || cmd[1] == ' ')) {
-        // get_level <name>. AF, CWPITCH, RFPOWER and STRENGTH are real
+        // get_level <name>. AF, CWPITCH, KEYSPD, RFPOWER and STRENGTH are real
         // Hamlib levels (see dump_state); MICGAIN, ALC and CWWIDTH are this
         // server's extensions, in their own units. Anything else (SQL,
         // preamp, ...) has no equivalent here.
@@ -270,6 +271,12 @@ static int handle_line(int fd, char *line)
             snprintf(buf, sizeof(buf), "%d\n", radio_get_cw_pitch());
             send_line(fd, buf);
             printf("rigctl: l CWPITCH -> %d Hz\n", radio_get_cw_pitch());
+        } else if (strcmp(level_name, "KEYSPD") == 0) {
+            // A real Hamlib RIG_LEVEL: the keyer's speed in WPM.
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%d\n", keyer_get_wpm());
+            send_line(fd, buf);
+            printf("rigctl: l KEYSPD -> %d WPM\n", keyer_get_wpm());
         } else if (strcmp(level_name, "CWWIDTH") == 0) {
             // Extension: Hamlib carries filter width in the m/M passband
             // argument rather than as a level, but that argument is still
@@ -319,6 +326,12 @@ static int handle_line(int fd, char *line)
             send_rprt(fd, 0);
             printf("rigctl: L CWPITCH %.0f -> %d Hz (sidetone and TX IF follow)\n", val, got);
         } else if (sscanf(cmd + 1, "%31s %lf", level_name, &val) == 2 &&
+                   strcmp(level_name, "KEYSPD") == 0) {
+            // Clamped to 1-60; takes effect at the keyer's next element start.
+            int got = keyer_set_wpm((int)(val + 0.5));
+            send_rprt(fd, 0);
+            printf("rigctl: L KEYSPD %.0f -> %d WPM\n", val, got);
+        } else if (sscanf(cmd + 1, "%31s %lf", level_name, &val) == 2 &&
                    strcmp(level_name, "CWWIDTH") == 0) {
             int got = rx_audio_set_narrow_width((int)val);
             send_rprt(fd, 0);
@@ -334,8 +347,9 @@ static int handle_line(int fd, char *line)
         // get_func <name>: NARROW (rx_audio.c's narrow stage-3 filter - its
         // EFFECTIVE state, so it reads 0 in DIGITAL however it was last set,
         // see rx_audio.h), FFTFILT (which stage-3 implementation it uses) and
-        // TONE (the TX test-tone generator, 0-2) and PADREV (paddle reversal,
-        // key_input.h). Not Hamlib RIG_FUNC names - extensions
+        // TONE (the TX test-tone generator, 0-2), PADREV (paddle reversal,
+        // key_input.h) and KEYER (the keyer's mode, 0-4, keyer.h's enum
+        // keyer_mode). Not Hamlib RIG_FUNC names - extensions
         // for tools/rigctl_panel.py. There is no MINPHASE: the FFT filter
         // always runs minimum phase, since nobody listening to CW would pick
         // 16ms of group delay over 4.5ms (rx_audio.h).
@@ -363,6 +377,12 @@ static int handle_line(int fd, char *line)
             snprintf(buf, sizeof(buf), "%d\n", key_input_get_reverse());
             send_line(fd, buf);
             printf("rigctl: u PADREV -> %d\n", key_input_get_reverse());
+        } else if (strcmp(func_name, "KEYER") == 0) {
+            char buf[8];
+            snprintf(buf, sizeof(buf), "%d\n", (int)keyer_get_mode());
+            send_line(fd, buf);
+            printf("rigctl: u KEYER -> %d (%s)\n", (int)keyer_get_mode(),
+                   keyer_mode_name(keyer_get_mode()));
         } else {
             send_rprt(fd, -1);
             printf("rigctl: u %s -> unsupported function\n", func_name);
@@ -401,6 +421,17 @@ static int handle_line(int fd, char *line)
             send_rprt(fd, 0);
             printf("rigctl: U PADREV %d -> paddles %s: dot = %s, dash = %s\n", val,
                    val ? "reversed" : "normal", val ? "ring" : "tip", val ? "tip" : "ring");
+        } else if (strcmp(func_name, "KEYER") == 0) {
+            // 0 straight, 1 bug, 2 ultimatic, 3 iambic A, 4 iambic B. Takes
+            // effect once the keyer is idle. A mode this build's keyer
+            // doesn't offer (make KEYER=keyer_straight) is refused.
+            if (keyer_set_mode((enum keyer_mode)val) != 0) {
+                send_rprt(fd, -1);
+                printf("rigctl: U KEYER %d -> not offered by this keyer, ignored\n", val);
+            } else {
+                send_rprt(fd, 0);
+                printf("rigctl: U KEYER %d -> keyer %s\n", val, keyer_mode_name((enum keyer_mode)val));
+            }
         } else if (strcmp(func_name, "TONE") == 0) {
             // Test-tone generator: 0 off, 1 single tone, 2 two-tone
             // (tone_gen.h). Doesn't key the radio - any PTT source does.
@@ -445,17 +476,16 @@ static int handle_line(int fd, char *line)
         // Minimal, spec-shaped dump_state (format checked against Hamlib's
         // rigctl_parse.c). Advertises only what exists: no XIT/IF shift, no
         // preamp/attenuator, no filter list; max_rit is real (RIT_MAX_HZ).
-        // has_get_level = RIG_LEVEL_AF (0x8) | RIG_LEVEL_CWPITCH (1<<9) |
-        // RIG_LEVEL_RFPOWER (1<<12) | RIG_LEVEL_STRENGTH (1<<30) =
-        // 0x40001208; has_set_level drops STRENGTH (an S-meter can't be
-        // set) = 0x1208. ALC isn't advertised: this server reports it in dB
+        // has_get_level = RIG_LEVEL_AF (1<<3) | RIG_LEVEL_CWPITCH (1<<11) |
+        // RIG_LEVEL_RFPOWER (1<<12) | RIG_LEVEL_KEYSPD (1<<14) |
+        // RIG_LEVEL_STRENGTH (1<<30) = 0x40005808 (bit numbers from Hamlib
+        // 4.5's rig.h); has_set_level drops STRENGTH (an S-meter can't be
+        // set) = 0x5808. ALC isn't advertised: this server reports it in dB
         // rather than Hamlib's 0.0-1.0, so it's an extension like MICGAIN.
-        // Nor is CWWIDTH, which isn't a RIG_LEVEL at all. CWPITCH is
-        // advertised even though this radio quantizes it to three values:
-        // the level is real and a client's set is honored to the nearest
-        // one, which is the same deal a rig with a coarse pitch control
-        // offers.
-        // has_get_func/set_func stay 0: NARROW/FFTFILT aren't RIG_FUNC bits.
+        // Nor is CWWIDTH, which isn't a RIG_LEVEL at all. CWPITCH is, though
+        // quantized here: a client's set is honored to the nearest pitch, as
+        // on a rig with a coarse pitch control. has_get_func/set_func stay
+        // 0: NARROW, FFTFILT, TONE, PADREV and KEYER aren't RIG_FUNC bits.
         //
         // Mode masks carry the modes m/M actually handle: CW (0x2), USB
         // (0x4), LSB (0x8), CWR (0x80) and PKTUSB (0x800, DIGITAL) =
@@ -498,8 +528,8 @@ static int handle_line(int fd, char *line)
         send_line(fd, "\n");                          // attenuator list (empty)
         send_line(fd, "0x0\n");                       // has_get_func
         send_line(fd, "0x0\n");                       // has_set_func
-        send_line(fd, "0x40001208\n");                // has_get_level (AF | CWPITCH | RFPOWER | STRENGTH)
-        send_line(fd, "0x1208\n");                    // has_set_level (AF | CWPITCH | RFPOWER)
+        send_line(fd, "0x40005808\n");                // has_get_level (AF | CWPITCH | RFPOWER | KEYSPD | STRENGTH)
+        send_line(fd, "0x5808\n");                    // has_set_level (AF | CWPITCH | RFPOWER | KEYSPD)
         send_line(fd, "0x0\n");                       // has_get_parm
         send_line(fd, "0x0\n");                       // has_set_parm
         printf("rigctl: dump_state -> sent\n");
