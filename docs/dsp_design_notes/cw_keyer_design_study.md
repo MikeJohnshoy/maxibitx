@@ -1,10 +1,10 @@
 # CW keyer: a feasibility study
 
-Status: **study, with the first pieces implemented** — the playback-queue
-setting, the T/R measurement and `ext_ptt_delay_ms` (§7, §8), the 1:1
-weighting correction in `cw.c` (§17), the input path, `key_input.c`
-(§16, "As built"), and the keyer, `keyer.c` (§15, "As built"). Text to CW
-is not built yet.
+Status: **implemented.** The playback-queue setting, the T/R measurement
+and `ext_ptt_delay_ms` (§7, §8), the 1:1 weighting correction in `cw.c`
+(§17), the input path, `key_input.c` (§16, "As built"), the keyer,
+`keyer.c`, and text to CW, `morse.c` (§15, "As built" and "Text, as
+built"). The right-channel RF delay stays deferred (§14).
 Written as the precursor to building a keyer, to find out before any code exists whether the
 requested design holds up, and where it doesn't, what to do instead.
 §1–§13 are the study as first written. **§14 records the decisions taken
@@ -693,8 +693,9 @@ Each step stands alone and is useful even if the keyer is never finished.
    reverse controls brought forward from steps 6 and 7 so the keyer can be
    used on the air.*
 6. **Text**: table, queue, spacing, `b`/`KY`, abort on paddle, the
-   speed-dependent hang floor.
-7. **Panel controls.**
+   speed-dependent hang floor. *Done (§15, "Text, as built").*
+7. **Panel controls.** *Done: mode, WPM, reverse, and a text line with
+   Send and Stop.*
 
 ## 13. Reproducing the numbers
 
@@ -901,6 +902,70 @@ A, 4 iambic B), `l`/`L KEYSPD` (a real Hamlib level, now advertised in
 `dump_state`), CAT `KS`, and in `rigctl_panel.py` a keyer group with mode,
 WPM and paddle reversal. maxibitx starts in straight-key mode at 20 WPM
 each time; nothing is saved.
+
+### Text, as built
+
+`morse.c` holds the table (the reference keyer's letters, digits and
+punctuation) and one translator per surface, into an internal form where
+prosigns are single codes of their own (`MORSE_AR` … `MORSE_SN`, 0x80 up),
+so no protocol's punctuation reaches the table:
+
+| Surface | Prosigns written as | Translator |
+|---|---|---|
+| rigctld `b` / `\send_morse`, the panel | `<AR>` `<AS>` `<BK>` `<BT>` `<HH>` `<KN>` `<SK>` `<SN>`, either case | `morse_from_plain()` |
+| CAT `KY` | `[` BT, `_` AR, `<` AS, `#` HH, `>` SK, `]` KN, `\` BK, `%` SN | `morse_from_kenwood()` |
+
+A character the table lacks is skipped and named on the console (an
+unknown `<XY>` loses its brackets and sends the letters). `+ = & (` stay
+the ordinary characters they are, which share their codes with AR, BT, AS
+and KN.
+
+`keyer.c` sends the text through the same elements as the paddles: at a
+text element's decision point the character's pattern supplies the next
+element, and a gap phase stretches the space after a character to `3T`,
+or to `7T` before a word. Decisions made while building it:
+
+- **A run of spaces is one word space**, and spaces before the first
+  character are skipped. A TS-480 `KY` carries 24 space-padded characters,
+  so padding becomes a single word space, and text sent in pieces keeps its
+  word breaks: `"CQ "` then `"DE"` arriving during the gap sends `CQ DE`
+  with exactly `7T` between.
+- **The queue holds 512 characters.** Text that doesn't all fit is refused
+  whole. `KY;` answers as a TS-480 does, since that is what maxibitx
+  identifies as: `KY0` while a 24-character message fits, `KY1` when not.
+  Whether FLRig's QMX driver expects the QMX's `KY0`/`KY1`/`KY2`
+  (sending/nearly full/idle) instead is still to be checked against
+  FLRig itself (§9).
+- **Text is sent in CW and CWR only.** The surfaces refuse it in other
+  modes, and a mode change while it is going out stops it.
+- **Any contact closing stops it** (§15), and so does `\stop_morse`: the
+  element in progress completes, the rest is discarded. A closure during a
+  text element leaves the paddle keyer exactly as a closure during its own
+  element would — the iambic memory of the other paddle, or the same
+  paddle still held — so the operator's element follows on at the next
+  decision point with no gap to lose. Text queued while a contact is held
+  is discarded, for the same reason.
+- **Queued text requests TX at once** (`cw_text_queued()`), from the
+  control thread, before the first element starts.
+- **The hang time is at least a word space in a paddle mode or while text
+  has been sent** — 7 dits, which is longer than `CW_HANG_POLLS`'s 300 ms
+  below about 25 WPM — so TX doesn't drop between characters or words at
+  slow speeds. The straight key keeps 300 ms.
+
+Checked by `test-keyer` part 4 and `test-cw`:
+
+| Check | Result |
+|---|---|
+| `PARIS PARIS` at 20 WPM, read back from the key stream | `PARIS PARIS`; every mark `T`/`3T`, every space `T`, `3T` or `7T`, exactly |
+| `CQ <SK> 73` | the prosign one character, no letter space inside |
+| `"CQ "`, then `"DE"` during the word gap | `CQ DE`, `7T` between |
+| A dot paddle tapped in the second dash of `TTTT` (iambic B) | that dash completes, the tap's dot follows `T` later, the rest dropped |
+| `\stop_morse` in the third `E` of ten | three `E`s, the last complete |
+| A speed change during a dash of `MM` | the next dash at the new speed |
+| Straight-key mode | text sent with the same timing |
+| 513 characters | refused, queue unchanged |
+| `E E` at 5 WPM through `cw.c` | TX requested once as the text is queued, held through the `7T` word space, released once |
+| The real rigctld and CAT handlers, against stubs | `b` queues and names skipped characters, refused outside CW; `\stop_morse`, `u MORSE`, `KY`/`KY;`, `KS` as specified |
 
 ## 16. Input path
 
