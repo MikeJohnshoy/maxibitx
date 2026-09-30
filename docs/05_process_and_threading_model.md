@@ -9,7 +9,8 @@ reading `sound.c`.
 - `main()`'s startup sequence in `maxibitx.c`: board calibration
   (`hw_settings_load()`, `data/hw_settings.ini`) → GPIO → si5351 (clk1
   at its RX value) → board revision/INA260 → software VFO and initial
-  tune → CW key (`cw_init()`) → RX demodulator (`rx_audio_init()`) →
+  tune → CW tone (`cw_init()`) → key jack and its input thread
+  (`key_input_start()`) → RX demodulator (`rx_audio_init()`) →
   Hamlib/rigctld → HPSDR → I/Q telemetry stream (`iq_stream.c`) → USB
   gadget (`uac_init()`) → Kenwood CAT on the gadget's serial port
   (`cat_init()`) → audio codec → audio thread. See
@@ -24,6 +25,17 @@ reading `sound.c`.
   - the audio thread (`sound.c`'s `audio_loop()`, calling
     `sound_process()` once per ~10.7ms block), `SCHED_FIFO` when the
     binary has `cap_sys_nice`;
+  - the key input thread (`key_input.c`), asleep in `ppoll()` on the key
+    jack's edge events until one arrives, `SCHED_FIFO` one step below the
+    audio thread. It queues each edge, kernel timestamp and all, for the
+    audio thread in a lock-free single-producer, single-consumer ring, and
+    on a closure in CW/CWR calls `radio_set_tx(1)` through
+    `cw_key_closed()`. That makes two threads that start a local-key
+    transmission, so `cw.c` orders them with a mutex that the input
+    thread waits on and the audio thread only ever tries: if the input
+    thread holds it, it is starting TX, and the audio thread has nothing to
+    do that block. Releasing TX after the hang time stays with the audio
+    thread, and it won't release while an edge is still queued;
   - HPSDR's listener and pacer threads (`hpsdr_p1.c`);
   - the I/Q telemetry stream's listener and pacer threads
     (`iq_stream.c`);
@@ -85,8 +97,8 @@ reading `sound.c`.
   [`04_remote_control_and_iq_output.md`](04_remote_control_and_iq_output.md),
   which report a freq/PTT change at the moment it happens rather than a
   point-in-time snapshot.
-- Failure handling at startup: GPIO, the HPSDR socket bind and audio
-  capture are fatal - `main()` exits if any fails. Everything else is
+- Failure handling at startup: GPIO (the outputs and the key jack), the
+  HPSDR socket bind and audio capture are fatal - `main()` exits if any fails. Everything else is
   best-effort and logs that it's continuing without it: Hamlib/rigctld,
   the I/Q telemetry stream, the USB gadget (and its TX audio direction
   separately), Kenwood CAT, the INA260 power monitor, and audio
