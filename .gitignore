@@ -9,6 +9,8 @@ test-rx-audio-impulse
 test-upsample48k
 test-cw
 test-key-input
+test-keyer
+test-keyer-straight
 src/*.o
 *.o
 
