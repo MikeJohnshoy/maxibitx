@@ -5,6 +5,7 @@
 
 #include "usb_gadget.h"
 #include "cw.h"
+#include "keyer.h"    // KS below
 #include "radio.h"    // freq_hdr, in_tx, tuning, PTT, RIT, mode
 #include "rx_audio.h"
 #include <alsa/asoundlib.h>
@@ -15,6 +16,7 @@
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -1204,6 +1206,25 @@ static void cat_handle_command(char *cmd) {
       cat_log_get(last, sizeof(last), "PS1;", "cat: PS -> 1 (on)\n");
     } else {
       printf("cat: PS%c -> accepted, ignored (no software power switch)\n", cmd[2]);
+    }
+    return;
+  }
+
+  // --- KS: keyer speed, 3-digit WPM. Bare "KS" gets; "KSnnn" sets. The
+  // TS-480 takes 010-060; the keyer takes 1-60, and clamps. ---
+  if (len >= 2 && cmd[0] == 'K' && cmd[1] == 'S') {
+    if (len == 2) {
+      static char last[8] = "";
+      char buf[8], log_line[48];
+      snprintf(buf, sizeof(buf), "KS%03d;", keyer_get_wpm());
+      cat_send(buf);
+      snprintf(log_line, sizeof(log_line), "cat: KS -> %d WPM\n", keyer_get_wpm());
+      cat_log_get(last, sizeof(last), buf, log_line);
+    } else if (strspn(cmd + 2, "0123456789") == len - 2) {
+      int got = keyer_set_wpm(atoi(cmd + 2));
+      printf("cat: KS%s -> %d WPM\n", cmd + 2, got);
+    } else {
+      printf("cat: KS%s -> not a number, ignored\n", cmd + 2);
     }
     return;
   }
