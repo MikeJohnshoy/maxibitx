@@ -879,11 +879,12 @@ static void *audio_loop(void *arg) {
     clock_gettime(CLOCK_MONOTONIC, &t1);
     long process_ns = (t1.tv_sec - t0.tv_sec) * 1000000000L + (t1.tv_nsec - t0.tv_nsec);
 
-    // Once per audio block - checks the key, manages the CW keying
-    // burst's hang timer, and asserts/releases PTT via radio_set_tx()
-    // (see cw.c). Runs every iteration, TX or not, since this is what
-    // actually notices the key going down in the first place.
-    cw_poll_key();
+    // Once per audio block - takes the key's edges since the last capture,
+    // manages the CW keying burst's hang timer, and asserts/releases PTT via
+    // radio_set_tx() (see cw.c). Runs every iteration, TX or not: the edges
+    // are placed against t_read1, and the key's state has to follow them
+    // whether or not this block transmits.
+    cw_poll_key((int64_t)t_read1.tv_sec * 1000000000LL + t_read1.tv_nsec, n);
 
     // Feed pcm_playback every block, TX or not, not just during a CW
     // burst - see docs/08_troubleshooting_and_bringup.md for why
@@ -1071,6 +1072,8 @@ static void *audio_loop(void *arg) {
     loop_timing_note(&loop_timing, read_ns, process_ns, write_ns);
   }
 
+  // Nothing will poll the key or release TX from here on (cw.h).
+  cw_audio_stopped();
   return NULL;
 }
 
