@@ -103,4 +103,18 @@ double hw_settings_power_ratio(void);
 
 extern int tx_ext_ptt_delay_ms;
 
+// ---- Key debounce ---------------------------------------------------------
+//
+// key_debounce_ms, a top-level key: after key_input.c takes an edge on a key
+// contact, at the edge's own timestamp, it ignores that contact's further
+// edges for this long - contact bounce. So it adds no latency, but no mark
+// or space can be shorter. 3 ms if the key is absent, well under a 60 WPM
+// dit (20 ms); a bouncier key may want more. 0 turns it off. Clamped to
+// 0..HW_MAX_KEY_DEBOUNCE_MS. docs/dsp_design_notes/cw_keyer_design_study.md
+// §16.
+#define HW_DEFAULT_KEY_DEBOUNCE_MS 3
+#define HW_MAX_KEY_DEBOUNCE_MS 20
+
+extern int key_debounce_ms;
+
 #endif /* HW_SETTINGS_H */
