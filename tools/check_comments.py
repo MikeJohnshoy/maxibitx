@@ -48,6 +48,11 @@ SUSPECTS = [
 ]
 SUSPECTS = [(re.compile(p, re.IGNORECASE), why) for p, why in SUSPECTS]
 
+# "Bug" is also a CW keyer mode - a semi-automatic key (keyer.c) - and a
+# comment about the keyer's modes names it alongside the others. Such a line
+# isn't flagged for it.
+KEYER_CONTEXT = re.compile(r"\b(ultimatic|iambic|keyer|paddle|straight key)\b", re.IGNORECASE)
+
 # A line that points at a doc section is the sanctioned way to reference
 # history ("ARCHITECTURE.md §10 step 8"), so doc pointers aren't flagged.
 DOC_POINTER = re.compile(r"\.md\b|§")
@@ -153,6 +158,8 @@ def check_file(path):
         if DOC_POINTER.search(body):
             continue
         for rx, why in SUSPECTS:
+            if why == "mentions a bug" and KEYER_CONTEXT.search(body):
+                continue
             if rx.search(body):
                 hits.append(("history", rel, ln, "%s: %s" % (why, body.strip())))
                 break
