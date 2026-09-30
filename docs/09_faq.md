@@ -487,10 +487,15 @@ when the mode changes again
 
 ### How does maxibitx work with a key and a microphone?
 
-It uses the sBitx hardware's own connections. The straight key is a GPIO
-line polled by `cw_poll_key()` once per audio block inside the audio
-thread — at audio rate, not on a UI timer, which is what keeps iambic-
-style timing honest. The microphone arrives through the WM8731 codec and
+It uses the sBitx hardware's own connections. The key jack's two contacts
+are GPIO lines read as edge events: the kernel timestamps every edge, a
+thread of its own receives them and requests TX on a closure, and once per
+audio block `cw_poll_key()` places each edge at its own sample, one block
+late. So a mark is as long as the key was down, to the sample, whatever
+the block size. Either contact is a straight key, a mono plug is detected
+at start-up, and the ring doubles as the mic PTT in USB/LSB
+([`01_hardware_init_and_control.md`](01_hardware_init_and_control.md),
+"The key jack"). The microphone arrives through the WM8731 codec and
 is scaled by `mic_tx_gain` on the way into the transmit pipeline.
 
 Remote operation is the incomplete half. Remote PTT works, but in CW it
@@ -580,7 +585,8 @@ would be good at.
 ### How do I know a change hasn't broken the DSP?
 
 Run the bench tests — `make test-fft-filter`, `test-tx-pipeline`,
-`test-rx-filter`, `test-rx-audio`, `test-upsample48k`, `test-cw`. They link the DSP
+`test-rx-filter`, `test-rx-audio`, `test-upsample48k`, `test-cw`,
+`test-key-input`. They link the DSP
 files without any hardware code, so they run anywhere, and they print
 measured numbers against expected ones rather than just passing or
 failing. `make check-comments` flags comments that have drifted into
