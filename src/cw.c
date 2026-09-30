@@ -3,10 +3,11 @@
 // Keys the radio from the key jack and generates the keyed tone that feeds
 // both the local sidetone and tx_pipeline.c (via sound.c). key_input.c
 // delivers the jack's edges; once per block this file takes them, each at
-// its own sample, so a mark starts and ends where the key did, one block
-// late. In CW and CWR either contact is a straight key, with semi
-// break-in; in USB/LSB the ring (sbitx's PTT line) is a mic PTT switch.
-// No paddle keyer and no macros yet.
+// its own sample, and hands them to the keyer (keyer.h), which turns them
+// into a key value per sample - a straight key following the contacts, or a
+// bug, ultimatic or iambic keyer timing elements - one block late. In CW and
+// CWR that keys the transmitter, with semi break-in; in USB/LSB the ring
+// (sbitx's PTT line) is a mic PTT switch.
 //
 // Keying envelope: a table-driven Blackman-Harris ramp, 480 samples (5ms
 // at 96kHz), from ~0 to 1.0 - similar to sBitx's own keyer (modem_cw.c).
@@ -24,6 +25,7 @@
 
 #include "cw.h"
 #include "key_input.h"
+#include "keyer.h"
 #include "radio.h"
 #include "vfo.h"
 #include <math.h>
@@ -34,6 +36,7 @@
 #define CW_ENVELOPE_LEN 480
 #define CW_SAMPLE_RATE 96000 // sound.c's rate, for block times
 #define CW_MAX_EVENTS 64     // edges taken per block; any beyond wait a block
+#define CW_MAX_BLOCK 4096    // sound.c's MAX_FRAMES
 // How much later than one period after the last boundary estimate the next
 // may be: 1 us per block, ~94 ppm - room for error in the period estimate,
 // which follows the codec's clock against CLOCK_MONOTONIC.
@@ -106,24 +109,19 @@ static const double cw_envelope[CW_ENVELOPE_LEN] = {
 static struct vfo cw_tone;     // keyed-tone oscillator, running at cw_pitch_hz
 static int cw_pitch_hz = CW_PITCH_HZ; // live pitch - see cw_set_pitch()
 static int envelope_pos = 0;   // 0 = silent, CW_ENVELOPE_LEN-1 = full output
-static int key_down = 0;       // straight-key state at the sample being generated
+static int key_down = 0;       // keyer output at the sample being generated
 static _Atomic int tx_active = 0; // PTT/relay asserted by this file
 static int hang_counter = 0;   // polls remaining before TX releases
 static pthread_mutex_t tx_lock = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic int keying_enabled = 1; // cleared by cw_audio_stopped()
 
-// The block being generated: straight-key changes at their sample offsets,
-// applied by cw_get_sample() as it reaches them.
-static struct {
-    int offset;
-    int down;
-} transitions[CW_MAX_EVENTS];
-static int n_transitions = 0;
-static int next_transition = 0;
+// The block being generated: keyer.c's key value for each sample, which
+// cw_get_sample() follows.
+static uint8_t key_block[CW_MAX_BLOCK];
+static int key_block_len = 0;
 static int sample_index = 0;   // cw_get_sample() calls since cw_poll_key()
 
 static unsigned contacts_closed = 0; // bit per enum key_contact, at the end of the last block
-static int key_down_at_end = 0;      // straight-key state at the end of the last block
 static double boundary_ns = 0; // estimated time the last captured block ended
 static double period_ns = 0;   // estimated block length, CLOCK_MONOTONIC ns
 static int64_t last_capture_ns = 0;
@@ -148,9 +146,9 @@ void cw_init(void) {
     atomic_store(&tx_active, 0);
     atomic_store(&keying_enabled, 1);
     hang_counter = 0;
-    n_transitions = next_transition = sample_index = 0;
+    key_block_len = sample_index = 0;
     contacts_closed = 0;
-    key_down_at_end = 0;
+    keyer_reset();
     boundary_ns = 0;
     period_ns = 0;
     last_capture_ns = 0;
@@ -266,30 +264,24 @@ void cw_poll_key(int64_t capture_ns, int n) {
     struct key_event ev[CW_MAX_EVENTS];
     int n_ev = key_input_take((int64_t)start_ns, (int64_t)end_ns, n, ev, CW_MAX_EVENTS);
 
-    // Straight key: down while either contact is closed.
-    int down = key_down_at_end;
-    int any_down = down;
-    key_down = down; // the block starts where the last one ended
-    n_transitions = next_transition = sample_index = 0;
+    // The keyer runs in every mode, so its paddle state stays true to the
+    // jack; only CW and CWR use what it keys.
     for (int i = 0; i < n_ev; i++) {
         unsigned bit = 1u << ev[i].contact;
         contacts_closed = ev[i].closed ? (contacts_closed | bit) : (contacts_closed & ~bit);
-        int now_down = contacts_closed != 0;
-        if (now_down != down) {
-            transitions[n_transitions].offset = ev[i].offset;
-            transitions[n_transitions].down = now_down;
-            n_transitions++;
-            down = now_down;
-            any_down |= down;
-        }
     }
-    key_down_at_end = down;
+    if (n > CW_MAX_BLOCK)
+        n = CW_MAX_BLOCK;
+    int any_down = keyer_run_block(ev, n_ev, key_block, n);
+    key_block_len = n;
+    sample_index = 0;
 
     enum radio_mode mode = radio_get_mode();
     if (mode == RADIO_MODE_CW || mode == RADIO_MODE_CWR) {
-        // Semi break-in: CW_HANG_POLLS holds TX through the gaps between
-        // elements. CWR keys identically; it differs only in which side of
-        // the BFO rx_audio.c demodulates.
+        // Semi break-in: CW_HANG_POLLS holds TX through the gaps the keyer
+        // leaves - between a straight key's elements, or once a paddle
+        // keyer's element and its space are done. CWR keys identically; it
+        // differs only in which side of the BFO rx_audio.c demodulates.
         if (any_down) {
             tx_start(1);
             hang_counter = CW_HANG_POLLS;
@@ -323,11 +315,8 @@ int cw_tx_active(void) {
 double cw_get_sample(void) {
     // The envelope follows the key, except that after key-up it keeps rising
     // or holding for weighting_hold samples before it starts to fall.
-    while (next_transition < n_transitions &&
-           transitions[next_transition].offset <= sample_index) {
-        key_down = transitions[next_transition].down;
-        next_transition++;
-    }
+    if (sample_index < key_block_len)
+        key_down = key_block[sample_index];
     sample_index++;
 
     int keyed;
