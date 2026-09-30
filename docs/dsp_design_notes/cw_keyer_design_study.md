@@ -1,8 +1,9 @@
 # CW keyer: a feasibility study
 
 Status: **study, with the first pieces implemented** — the playback-queue
-setting, the T/R measurement and `ext_ptt_delay_ms` (§7, §8), and the 1:1
-weighting correction in `cw.c` (§17). The keyer itself is not built yet.
+setting, the T/R measurement and `ext_ptt_delay_ms` (§7, §8), the 1:1
+weighting correction in `cw.c` (§17), and the input path, `key_input.c`
+(§16, "As built"). The keyer itself is not built yet.
 Written as the precursor to building a keyer, to find out before any code exists whether the
 requested design holds up, and where it doesn't, what to do instead.
 §1–§13 are the study as first written. **§14 records the decisions taken
@@ -332,7 +333,9 @@ Two practical matters this scheme brings into view, both needed anyway:
 - **Debounce and timestamps.** Whether a debounced event's timestamp marks
   the first edge or the end of the debounce period is a kernel detail to
   confirm on the Pi. Either way it is the same offset on press and release,
-  so element timing is unaffected.
+  so element timing is unaffected. *Resolved in §16, "As built": the
+  kernel stamps a debounced edge when its debounce work runs, so
+  `key_input.c` debounces the raw, interrupt-stamped edges itself.*
 
 ## 7. The latency that dominates: the playback queue
 
@@ -677,7 +680,10 @@ Each step stands alone and is useful even if the keyer is never finished.
    and space within 0.23 samples of the key-down and key-up times (§17).*
 4. **`key_input.c`** (§16): the edge-woken thread, timestamped events,
    early TX request, mono-plug detection and reversal — first driving the
-   existing straight key, which gains exact timing.
+   existing straight key, which gains exact timing. *Done (§16, "As
+   built"): `test-cw` measures marks within a sample of the key's edges
+   anywhere in a block, and `test-key-input` covers debounce, plug
+   detection, reversal and placement.*
 5. **`keyer.c` and a `keyer_test` harness**, written from §15: scripted
    events in, element sequences and timings out, 1–60 WPM, all modes, with
    `keyer_spec_model.c`'s golden cases as the acceptance test and
@@ -904,17 +910,93 @@ jack contact is the tip: whichever line is held closed is the grounded one.
 
 **Reversal.** One flag swaps which contact is the dot and which the dash,
 in paddle modes only — for a straight key it has no meaning. **The default
-is tip = dot, ring = dash**, the usual paddle convention. Which BCM line
-each contact reaches is still to be confirmed on a DE board. The working
-assumption is tip = BCM 4, since that is the line a straight key already
-keys, which would make the default dot = BCM 4 and dash = BCM 5: the
-reverse of sbitx's `key_poll()` (§3). To confirm, stop maxibitx (it holds
-both lines), insert a mono plug with the key open, and read both lines
-(`gpioget gpiochip0 4 5` with libgpiod 1.x, `gpioget -c gpiochip0 4 5`
-with 2.x): the line that reads 0 is the ring, grounded by the plug's
-sleeve. If it is BCM 4, the assumption is wrong and the default swaps. There is no Kenwood CAT command for it
-(the TS-480 sets it from a menu), so it is a rigctld extension alongside
-`NARROW` and `FFTFILT` — `u`/`U PADREV` — and a checkbox on the panel.
+is tip = dot, ring = dash**, the usual paddle convention. On a DE board the
+tip is BCM 5 and the ring BCM 4, measured with a mono plug in the jack, the
+key open and maxibitx stopped:
+
+```
+$ gpioget -c gpiochip0 -b pull-up 4 5      # libgpiod 2.x
+"4"=inactive "5"=active
+```
+
+The plug's sleeve grounds the ring, so BCM 4 is the ring. The default is
+therefore dot = BCM 5, dash = BCM 4 — the same as sbitx's `key_poll()`
+(§3). There is no Kenwood CAT command for reversal (the TS-480 sets it
+from a menu), so it is a rigctld extension alongside `NARROW` and
+`FFTFILT` — `u`/`U PADREV` — and a checkbox on the panel.
+
+### As built
+
+`key_input.c` follows the design above, with these differences, each for
+a reason found while building it:
+
+- **Debounce is done in user space, not by the kernel.** `gpiolib-cdev`'s
+  software debounce emits a debounced edge from delayed work once the line
+  has been stable for the period, and stamps it when that work runs — the
+  end of the period plus workqueue latency, which is load-dependent, so it
+  is not the same offset on press and release. Instead the request has no
+  debounce, every edge arrives stamped in the interrupt handler, and the
+  thread debounces leading-edge: the first edge that changes a contact's
+  state is taken at its own timestamp, the contact's edges are ignored for
+  `key_debounce_ms` (`hw_settings.ini`, default 3 ms), and at the end of
+  that lockout the contact's latest level is compared with the state taken.
+  No latency on either edge; the cost is that nothing shorter than the
+  lockout can be sent.
+- **A contact closed at start-up is excluded at once**, not after the
+  window: otherwise a grounded ring would key the radio for the quarter
+  second the window takes. The window then either confirms it (console
+  line) or, if it opens, drops the exclusion.
+- **TX ownership is a mutex, not a bare compare-and-swap.** A CAS makes
+  the start atomic, but the release has to be ordered against it: with
+  only a CAS, the audio thread could clear `tx_active` and the input
+  thread set it and call `radio_set_tx(1)` before the audio thread's
+  `radio_set_tx(0)` landed, leaving TX off with `tx_active` set. So both
+  start and release happen under `tx_lock` in `cw.c`. The input thread
+  waits for it; the audio thread only ever tries it — if the input thread
+  holds it, the input thread is starting TX and there is nothing for the
+  audio thread to do that block — and it won't release while an edge is
+  still queued.
+- **Block boundaries are estimated, not taken from `t_read1` directly.**
+  A capture read returns when its period has ended or later — much later
+  when the audio thread has stalled and is catching up, since the next read
+  then returns at once — and never sooner. So `cw_poll_key()` takes each
+  boundary as one period after the last estimate, or the read's time if
+  that is earlier, allowing 1 µs per block for error in the period. The
+  period itself is the time between reads averaged over 1024 blocks
+  (~11 s), which follows the codec's crystal against the Pi's: the reads'
+  latencies cancel between one read and the next. The boundaries follow
+  the earliest reads, and a late read moves nothing.
+- **A straight key is either contact**, as in sbitx: a stereo plug wired
+  to the tip or the ring works, and so does a mono plug once its ring is
+  excluded. The ring stays the mic PTT in USB/LSB.
+- **The input thread can start TX, so the audio thread's exit ends
+  that.** `sound.c` calls `cw_audio_stopped()` as its loop exits, for any
+  reason: it releases a TX `cw.c` asserted and refuses further requests.
+  And in DIGITAL, `cw_poll_key()` releases a TX the key started, which a
+  closure landing just as the mode changed could otherwise leave keyed.
+- **Re-detection** on a keyer-mode change waits for the keyer. Until then
+  detection runs at start-up only, and a mono plug inserted while running
+  looks like a held key, as it always has.
+
+Measured on the bench:
+
+| Harness | What | Result |
+|---|---|---|
+| `test-cw` | marks and spaces, edges on block boundaries | within 0.23 samples of the key |
+| | 60 WPM and 20 WPM dits, edges anywhere in a block | within 0.23 samples (whole-sample lengths) |
+| | a 5 ms tap inside one block, 480.5 samples | within 0.73 samples |
+| | 60 WPM dits, capture reads up to 300 µs late and one 8 ms late | within 1.23 samples; placed against the raw read times instead, 250 samples (2.6 ms) |
+| | the same, codec clock 300 ppm slow, after 30 s | within 0.81 samples |
+| | CW → DIGITAL inside the hang time | TX released on the first DIGITAL block |
+| | the audio thread stopping | releases TX; a closure afterwards keys nothing |
+| | TX request | by the input thread, before the audio thread took the edge; released once, after the hang |
+| `test-key-input` | bounce trains, glitches, debounce off, mono plug, held key, both closed, reversal, re-arm, placement, overflow | all as designed |
+
+The late-read case is the one that matters on the radio. With the
+boundary estimate, what remains is the scheduling latency of the earliest
+reads, which is the same for every edge and so moves nothing relative to
+anything else. `snd_pcm_status()`'s hardware timestamps would remove even
+that dependence if it ever mattered (§6).
 
 ## 17. Weighting with the existing table
 
