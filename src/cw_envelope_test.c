@@ -33,6 +33,7 @@
 
 #include "cw.h"
 #include "key_input.h"
+#include "keyer.h"
 #include "radio.h"
 #include "vfo.h"
 
@@ -104,12 +105,18 @@ struct result {
 // generates each block, and measures the envelope's marks and spaces
 // against the key's edges. Runs first_block blocks before the `blocks` it
 // records, for the clock estimate to settle.
+static double *last_env = NULL; // the last run's envelope, kept for measuring
+static long last_n = 0;
+
 static struct result run_from(const struct edge *edges, int n_edges, long first_block,
                               long blocks, int64_t jitter_ns) {
   long n = blocks * BLOCK;
+  free(last_env);
   double *env = calloc(n, sizeof(double));
   if (!env)
     exit(2);
+  last_env = env;
+  last_n = n;
 
   cw_init();
   key_input_arm(0, T0, 3, cw_key_closed);
@@ -186,7 +193,6 @@ static struct result run_from(const struct edge *edges, int n_edges, long first_
   }
   r.end_level = cw_envelope_level();
   r.end_idle = !cw_tx_active();
-  free(env);
   return r;
 }
 
@@ -279,6 +285,50 @@ int main(void) {
   r = run_from(e, n, settle, 80, 300000);
   report(&r, 1.5);
   codec_ppm = 0;
+
+  printf("iambic B at 60 WPM: dot paddle held, then a squeeze\n");
+  keyer_set_mode(KEYER_IAMBIC_B);
+  keyer_set_wpm(60);
+  e[0] = (struct edge){(int64_t)(23.456 * MS), KEY_TIP, 1};
+  e[1] = (struct edge){(int64_t)(120.0 * MS), KEY_RING, 1};
+  e[2] = (struct edge){(int64_t)(200.0 * MS), KEY_TIP, 0};
+  e[3] = (struct edge){(int64_t)(200.0 * MS), KEY_RING, 0};
+  run(e, 4, 80, 0);
+  {
+    // Every mark and space between the envelope's 50% points, against the
+    // keyer's own T = 1920 samples: marks T or 3T, spaces T.
+    double prev = -1, worst = 0;
+    int rising = 1, dots = 0, dashes = 0, spaces = 0;
+    for (long j = 1; j < last_n; j++) {
+      int up = last_env[j - 1] < 0.5 && last_env[j] >= 0.5;
+      int down = last_env[j - 1] >= 0.5 && last_env[j] < 0.5;
+      if (!(rising ? up : down))
+        continue;
+      double x = (j - 1) + (0.5 - last_env[j - 1]) / (last_env[j] - last_env[j - 1]);
+      if (prev >= 0) {
+        double len = x - prev, want;
+        if (!rising) { // a mark just ended
+          want = len < 2 * 1920 ? 1920 : 3 * 1920;
+          if (want == 1920)
+            dots++;
+          else
+            dashes++;
+        } else {
+          want = 1920;
+          spaces++;
+        }
+        if (fabs(len - want) > fabs(worst))
+          worst = len - want;
+      }
+      prev = x;
+      rising = !rising;
+    }
+    snprintf(msg, sizeof msg, "%d dots, %d dashes, %d spaces, each within %+.2f samples of T or 3T",
+             dots, dashes, spaces, worst);
+    check(dots >= 3 && dashes >= 1 && fabs(worst) < 0.5, msg);
+  }
+  keyer_set_mode(KEYER_STRAIGHT);
+  keyer_set_wpm(KEYER_WPM_DEFAULT);
 
   printf("USB: the ring is mic PTT, the tip does nothing\n");
   mode = RADIO_MODE_USB;
