@@ -12,6 +12,11 @@
 //    u/U NARROW     get/set the narrow RX filter (extension)
 //    u/U FFTFILT    get/set its FFT implementation (extension)
 //    u/U TONE       get/set the TX test-tone generator, 0-2 (extension)
+//    l/L KEYSPD     get/set the keyer's speed, 1-60 WPM
+//    u/U KEYER      get/set the keyer's mode, 0-4 (extension)
+//    u/U PADREV     get/set paddle reversal (extension)
+//    b, \send_morse send text as CW; \stop_morse stops it
+//    u MORSE        1 while text is queued or being sent (extension)
 //    v/V, chk_vfo   single VFO
 //    dump_state
 //    q/Q/quit       close the connection
