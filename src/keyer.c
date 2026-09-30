@@ -17,11 +17,18 @@
 // automatic dots with the dash contact keying directly.
 // tools/keyer_study/keyer_spec_model.c is the same specification stepped one
 // sample at a time, and keyer_test.c checks this against it.
+//
+// Text runs on the same elements: a character's pattern (morse.c) supplies
+// each next element at its decision point, and a gap phase stretches the
+// space after a character to 3T, or to 7T before the next word.
 
 #include "keyer.h"
+#include "morse.h"
+#include <pthread.h>
 #include <stdatomic.h>
+#include <string.h>
 
-enum phase { IDLE, MARK, SPACE };
+enum phase { IDLE, MARK, SPACE, GAP };
 
 static _Atomic int wanted_mode = KEYER_STRAIGHT; // as last set
 static _Atomic int wpm = KEYER_WPM_DEFAULT;
@@ -36,6 +43,22 @@ static unsigned contacts;     // straight key: bit per enum key_contact, closed
 static enum phase phase = IDLE;
 static int cur;               // the element in progress
 static int64_t mark_end, decide_at;
+
+// Text queue: control threads write under text_lock, the audio thread reads
+// without it. Indexes run freely; the slot is index % KEYER_TEXT_QUEUE_LEN.
+static unsigned char text_queue[KEYER_TEXT_QUEUE_LEN];
+static _Atomic unsigned text_head = 0; // next slot to write
+static _Atomic unsigned text_tail = 0; // next slot to read
+static pthread_mutex_t text_lock = PTHREAD_MUTEX_INITIALIZER;
+static _Atomic int text_stop_request = 0;
+static _Atomic int text_sending = 0; // text_mode, for other threads
+
+// Text in progress, audio thread only.
+static int text_mode;             // the element or gap in progress is text's
+static int text_abort;            // end text after the element in progress
+static const char *text_pattern;  // the character being sent
+static int text_index;            // its next element
+static int64_t gap_end;           // end of a GAP phase
 
 // One dit: 1.2 s / WPM at 96 kHz, rounded to a sample.
 static int64_t dit_samples(void) {
@@ -54,6 +77,94 @@ static void start_element(int which, int64_t t) {
   // element, including already closed as it starts.
   if (mode == KEYER_IAMBIC_B && down[!which])
     mem[!which] = 1;
+}
+
+/* ---- Text --------------------------------------------------------------- */
+
+static int text_peek(unsigned char *c) {
+  unsigned t = atomic_load_explicit(&text_tail, memory_order_relaxed);
+  if (t == atomic_load_explicit(&text_head, memory_order_acquire))
+    return 0;
+  *c = text_queue[t % KEYER_TEXT_QUEUE_LEN];
+  return 1;
+}
+
+static void text_pop(void) {
+  atomic_store_explicit(&text_tail, atomic_load_explicit(&text_tail, memory_order_relaxed) + 1,
+                        memory_order_release);
+}
+
+static void text_discard(void) {
+  atomic_store_explicit(&text_tail, atomic_load_explicit(&text_head, memory_order_acquire),
+                        memory_order_release);
+}
+
+static void text_end(void) {
+  text_mode = 0;
+  text_abort = 0;
+  atomic_store(&text_sending, 0);
+}
+
+static int element_of(char symbol) { return symbol == '-' ? KEY_DASH : KEY_DOT; }
+
+// Starts the next character in the queue at time t, skipping spaces (a word
+// space is timed by the gap before it, so spaces here lead nowhere) and
+// anything the table lacks. Returns 0 if the queue had none.
+static int text_start_char(int64_t t) {
+  unsigned char c;
+  while (text_peek(&c)) {
+    text_pop();
+    const char *p = morse_pattern(c);
+    if (!p)
+      continue;
+    text_pattern = p;
+    text_index = 1;
+    text_mode = 1;
+    atomic_store(&text_sending, 1);
+    start_element(element_of(p[0]), t);
+    return 1;
+  }
+  return 0;
+}
+
+// Text's decision point, at time t: the character's next element, or the
+// gap to the next character or word, or the end.
+static void text_next(int64_t t) {
+  if (text_pattern[text_index]) {
+    start_element(element_of(text_pattern[text_index++]), t);
+    return;
+  }
+  unsigned char c;
+  if (!text_peek(&c)) {
+    text_end();
+    phase = IDLE;
+    return;
+  }
+  // T of space has already passed since the mark: 2T more makes the 3T
+  // between characters, 6T more the 7T between words.
+  int64_t T = dit_samples();
+  if (c == ' ') {
+    while (text_peek(&c) && c == ' ')
+      text_pop();
+    gap_end = t + 6 * T;
+  } else {
+    gap_end = t + 2 * T;
+  }
+  phase = GAP;
+}
+
+// A contact closed, or a stop was asked for: the element in progress
+// completes, and the rest of the text is discarded.
+static void text_stop(void) {
+  text_discard();
+  if (!text_mode)
+    return;
+  if (phase == GAP) {
+    text_end();
+    phase = IDLE;
+  } else {
+    text_abort = 1;
+  }
 }
 
 // Which element to send, from idle or at a decision point; -1 for none.
@@ -94,6 +205,8 @@ static int choose(int from_idle) {
 static void apply_edge(const struct key_event *e, int64_t t) {
   unsigned bit = 1u << e->contact;
   contacts = e->closed ? (contacts | bit) : (contacts & ~bit);
+  if (e->closed)
+    text_stop(); // any closure stops text
   int p = e->paddle;
   if (e->closed && !down[p]) {
     down[p] = 1;
@@ -113,11 +226,22 @@ static void step(int64_t t) {
   if (phase == MARK && t >= mark_end)
     phase = SPACE;
   if (phase == SPACE && t >= decide_at) {
-    int next = choose(0);
-    if (next >= 0)
-      start_element(next, t);
-    else
-      phase = IDLE;
+    if (text_mode && !text_abort) {
+      text_next(t);
+    } else {
+      // Paddles decide, including right after text a closure stopped: the
+      // closure set a memory, or its paddle is still down.
+      text_end();
+      int next = choose(0);
+      if (next >= 0)
+        start_element(next, t);
+      else
+        phase = IDLE;
+    }
+  }
+  if (phase == GAP && t >= gap_end && !text_start_char(t)) {
+    text_end();
+    phase = IDLE;
   }
   if (phase == IDLE) {
     int want = atomic_load(&wanted_mode);
@@ -125,6 +249,12 @@ static void step(int64_t t) {
       mode = (enum keyer_mode)want;
       mem[KEY_DOT] = mem[KEY_DASH] = 0;
     }
+    // Queued text starts once the key is idle; a contact held closed stops
+    // it instead, as a closure during it would.
+    if (contacts != 0)
+      text_discard();
+    else if (text_start_char(t))
+      return;
     int next = choose(1);
     if (next >= 0)
       start_element(next, t);
@@ -134,7 +264,7 @@ static void step(int64_t t) {
 static int key_value(void) {
   switch (mode) {
   case KEYER_STRAIGHT:
-    return contacts != 0;
+    return contacts != 0 || (text_mode && phase == MARK);
   case KEYER_BUG:
     return phase == MARK || down[KEY_DASH]; // automatic dots OR the manual dash
   default:
@@ -144,6 +274,8 @@ static int key_value(void) {
 
 int keyer_run_block(const struct key_event *ev, int n_ev, uint8_t *key, int n) {
   int any = 0, e = 0, pos = 0;
+  if (atomic_exchange(&text_stop_request, 0))
+    text_stop();
   while (pos < n) {
     int64_t t = base + pos;
     while (e < n_ev && ev[e].offset <= pos)
@@ -158,6 +290,8 @@ int keyer_run_block(const struct key_event *ev, int n_ev, uint8_t *key, int n) {
       next = mark_end;
     else if (phase == SPACE && decide_at < next)
       next = decide_at;
+    else if (phase == GAP && gap_end < next)
+      next = gap_end;
     if (next <= t)
       next = t + 1;
 
@@ -182,8 +316,38 @@ void keyer_reset(void) {
   contacts = 0;
   phase = IDLE;
   cur = KEY_DOT;
-  mark_end = decide_at = 0;
+  mark_end = decide_at = gap_end = 0;
   mode = (enum keyer_mode)atomic_load(&wanted_mode);
+  text_discard();
+  text_end();
+  atomic_store(&text_stop_request, 0);
+}
+
+int keyer_send_text(const char *text) {
+  size_t len = strlen(text);
+  pthread_mutex_lock(&text_lock);
+  unsigned h = atomic_load_explicit(&text_head, memory_order_relaxed);
+  unsigned t = atomic_load_explicit(&text_tail, memory_order_acquire);
+  if (len > KEYER_TEXT_QUEUE_LEN - (h - t)) {
+    pthread_mutex_unlock(&text_lock);
+    return -1;
+  }
+  for (size_t i = 0; i < len; i++)
+    text_queue[(h + i) % KEYER_TEXT_QUEUE_LEN] = (unsigned char)text[i];
+  atomic_store_explicit(&text_head, h + (unsigned)len, memory_order_release);
+  pthread_mutex_unlock(&text_lock);
+  return 0;
+}
+
+void keyer_stop_text(void) { atomic_store(&text_stop_request, 1); }
+
+int keyer_text_busy(void) {
+  return atomic_load(&text_sending) ||
+         atomic_load(&text_head) != atomic_load(&text_tail);
+}
+
+int keyer_text_room(void) {
+  return KEYER_TEXT_QUEUE_LEN - (int)(atomic_load(&text_head) - atomic_load(&text_tail));
 }
 
 int keyer_set_mode(enum keyer_mode m) {
