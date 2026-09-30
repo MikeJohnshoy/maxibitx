@@ -1,10 +1,12 @@
 // cw.c
 //
-// Polls the key/PTT line (radio_hw.h's CW_KEY) and keys the radio from
-// it. In CW it's a straight key with semi break-in, and this file
-// generates the keyed tone that feeds both the local sidetone and
-// tx_pipeline.c (via sound.c). In USB/LSB the same line is a mic PTT
-// switch. No keyer and no macros - maxibitx leaves those to external apps.
+// Keys the radio from the key jack and generates the keyed tone that feeds
+// both the local sidetone and tx_pipeline.c (via sound.c). key_input.c
+// delivers the jack's edges; once per block this file takes them, each at
+// its own sample, so a mark starts and ends where the key did, one block
+// late. In CW and CWR either contact is a straight key, with semi
+// break-in; in USB/LSB the ring (sbitx's PTT line) is a mic PTT switch.
+// No paddle keyer and no macros yet.
 //
 // Keying envelope: a table-driven Blackman-Harris ramp, 480 samples (5ms
 // at 96kHz), from ~0 to 1.0 - similar to sBitx's own keyer (modem_cw.c).
@@ -21,13 +23,25 @@
 // weighting. docs/dsp_design_notes/cw_keyer_design_study.md §4 and §17.
 
 #include "cw.h"
+#include "key_input.h"
 #include "radio.h"
-#include "radio_hw.h"
 #include "vfo.h"
 #include <math.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 
 #define CW_ENVELOPE_LEN 480
+#define CW_SAMPLE_RATE 96000 // sound.c's rate, for block times
+#define CW_MAX_EVENTS 64     // edges taken per block; any beyond wait a block
+// How much later than one period after the last boundary estimate the next
+// may be: 1 us per block, ~94 ppm - room for error in the period estimate,
+// which follows the codec's clock against CLOCK_MONOTONIC.
+#define CW_BOUNDARY_SLEW_NS 1000.0
+// The period estimate averages the time between reads over this many blocks
+// (~11 s): the reads' latencies cancel between one read and the next, so
+// the average converges on the codec's true period.
+#define CW_PERIOD_AVERAGE_BLOCKS 1024.0
 
 // Semi break-in: audio blocks to hold TX after the key goes up, so the
 // relay doesn't chatter between elements. 28 x ~10.7ms = ~300ms.
@@ -92,9 +106,27 @@ static const double cw_envelope[CW_ENVELOPE_LEN] = {
 static struct vfo cw_tone;     // keyed-tone oscillator, running at cw_pitch_hz
 static int cw_pitch_hz = CW_PITCH_HZ; // live pitch - see cw_set_pitch()
 static int envelope_pos = 0;   // 0 = silent, CW_ENVELOPE_LEN-1 = full output
-static int key_down = 0;       // last polled key state
-static int tx_active = 0;      // PTT/relay currently asserted for a keying burst
+static int key_down = 0;       // straight-key state at the sample being generated
+static _Atomic int tx_active = 0; // PTT/relay asserted by this file
 static int hang_counter = 0;   // polls remaining before TX releases
+static pthread_mutex_t tx_lock = PTHREAD_MUTEX_INITIALIZER;
+static _Atomic int keying_enabled = 1; // cleared by cw_audio_stopped()
+
+// The block being generated: straight-key changes at their sample offsets,
+// applied by cw_get_sample() as it reaches them.
+static struct {
+    int offset;
+    int down;
+} transitions[CW_MAX_EVENTS];
+static int n_transitions = 0;
+static int next_transition = 0;
+static int sample_index = 0;   // cw_get_sample() calls since cw_poll_key()
+
+static unsigned contacts_closed = 0; // bit per enum key_contact, at the end of the last block
+static int key_down_at_end = 0;      // straight-key state at the end of the last block
+static double boundary_ns = 0; // estimated time the last captured block ended
+static double period_ns = 0;   // estimated block length, CLOCK_MONOTONIC ns
+static int64_t last_capture_ns = 0;
 
 // Samples each fall is held off after key-up, for 1:1 weighting (above).
 static int weighting_hold = 0;
@@ -113,8 +145,15 @@ void cw_init(void) {
     vfo_start(&cw_tone, cw_pitch_hz, 0);
     envelope_pos = 0;
     key_down = 0;
-    tx_active = 0;
+    atomic_store(&tx_active, 0);
+    atomic_store(&keying_enabled, 1);
     hang_counter = 0;
+    n_transitions = next_transition = sample_index = 0;
+    contacts_closed = 0;
+    key_down_at_end = 0;
+    boundary_ns = 0;
+    period_ns = 0;
+    last_capture_ns = 0;
 
     // The rise reaches 50% at half_index samples after key-down and the fall,
     // reading the same table backwards, at (N - 1 - half_index) after it
@@ -142,60 +181,155 @@ int cw_get_pitch(void) {
     return cw_pitch_hz;
 }
 
-void cw_poll_key(void) {
-    key_down = radio_hw_key_down();
-    enum radio_mode mode = radio_get_mode();
+// Requests TX if this file hasn't. Two threads start transmissions: the
+// input thread on a closure (cw_key_closed()), up to a block before the
+// audio thread sees the edge, and the audio thread if it gets there first.
+// tx_lock orders both against the audio thread's release. The input thread
+// waits for it; the audio thread only tries it, since the only other holder
+// is the input thread making this same request.
+static void tx_start(int from_audio_thread) {
+    if (from_audio_thread ? pthread_mutex_trylock(&tx_lock) != 0
+                          : pthread_mutex_lock(&tx_lock) != 0)
+        return;
+    // With the audio thread gone nothing would ever release it.
+    if (!atomic_load(&keying_enabled)) {
+        pthread_mutex_unlock(&tx_lock);
+        return;
+    }
+    // A refused TX (dial outside the calibrated bands) leaves tx_active
+    // clear, so the audio thread retries on its next poll. maxibitx.c's idle
+    // loop does the reporting - nothing on the audio thread may do I/O.
+    if (!atomic_load(&tx_active) && radio_set_tx(1) == 0)
+        atomic_store(&tx_active, 1);
+    pthread_mutex_unlock(&tx_lock);
+}
 
-    // One line, two uses: CW_KEY (BCM4) is the same pin sbitx calls PTT,
-    // read as a straight key in CW/CWR and as a mic PTT switch in USB/LSB.
-    // History: ARCHITECTURE.md §10 step 8.
+// Audio thread: releases TX unless an edge is still on its way. Under
+// tx_lock, so a closure queued after the check finds TX released and
+// requests it again, rather than being released by a check that missed it.
+static void tx_stop_if_idle(void) {
+    if (pthread_mutex_trylock(&tx_lock) != 0)
+        return; // the input thread is starting TX - not idle
+    if (atomic_load(&tx_active) && !key_input_pending()) {
+        radio_set_tx(0);
+        atomic_store(&tx_active, 0);
+    }
+    pthread_mutex_unlock(&tx_lock);
+}
+
+void cw_audio_stopped(void) {
+    pthread_mutex_lock(&tx_lock);
+    atomic_store(&keying_enabled, 0);
+    if (atomic_load(&tx_active)) {
+        radio_set_tx(0);
+        atomic_store(&tx_active, 0);
+    }
+    pthread_mutex_unlock(&tx_lock);
+}
+
+void cw_key_closed(void) {
+    enum radio_mode mode = radio_get_mode();
+    if (mode == RADIO_MODE_CW || mode == RADIO_MODE_CWR)
+        tx_start(0);
+}
+
+void cw_poll_key(int64_t capture_ns, int n) {
+    // This block replays the interval between the last block boundary and
+    // this one. A capture read returns when its period has ended or later -
+    // up to a period later when the audio thread is catching up - never
+    // sooner, so the earliest reads mark the boundaries best: each boundary
+    // is estimated as one period after the last, or this read's time if
+    // that is earlier. With no usable last one - the first block, or after a
+    // capture overrun - this read's time is taken as the boundary.
+    double nominal_ns = n * 1e9 / CW_SAMPLE_RATE;
+    if (period_ns == 0 || n != (int)lround(period_ns * CW_SAMPLE_RATE / 1e9))
+        period_ns = nominal_ns;
+    double start_ns = boundary_ns;
+    double end_ns = start_ns + period_ns + CW_BOUNDARY_SLEW_NS;
+    int64_t read_gap_ns = capture_ns - last_capture_ns;
+    last_capture_ns = capture_ns;
+    if (start_ns == 0 || capture_ns < start_ns || capture_ns - start_ns > 3 * period_ns) {
+        end_ns = capture_ns;
+        start_ns = end_ns - period_ns;
+    } else {
+        if (capture_ns < end_ns)
+            end_ns = capture_ns;
+        // Follow the codec's clock, within 1000 ppm of nominal.
+        period_ns += (read_gap_ns - period_ns) / CW_PERIOD_AVERAGE_BLOCKS;
+        if (period_ns > nominal_ns * 1.001)
+            period_ns = nominal_ns * 1.001;
+        if (period_ns < nominal_ns * 0.999)
+            period_ns = nominal_ns * 0.999;
+    }
+    boundary_ns = end_ns;
+
+    struct key_event ev[CW_MAX_EVENTS];
+    int n_ev = key_input_take((int64_t)start_ns, (int64_t)end_ns, n, ev, CW_MAX_EVENTS);
+
+    // Straight key: down while either contact is closed.
+    int down = key_down_at_end;
+    int any_down = down;
+    key_down = down; // the block starts where the last one ended
+    n_transitions = next_transition = sample_index = 0;
+    for (int i = 0; i < n_ev; i++) {
+        unsigned bit = 1u << ev[i].contact;
+        contacts_closed = ev[i].closed ? (contacts_closed | bit) : (contacts_closed & ~bit);
+        int now_down = contacts_closed != 0;
+        if (now_down != down) {
+            transitions[n_transitions].offset = ev[i].offset;
+            transitions[n_transitions].down = now_down;
+            n_transitions++;
+            down = now_down;
+            any_down |= down;
+        }
+    }
+    key_down_at_end = down;
+
+    enum radio_mode mode = radio_get_mode();
     if (mode == RADIO_MODE_CW || mode == RADIO_MODE_CWR) {
-        // Straight key, semi break-in: CW_HANG_POLLS holds TX through
-        // the gaps between elements. CWR keys identically; it differs
-        // only in which side of the BFO rx_audio.c demodulates.
-        if (key_down) {
-            // A refused TX (dial outside the calibrated bands) leaves
-            // tx_active clear, so this retries on the next poll rather
-            // than believing it is transmitting. maxibitx.c's idle loop
-            // does the reporting - nothing here may do I/O.
-            if (!tx_active && radio_set_tx(1) == 0) {
-                tx_active = 1;
-            }
+        // Semi break-in: CW_HANG_POLLS holds TX through the gaps between
+        // elements. CWR keys identically; it differs only in which side of
+        // the BFO rx_audio.c demodulates.
+        if (any_down) {
+            tx_start(1);
             hang_counter = CW_HANG_POLLS;
-        } else if (tx_active) {
-            if (hang_counter > 0) {
+        } else if (atomic_load(&tx_active)) {
+            if (hang_counter > 0)
                 hang_counter--;
-            } else {
-                radio_set_tx(0);
-                tx_active = 0;
-            }
+            else
+                tx_stop_if_idle();
         }
     } else if (mode == RADIO_MODE_USB || mode == RADIO_MODE_LSB) {
-        // Mic PTT: TX follows the switch, no hang timer (as sbitx does on
-        // the same GPIO).
-        if (key_down) {
-            if (!tx_active && radio_set_tx(1) == 0) {
-                tx_active = 1;
-            }
-        } else if (tx_active) {
-            radio_set_tx(0);
-            tx_active = 0;
-        }
+        // Mic PTT on the ring: TX follows the switch, no hang timer (as
+        // sbitx does on the same GPIO).
+        if (contacts_closed & (1u << KEY_RING))
+            tx_start(1);
+        else if (atomic_load(&tx_active))
+            tx_stop_if_idle();
         hang_counter = 0; // no semi break-in outside CW mode
+    } else if (atomic_load(&tx_active)) {
+        // DIGITAL: the key is ignored; PTT comes from CAT, rigctld or
+        // HPSDR. A transmission the key started before the mode changed -
+        // within CW's hang time, or a closure the input thread saw just as
+        // it changed - is released here rather than left keyed.
+        tx_stop_if_idle();
     }
-    // DIGITAL: the line is ignored; PTT comes from CAT, rigctld or HPSDR.
-    // Caveat: nothing here releases a TX this function asserted before
-    // the mode changed to DIGITAL (e.g. within CW's hang time) - it stays
-    // keyed until the mode changes back.
 }
 
 int cw_tx_active(void) {
-    return tx_active;
+    return atomic_load(&tx_active);
 }
 
 double cw_get_sample(void) {
     // The envelope follows the key, except that after key-up it keeps rising
     // or holding for weighting_hold samples before it starts to fall.
+    while (next_transition < n_transitions &&
+           transitions[next_transition].offset <= sample_index) {
+        key_down = transitions[next_transition].down;
+        next_transition++;
+    }
+    sample_index++;
+
     int keyed;
     if (key_down) {
         keyed = 1;
