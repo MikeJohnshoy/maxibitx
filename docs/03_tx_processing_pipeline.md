@@ -102,12 +102,19 @@ hands the slow hardware sequence to a dedicated worker thread (see
 [`05_process_and_threading_model.md`](05_process_and_threading_model.md)
 for why). Who calls it:
 
-- **The key/PTT line** (`CW_KEY`, BCM4), polled once per audio block by
-  `cw_poll_key()` (`cw.c`). In CW and CWR it's a straight key with semi
-  break-in: a hang timer (`CW_HANG_POLLS`, ~300 ms) holds TX through
-  the gaps between elements so the relay doesn't chatter. In USB and
-  LSB the same line is a mic PTT switch - TX follows the switch, no hang
-  timer. In DIGITAL the line is ignored.
+- **The key jack** (tip BCM 5, ring BCM 4 — see
+  [`01_hardware_init_and_control.md`](01_hardware_init_and_control.md),
+  "The key jack"). `key_input.c`'s thread receives every edge with its
+  kernel timestamp and, on a closure in CW or CWR, calls `radio_set_tx(1)`
+  through `cw_key_closed()` at once. Once per audio block `cw_poll_key()`
+  (`cw.c`) takes the edges up to that block's capture time and places each
+  at its own sample in the block about to be generated, so a mark starts
+  and ends where the key did, one block (10.67 ms) late, and a tap shorter
+  than a block is sent rather than lost. In CW and CWR either contact is a
+  straight key with semi break-in: a hang timer (`CW_HANG_POLLS`, ~300 ms)
+  holds TX through the gaps between elements so the relay doesn't chatter.
+  In USB and LSB the ring is a mic PTT switch — TX follows the switch, no
+  hang timer. In DIGITAL the key is ignored.
 - **Remote PTT/MOX:** rigctld `T` (`hamlib.c`), Kenwood `TX`/`RX`/`TQ`
   on the gadget's serial port (`usb_gadget.c`), and HPSDR MOX
   (`hpsdr_p1.c`, which first retunes to the client's TX frequency if
