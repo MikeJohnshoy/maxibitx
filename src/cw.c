@@ -47,7 +47,9 @@
 #define CW_PERIOD_AVERAGE_BLOCKS 1024.0
 
 // Semi break-in: audio blocks to hold TX after the key goes up, so the
-// relay doesn't chatter between elements. 28 x ~10.7ms = ~300ms.
+// relay doesn't chatter between elements. 28 x ~10.7ms = ~300ms. A paddle
+// keyer or text holds it at least a word space, 7 dits, which is longer
+// below ~25 WPM (hang_polls()).
 #define CW_HANG_POLLS 28
 
 static const double cw_envelope[CW_ENVELOPE_LEN] = {
@@ -112,6 +114,7 @@ static int envelope_pos = 0;   // 0 = silent, CW_ENVELOPE_LEN-1 = full output
 static int key_down = 0;       // keyer output at the sample being generated
 static _Atomic int tx_active = 0; // PTT/relay asserted by this file
 static int hang_counter = 0;   // polls remaining before TX releases
+static int text_in_burst = 0;  // the keyer sent text during this transmission
 static pthread_mutex_t tx_lock = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic int keying_enabled = 1; // cleared by cw_audio_stopped()
 
@@ -231,6 +234,21 @@ void cw_key_closed(void) {
         tx_start(0);
 }
 
+void cw_text_queued(void) {
+    cw_key_closed();
+}
+
+// The hang time in polls of n samples: CW_HANG_POLLS, or a word space at
+// the keyer's speed if that is longer and the keyer is timing the gaps - a
+// paddle mode, or text - so TX doesn't drop between characters or words.
+static int hang_polls(int n) {
+    if (keyer_get_mode() == KEYER_STRAIGHT && !text_in_burst)
+        return CW_HANG_POLLS;
+    int word = 7 * ((115200 + keyer_get_wpm() / 2) / keyer_get_wpm());
+    int polls = (word + n - 1) / n;
+    return polls > CW_HANG_POLLS ? polls : CW_HANG_POLLS;
+}
+
 void cw_poll_key(int64_t capture_ns, int n) {
     // This block replays the interval between the last block boundary and
     // this one. A capture read returns when its period has ended or later -
@@ -278,20 +296,32 @@ void cw_poll_key(int64_t capture_ns, int n) {
 
     enum radio_mode mode = radio_get_mode();
     if (mode == RADIO_MODE_CW || mode == RADIO_MODE_CWR) {
-        // Semi break-in: CW_HANG_POLLS holds TX through the gaps the keyer
-        // leaves - between a straight key's elements, or once a paddle
-        // keyer's element and its space are done. CWR keys identically; it
+        // Semi break-in: the hang time (hang_polls()) holds TX through the
+        // gaps the keyer leaves - between a straight key's elements, or once
+        // a paddle keyer's element and its space are done. Queued text keeps
+        // TX wanted even before the keyer starts it. CWR keys identically; it
         // differs only in which side of the BFO rx_audio.c demodulates.
-        if (any_down) {
+        int text = keyer_text_busy();
+        if (text)
+            text_in_burst = 1;
+        if (any_down || text) {
             tx_start(1);
-            hang_counter = CW_HANG_POLLS;
+            hang_counter = hang_polls(n);
         } else if (atomic_load(&tx_active)) {
             if (hang_counter > 0)
                 hang_counter--;
             else
                 tx_stop_if_idle();
         }
-    } else if (mode == RADIO_MODE_USB || mode == RADIO_MODE_LSB) {
+        if (!atomic_load(&tx_active))
+            text_in_burst = 0;
+        return;
+    }
+
+    // Outside CW and CWR text has nowhere to go.
+    if (keyer_text_busy())
+        keyer_stop_text();
+    if (mode == RADIO_MODE_USB || mode == RADIO_MODE_LSB) {
         // Mic PTT on the ring: TX follows the switch, no hang timer (as
         // sbitx does on the same GPIO).
         if (contacts_closed & (1u << KEY_RING))
