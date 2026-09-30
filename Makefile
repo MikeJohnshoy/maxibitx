@@ -47,7 +47,7 @@ LDFLAGS := -lm -lasound -lpthread -ldl -lfftw3f
 SRC := src/maxibitx.c src/radio.c src/radio_hw.c src/interfaces/hpsdr_p1.c src/interfaces/usb_gadget.c src/i2c.c \
      src/si5351v2.c src/sound.c src/vfo.c src/interfaces/hamlib.c src/hw_settings.c src/antialias.c src/decim48k.c src/cw.c \
      src/rx_audio.c src/gpio.c src/interfaces/iq_stream.c src/fft_filter.c src/tx_pipeline.c src/rx_filter.c src/upsample48k.c src/tone_gen.c \
-     src/key_input.c src/$(KEYER).c
+     src/key_input.c src/$(KEYER).c src/morse.c
 OBJ := $(SRC:.c=.o)
 
 all: maxibitx
@@ -158,8 +158,8 @@ test-upsample48k: src/upsample48k.c src/upsample48k_test.c src/upsample48k.h
 # code is linked but never called, so no hardware or FFTW. Same "not part of
 # the build" convention as the other test- targets above. See
 # docs/dsp_design_notes/cw_keyer_design_study.md §16 and §17.
-test-cw: src/cw.c src/cw.h src/cw_envelope_test.c src/key_input.c src/key_input.h src/keyer.c src/keyer.h src/gpio.c src/vfo.c src/vfo.h
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/cw.c src/key_input.c src/keyer.c src/gpio.c src/vfo.c src/cw_envelope_test.c -o $@ -lm -lpthread
+test-cw: src/cw.c src/cw.h src/cw_envelope_test.c src/key_input.c src/key_input.h src/keyer.c src/keyer.h src/morse.c src/morse.h src/gpio.c src/vfo.c src/vfo.h
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/cw.c src/key_input.c src/keyer.c src/morse.c src/gpio.c src/vfo.c src/cw_envelope_test.c -o $@ -lm -lpthread
 
 # key_input.c's input logic without the GPIO: synthetic edges, bounce and
 # plug scenarios fed to the same steps its thread runs, checking debounce,
@@ -171,11 +171,11 @@ test-key-input: src/key_input.c src/key_input.h src/key_input_test.c src/gpio.c
 # keyer.h, twice: test-keyer against keyer.c - the design study's golden
 # cases, random paddle input checked sample for sample against the
 # specification model (tools/keyer_study/keyer_spec_model.c, compiled into
-# the harness), and the speed/mode-change rules - and test-keyer-straight
-# against keyer_straight.c, which must pass every case it offers and refuse
-# the rest. See keyer_test.c.
-test-keyer: src/keyer.c src/keyer.h src/keyer_test.c src/key_input.h tools/keyer_study/keyer_spec_model.c
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Itools/keyer_study src/keyer.c src/keyer_test.c -o $@
+# the harness), the speed/mode-change rules, and text (with morse.c) - and
+# test-keyer-straight against keyer_straight.c, which must pass every case it
+# offers and refuse the rest. See keyer_test.c.
+test-keyer: src/keyer.c src/keyer.h src/morse.c src/morse.h src/keyer_test.c src/key_input.h tools/keyer_study/keyer_spec_model.c
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Itools/keyer_study src/keyer.c src/morse.c src/keyer_test.c -o $@ -lpthread
 
-test-keyer-straight: src/keyer_straight.c src/keyer.h src/keyer_test.c src/key_input.h tools/keyer_study/keyer_spec_model.c
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Itools/keyer_study src/keyer_straight.c src/keyer_test.c -o $@
+test-keyer-straight: src/keyer_straight.c src/keyer.h src/morse.c src/morse.h src/keyer_test.c src/key_input.h tools/keyer_study/keyer_spec_model.c
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Itools/keyer_study src/keyer_straight.c src/morse.c src/keyer_test.c -o $@ -lpthread
