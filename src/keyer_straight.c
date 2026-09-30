@@ -1,9 +1,9 @@
 // keyer_straight.c
 //
 // keyer.h with the straight key alone: the key follows either contact of the
-// jack, and every other mode is refused. Built in place of keyer.c by
-// `make KEYER=keyer_straight`, which is how the paddle keyer is removed, and
-// what a replacement keyer has to match. Speed is stored and reported but
+// jack, and every other mode, and text, is refused. Built in place of
+// keyer.c by `make KEYER=keyer_straight`, which is how the paddle keyer is
+// removed, and what a replacement keyer has to match. Speed is stored and reported but
 // times nothing.
 
 #include "keyer.h"
@@ -46,6 +46,17 @@ int keyer_set_wpm(int w) {
 }
 
 int keyer_get_wpm(void) { return atomic_load(&wpm); }
+
+int keyer_send_text(const char *text) {
+  (void)text;
+  return -2;
+}
+
+void keyer_stop_text(void) {}
+
+int keyer_text_busy(void) { return 0; }
+
+int keyer_text_room(void) { return 0; }
 
 const char *keyer_mode_name(enum keyer_mode m) {
   static const char *const names[KEYER_MODES] = {"straight", "bug", "ultimatic", "iambic A",
