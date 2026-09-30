@@ -252,7 +252,11 @@ already used in `antialias_filter_design.md`.
   edges anywhere in a block; and so is **the keyer, `keyer.c`**: bug,
   ultimatic, iambic A/B and straight key at 1-60 WPM, identical to the
   specification model sample for sample on random input, selected with
-  rigctld `U KEYER`/`L KEYSPD`, CAT `KS` or the panel. Text to CW is next. The playback queue is measured on a Pi 4
+  rigctld `U KEYER`/`L KEYSPD`, CAT `KS` or the panel; and **text to CW,
+  `morse.c`**: rigctld `b`/`\stop_morse`, CAT `KY` and the panel's text
+  line, with Kenwood and `<AR>`-style prosigns each translated at their
+  own surface, exact `3T`/`7T` spacing, a paddle touch stopping it, and a
+  word-space hang floor at slow speeds. The playback queue is measured on a Pi 4
   (28.0-28.8ms, within 1ms of the derivation), and so is the T/R race,
   with `MAXIBITX_TR_TIMING`: 6-10ms spare at four periods, ~13ms clipped
   at two, as predicted.
