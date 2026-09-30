@@ -55,6 +55,11 @@ beyond the commands it actually exercises:
                                   next element
     u PADREV / U PADREV <0|1>    get / set paddle reversal: 0 tip = dot,
                                   1 tip = dash
+    b <text> / \\stop_morse      send text as CW at the keyer's speed
+                                  (prosigns as <AR>, <SK>, <BT>, <KN>, ...),
+                                  and stop it - the element being sent
+                                  completes. CW/CWR only
+    u MORSE                      1 while text is queued or being sent
 
 It also shows a live spectrum, fed by a second, independent UDP
 connection to src/interfaces/iq_stream.c's lightweight I/Q telemetry stream (UDP
@@ -569,6 +574,24 @@ class Panel(tk.Tk):
         ttk.Checkbutton(kf, text="Reverse paddles", variable=self.padrev_var,
                         command=self.on_padrev_toggled).grid(row=0, column=3, padx=(12, 0))
 
+        # Text to send - rigctld's b, and \stop_morse. The text stays in the
+        # box after Send, so a CQ can be sent again with one click. Any touch
+        # of the key or paddle stops it too, server-side. The label shows
+        # u MORSE: whether text is still queued or going out.
+        trow = ttk.Frame(kf)
+        trow.grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        self.cw_text_var = tk.StringVar(value="")
+        self.cw_text_entry = ttk.Entry(trow, textvariable=self.cw_text_var, width=26)
+        self.cw_text_entry.pack(side="left")
+        self.cw_text_entry.bind("<Return>", lambda e: self.on_cw_send_clicked())
+        ttk.Button(trow, text="Send", width=5, command=self.on_cw_send_clicked).pack(
+            side="left", padx=(4, 0))
+        ttk.Button(trow, text="Stop", width=5, command=self.on_cw_stop_clicked).pack(
+            side="left", padx=(4, 0))
+        self.cw_text_status_var = tk.StringVar(value="")
+        ttk.Label(trow, textvariable=self.cw_text_status_var, width=8).pack(side="left",
+                                                                        padx=(8, 0))
+
         # --- RIT ---
         # rigctld's j/J (radio.c's radio_set_rit()/radio_get_rit()) - a
         # receive-only offset, see this file's module docstring. Unlike
@@ -992,6 +1015,7 @@ class Panel(tk.Tk):
         keyer_reply = self.client.query("u KEYER")
         wpm_reply = self.client.query("l KEYSPD")
         padrev_reply = self.client.query("u PADREV")
+        morse_reply = self.client.query("u MORSE")
         if freq_reply is None or rit_reply is None or vol_reply is None \
                 or micgain_reply is None or mode_reply is None or narrow_reply is None \
                 or fftfilt_reply is None \
@@ -999,7 +1023,8 @@ class Panel(tk.Tk):
                 or strength_reply is None \
                 or tone_reply is None or ptt_reply is None \
                 or power_reply is None or alc_reply is None \
-                or keyer_reply is None or wpm_reply is None or padrev_reply is None:
+                or keyer_reply is None or wpm_reply is None or padrev_reply is None \
+                or morse_reply is None:
             self.after(0, self.disconnect)
             return
         self.after(0, lambda: self.apply_freq(freq_reply))
@@ -1019,6 +1044,7 @@ class Panel(tk.Tk):
         self.after(0, lambda: self.apply_keyer(keyer_reply))
         self.after(0, lambda: self.apply_wpm(wpm_reply))
         self.after(0, lambda: self.apply_padrev(padrev_reply))
+        self.after(0, lambda: self.apply_morse(morse_reply))
 
     def apply_freq(self, reply):
         try:
@@ -1276,6 +1302,16 @@ class Panel(tk.Tk):
         self.padrev_var.set(on)
         self._syncing_padrev = False
 
+    def apply_morse(self, reply):
+        try:
+            busy = int(reply) != 0
+        except ValueError:
+            return
+        if busy:
+            self.cw_text_status_var.set("sending")
+        elif self.cw_text_status_var.get() == "sending":
+            self.cw_text_status_var.set("")  # a "refused" stays until the next Send
+
     def apply_ptt(self, reply):
         try:
             on = int(reply) != 0
@@ -1443,6 +1479,27 @@ class Panel(tk.Tk):
     def on_wpm_focus_out(self, _event=None):
         self.wpm_focused = False
         self.on_wpm_changed()
+
+    def on_cw_send_clicked(self):
+        text = self.cw_text_var.get().strip()
+        if not text or not self.client.connected():
+            return
+
+        def send():
+            reply = self.client.query(f"b {text}")
+            if reply is not None and reply.strip() != "RPRT 0":
+                # Refused: not in CW/CWR, the queue is full, or the keyer was
+                # built without text (the server's console says which).
+                self.after(0, lambda: self.cw_text_status_var.set("refused"))
+            else:
+                self.after(0, lambda: self.cw_text_status_var.set("sending"))
+        threading.Thread(target=send, daemon=True).start()
+
+    def on_cw_stop_clicked(self):
+        if not self.client.connected():
+            return
+        threading.Thread(target=lambda: self.client.query("\\stop_morse"),
+                          daemon=True).start()
 
     def on_padrev_toggled(self):
         if self._syncing_padrev or not self.client.connected():
