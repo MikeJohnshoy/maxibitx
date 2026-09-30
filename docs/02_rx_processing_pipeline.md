@@ -158,9 +158,9 @@ real-valued, centered around `RX_IF_FREQ_HZ`, not yet I/Q. The WM8731's
 capture gain is `RX_CAPTURE_GAIN_PERCENT`, a bench value rather than a
 final calibration; `rx_clip_check()` logs `*** CLIPPING ***` if a
 sample reaches full scale. During TX, `radio_tx_apply()` turns RX
-capture off (`sound_set_rx_capture(0)`) before any RF exists and back
-on once the relay has settled, so the receive chain never sees TX
-energy or relay transients.
+capture off (`sound_set_rx_capture(0)`, the WM8731's line-input mute on
+the left channel) before any RF exists and back on once the relay has
+settled, so the receive chain never sees TX energy or relay transients.
 
 **Software VFO — fixed at RX_IF_FREQ_HZ, never swept.** `vfo.c`
 implements a digital NCO (`struct vfo`, the global `lo` in `radio.c`)
