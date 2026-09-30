@@ -128,12 +128,14 @@ contact means:
 
 | Mode | Tip (BCM 5) | Ring (BCM 4) |
 |---|---|---|
-| CW, CWR | straight key | straight key |
+| CW, CWR — straight key | straight key | straight key |
+| CW, CWR — bug | dot (automatic) | dash (manual) |
+| CW, CWR — ultimatic, iambic A/B | dot | dash |
 | USB, LSB | — | mic PTT (sbitx's `PTT` line) |
 | DIGITAL | — | — |
-| paddle keyer (not built yet) | dot | dash |
 
-`rigctld` `U PADREV 1` swaps the paddle roles (tip = dash, ring = dot); it
+The keyer mode and speed are `rigctld` `U KEYER` / `L KEYSPD` (or CAT
+`KS`); `U PADREV 1` swaps the paddle roles (tip = dash, ring = dot), which
 has no effect on a straight key. Either contact keys the straight key, so
 a stereo plug wired to either works, and a mono plug works too: at
 start-up a contact found closed is ignored from the first moment, and if it
