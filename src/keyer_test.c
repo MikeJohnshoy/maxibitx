@@ -17,12 +17,16 @@
 // 3. The rules the model doesn't cover: a speed change waits for the next
 //    element start, a mode change for idle, the WPM range, the TX-wanted
 //    return.
+// 4. Text: spacing (T, 3T, 7T, exactly), prosigns, the surfaces'
+//    translations, text arriving during a word gap, a closure or a stop
+//    ending it after the element in progress, a speed change, a full queue.
 
 #define main keyer_spec_model_main
 #include "keyer_spec_model.c"
 #undef main
 
 #include "keyer.h"
+#include "morse.h"
 
 static int failures = 0;
 static void check(int ok, const char *what) {
@@ -304,10 +308,193 @@ static void other_rules(void) {
   keyer_set_wpm(KEYER_WPM_DEFAULT);
 }
 
+// Runs blocks of 1024 until the keyer is idle with no text left (or `limit`
+// samples), writing key[] from `at`. Returns the new end.
+static long run_until_idle(uint8_t *key, long at, long limit) {
+  long t = at;
+  int quiet = 0;
+  while (t < limit && quiet < 2) {
+    int w = keyer_run_block(NULL, 0, key + t, 1024);
+    quiet = (!w && !keyer_text_busy()) ? quiet + 1 : 0;
+    t += 1024;
+  }
+  return t;
+}
+
+// Reads key[0..n) back as text: marks T or 3T are . or -, a space of T
+// joins elements, 3T ends a character and 7T a word. Any other length sets
+// *timing_ok to 0. Prosigns decode to their codes.
+static void read_text(const uint8_t *key, long n, long T, char *out, int max, int *timing_ok) {
+  char pat[16] = "";
+  int np = 0, no = 0;
+  *timing_ok = 1;
+  long i = 0;
+  while (i < n && !key[i])
+    i++;
+  while (i < n) {
+    long s = i;
+    while (i < n && key[i])
+      i++;
+    long len = i - s;
+    if (len != T && len != 3 * T)
+      *timing_ok = 0;
+    if (np < 15)
+      pat[np++] = len == T ? '.' : '-';
+    pat[np] = 0;
+    long g = i;
+    while (i < n && !key[i])
+      i++;
+    long gap = i - g;
+    int end_char = (i >= n) || gap == 3 * T || gap == 7 * T;
+    if (i < n && gap != T && gap != 3 * T && gap != 7 * T)
+      *timing_ok = 0;
+    if (end_char) {
+      char c = '?';
+      for (int k = 32; k < MORSE_PROSIGN_END; k++)
+        if (morse_pattern((unsigned char)k) && strcmp(morse_pattern((unsigned char)k), pat) == 0) {
+          c = (char)k;
+          break;
+        }
+      if (no < max - 1)
+        out[no++] = c;
+      if (i < n && gap == 7 * T && no < max - 1)
+        out[no++] = ' ';
+      np = 0;
+    }
+  }
+  out[no] = 0;
+}
+
+static void text_rules(void) {
+  printf("4. text\n");
+  static uint8_t key[3000000];
+  char msg[200], got[128], internal[128], skipped[32];
+  int ok;
+
+  morse_from_plain("cq <sk> 73 <xx>~", internal, sizeof internal, skipped, sizeof skipped);
+  snprintf(msg, sizeof msg,
+           "plain: lower case, <SK> one code; <xx> sends XX, its brackets and ~ skipped ('%s')",
+           skipped);
+  check(strcmp(internal, "CQ \x86 73 XX") == 0 && strcmp(skipped, "<>~") == 0, msg);
+  morse_from_kenwood("tu_[<]", internal, sizeof internal, skipped, sizeof skipped);
+  check(strcmp(internal, "TU\x80\x83\x81\x85") == 0 && skipped[0] == 0,
+        "Kenwood: _ AR, [ BT, < AS, ] KN");
+
+  if (keyer_send_text("E") == -2) {
+    printf("  --   text not offered by this keyer\n");
+    return;
+  }
+  keyer_stop_text();
+
+  long T20 = (115200 + 10) / 20, T40 = (115200 + 20) / 40;
+  keyer_set_mode(KEYER_IAMBIC_B);
+  keyer_set_wpm(20);
+  keyer_reset();
+  keyer_send_text("PARIS PARIS");
+  long n = run_until_idle(key, 0, sizeof key);
+  read_text(key, n, T20, got, sizeof got, &ok);
+  snprintf(msg, sizeof msg, "PARIS PARIS at 20 WPM reads back '%s', every mark and space exact", got);
+  check(strcmp(got, "PARIS PARIS") == 0 && ok, msg);
+
+  keyer_reset();
+  morse_from_plain("cq <sk> 73", internal, sizeof internal, NULL, 0);
+  keyer_send_text(internal);
+  n = run_until_idle(key, 0, sizeof key);
+  read_text(key, n, T20, got, sizeof got, &ok);
+  check(strcmp(got, "CQ \x86 73") == 0 && ok, "a prosign is one character, no letter space inside");
+
+  // Text arriving during a word gap continues after exactly 7T.
+  keyer_reset();
+  keyer_send_text("CQ ");
+  long t = 0;
+  for (int b = 0; b < 30; b++, t += 1024) // CQ is ~ 27T = 155520: stop inside the gap
+    keyer_run_block(NULL, 0, key + t, 1024);
+  check(keyer_text_busy(), "text still busy during the trailing word gap");
+  keyer_send_text("DE");
+  n = run_until_idle(key, t, sizeof key);
+  read_text(key, n, T20, got, sizeof got, &ok);
+  snprintf(msg, sizeof msg, "\"CQ \" then \"DE\" during the gap reads '%s' with a 7T word space", got);
+  check(strcmp(got, "CQ DE") == 0 && ok, msg);
+
+  // A dot paddle tapped during the second T of "TTTT": that dash completes,
+  // the tap's memory sends a dot, and the rest of the text is gone.
+  keyer_reset();
+  keyer_send_text("TTTT");
+  t = 0;
+  long tap_at = 3 * T20 + 3 * T20 + T20; // inside the second dash
+  struct key_event ev[2];
+  while (t < 200000) {
+    int k = 0;
+    if (tap_at >= t && tap_at < t + 1024) {
+      ev[k++] = (struct key_event){.offset = (int)(tap_at - t), .contact = KEY_TIP,
+                                   .paddle = KEY_DOT, .closed = 1};
+      ev[k++] = (struct key_event){.offset = (int)(tap_at - t) + 100, .contact = KEY_TIP,
+                                   .paddle = KEY_DOT, .closed = 0};
+    }
+    keyer_run_block(ev, k, key + t, 1024);
+    t += 1024;
+  }
+  long start[16], len[16];
+  int m = marks(key, t, start, len, 16);
+  snprintf(msg, sizeof msg, "paddle during text: %d marks (%ld, %ld, %ld), text discarded", m,
+           m > 0 ? len[0] : -1, m > 1 ? len[1] : -1, m > 2 ? len[2] : -1);
+  check(m == 3 && len[0] == 3 * T20 && len[1] == 3 * T20 && len[2] == T20 &&
+            start[2] == start[1] + 4 * T20 && !keyer_text_busy(),
+        msg);
+
+  // A stop mid-text: the element in progress completes, nothing after.
+  keyer_reset();
+  keyer_send_text("EEEEEEEEEE");
+  t = 0;
+  for (int b = 0; b < 50; b++, t += 1024) // into the third E's mark
+    keyer_run_block(NULL, 0, key + t, 1024);
+  keyer_stop_text();
+  n = run_until_idle(key, t, sizeof key);
+  m = marks(key, n, start, len, 16);
+  snprintf(msg, sizeof msg, "stop mid-text: %d of 10 marks sent, the last whole (%ld)", m,
+           m ? len[m - 1] : -1);
+  check(m == 3 && len[m - 1] == T20 && !keyer_text_busy(), msg);
+
+  // A speed change during a character's first dash: the next dash is at the
+  // new speed.
+  keyer_reset();
+  keyer_send_text("MM");
+  t = 0;
+  for (; t < 2 * 1024; t += 1024)
+    keyer_run_block(NULL, 0, key + t, 1024);
+  keyer_set_wpm(40);
+  n = run_until_idle(key, t, sizeof key);
+  m = marks(key, n, start, len, 16);
+  snprintf(msg, sizeof msg, "speed change mid-dash: %ld then %ld (want %ld, %ld)",
+           m > 0 ? len[0] : -1, m > 1 ? len[1] : -1, 3 * T20, 3 * T40);
+  check(m == 4 && len[0] == 3 * T20 && len[1] == 3 * T40, msg);
+  keyer_set_wpm(20);
+
+  // Straight-key mode sends text too, with the same timing.
+  keyer_set_mode(KEYER_STRAIGHT);
+  keyer_reset();
+  keyer_send_text("K");
+  n = run_until_idle(key, 0, sizeof key);
+  read_text(key, n, T20, got, sizeof got, &ok);
+  check(strcmp(got, "K") == 0 && ok, "text in straight-key mode");
+
+  // A full queue refuses the whole message.
+  keyer_reset();
+  static char big[KEYER_TEXT_QUEUE_LEN + 2];
+  memset(big, 'E', sizeof big - 1);
+  int room = keyer_text_room();
+  int r = keyer_send_text(big);
+  snprintf(msg, sizeof msg, "%zu characters refused (%d), room still %d", strlen(big), r,
+           keyer_text_room());
+  check(r == -1 && keyer_text_room() == room && room == KEYER_TEXT_QUEUE_LEN, msg);
+  keyer_reset();
+}
+
 int main(void) {
   golden_cases();
   against_model();
   other_rules();
+  text_rules();
   printf("%s\n", failures ? "FAILED" : "all passed");
   return failures ? 1 : 0;
 }
