@@ -15,6 +15,7 @@
 #include "hw_settings.h"
 #include "cw.h"
 #include "key_input.h"
+#include "keyer.h"
 #include "rx_audio.h"
 #include "tone_gen.h"
 #include <stdio.h>
@@ -107,6 +108,8 @@ int main(int argc, char **argv) {
   printf("init: key ready - tip BCM %d, ring BCM %d, edge-timestamped, %d ms debounce; "
          "paddles tip = dot, ring = dash\n",
          KEY_TIP_GPIO, KEY_RING_GPIO, key_debounce_ms);
+  printf("init: keyer %s, %d WPM - set with rigctld U KEYER / L KEYSPD or CAT KS\n",
+         keyer_mode_name(keyer_get_mode()), keyer_get_wpm());
 
   // RX audio demod (src/rx_audio.c) - turns the receiver's own I/Q into
   // an audible CW tone on the local monitor output. Needs the phase
