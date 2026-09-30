@@ -136,7 +136,14 @@ At start-up maxibitx prints which lines it keys from:
 
 ```
 init: key ready - tip BCM 5, ring BCM 4, edge-timestamped, 3 ms debounce; paddles tip = dot, ring = dash
+init: keyer straight, 20 WPM - set with rigctld U KEYER / L KEYSPD or CAT KS
 ```
+
+maxibitx always starts as a straight key at 20 WPM. **A paddle that seems
+dead, or keys only one element per squeeze,** is usually the keyer mode:
+check `u KEYER` (0 straight, 1 bug, 2 ultimatic, 3 iambic A, 4 iambic B).
+A mode change waits until the keyer is idle, so it doesn't take effect
+while a paddle is held.
 
 **A mono plug in the stereo jack** grounds the ring. A contact found
 closed at start-up is ignored straight away, and 250 ms later, if it is
