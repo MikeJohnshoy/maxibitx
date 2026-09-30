@@ -32,8 +32,11 @@
                        // it shows as OUT, not ALT0/SPI mode)
 #define LPF_D     7    // shares a physical pin with SPI0's CE1 - same as
                        // LPF_C above
-#define CW_KEY    4    // straight key input (active low - open = idle,
-                       // closed to ground = key down)
+#define KEY_RING_GPIO 4 // key jack ring: dash, and the mic PTT line (sbitx's
+                         // PTT). Inputs, pulled up, closed to ground = down;
+                         // both read by key_input.c, not by this file.
+#define KEY_TIP_GPIO  5 // key jack tip: dot, or a straight key's contact
+                        // (sbitx's DASH line - its name, not its role here)
 
 /* ---- Board hardware revision ------------------------------------------ */
 
@@ -42,9 +45,8 @@
 
 /* Requests TX_LINE, TX_POWER, EXT_PTT, and the four LPF select lines as
  * GPIO outputs (via gpio.c), driving them to their idle (LOW) state as
- * part of the same request, and requests CW_KEY as an input with its
- * pull-up enabled. Call once, before any other GPIO or radio_hw
- * function. Returns 0 on success, -1 if any of those line requests fail
+ * part of the same request. The key jack's two inputs are key_input.c's.
+ * Call once, before any other GPIO or radio_hw function. Returns 0 on success, -1 if any of those line requests fail
  * (e.g. /dev/gpiochip0 missing, or a pin already claimed by something
  * else). */
 int radio_hw_gpio_init(void);
@@ -66,12 +68,6 @@ void radio_hw_set_ptt(int on);
 /* Drives the T/R relay control line (TX_LINE) high (on, transmit) or low
  * (off, receive). Same no-delay/no-policy contract as radio_hw_set_ptt(). */
 void radio_hw_set_tx_relay(int on);
-
-/* Reads the straight key (CW_KEY). Returns 1 if the key is down (pin
- * pulled low), 0 if up. No debounce - see cw.c, which polls this once
- * per audio block rather than trying to sample faster than that. */
-
-int radio_hw_key_down(void);
 
 /* Reads the INA260 power monitor's voltage (V) and current (A) registers
  * over I2C. On any I2C error, both outputs are set to 0.0. */
