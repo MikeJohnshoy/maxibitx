@@ -166,6 +166,9 @@ connected.
 | `l CWWIDTH` / `L CWWIDTH <hz>` | `300` / `RPRT 0` | Stage 3's width: 150, 300, 450 or 600 Hz (extension). Both settings snap to the nearest value `src/narrow_filter_bank.h` carries; the log line reports which one was selected, and a client should display the `l` readback rather than what it asked for |
 | `u KEYER` / `U KEYER <0-4>` | `0` / `RPRT 0` | CW keyer mode: 0 straight key, 1 bug, 2 ultimatic, 3 iambic A, 4 iambic B. Takes effect once the keyer is idle. A mode a `make KEYER=keyer_straight` build doesn't offer: `RPRT -1` (extension) |
 | `l KEYSPD` / `L KEYSPD <1-60>` | `20` / `RPRT 0` | Keyer speed, WPM; clamped to 1-60. Takes effect at the next element. A real Hamlib level, advertised in `dump_state` |
+| `b <text>` / `\send_morse <text>` | `RPRT 0` | Sends the text as CW at `KEYSPD`, in CW or CWR (`RPRT -1` in any other mode). Letters in either case, digits, `. , ? ' ! / ( ) : ; - _ " @ $ + = &`, and prosigns as `<AR>` `<AS>` `<BK>` `<BT>` `<HH>` `<KN>` `<SK>` `<SN>`; anything else is skipped and named on the console. `3T` between characters, `7T` between words (a run of spaces is one). Queued behind text still going out; `RPRT -1` if the 512-character queue can't take all of it. TX is requested at once. Touching the key or paddle stops it after the element being sent |
+| `\stop_morse` | `RPRT 0` | Stops text: the element being sent completes, the rest is dropped |
+| `u MORSE` | `1` | 1 while text is queued or being sent (extension, read-only) |
 | `u PADREV` / `U PADREV <0\|1>` | `0` / `RPRT 0` | Paddle reversal: 0 tip = dot, ring = dash (the default); 1 swaps them. No effect on a straight key, which keys from either contact (extension) |
 | `u TONE` / `U TONE <0\|1\|2>` | `0` / `RPRT 0` | TX test-tone generator: 0 off, 1 single 1 kHz, 2 two-tone 700 + 1900 Hz. Doesn't key the radio; any PTT does. Off after 30 s in TX. Out of range: `RPRT -1` (extension) |
 | `v` / `V <vfo>` | `VFOA` / `RPRT 0` | Single VFO; any `V` is accepted. |
@@ -174,7 +177,7 @@ connected.
 | `q`, `Q`, `quit` | (connection closes) | |
 
 Anything else replies `RPRT -1`. The extensions (`MICGAIN`, `ALC`,
-`NARROW`, `FFTFILT`, `CWWIDTH`, `TONE`, `PADREV`, `KEYER`) aren't Hamlib names or aren't in Hamlib's
+`NARROW`, `FFTFILT`, `CWWIDTH`, `TONE`, `PADREV`, `KEYER`, `MORSE`) aren't Hamlib names or aren't in Hamlib's
 units, so a stock Hamlib client won't use them, but they follow the same
 syntax. `AF`, `CWPITCH`, `KEYSPD`, `RFPOWER` and `STRENGTH` are real Hamlib levels and are
 advertised in `dump_state`.
@@ -299,6 +302,7 @@ commands are silently ignored (Kenwood convention).
 | `PS;` | `PS1;` | Always on; a set is ignored |
 | `AI;` | `AI0;` | No auto-information; a set is ignored |
 | `KS;` / `KS025;` | `KS020;` / — | Keyer speed, WPM; clamped to 1-60 (the TS-480's range is 10-60) |
+| `KY;` / `KY CQ DE KB2ML;` | `KY0;` / — | Sends text as CW, CW/CWR only. Get: `KY0` while a 24-character message fits, `KY1` when the buffer is full (TS-480). Set: the TS-480's 24 space-padded characters or a longer QMX-style message; trailing padding is one word space. Kenwood prosigns: `[` BT, `_` AR, `<` AS, `#` HH, `>` SK, `]` KN, `\` BK, `%` SN |
 | `AC…;` | — | Ignored (no tuner) |
 
 **DIGITAL over CAT.** A TS-480 has no data mode, so DIGITAL reports as
@@ -351,10 +355,9 @@ What an application can't do today without changes to the daemon:
 - **Network receive audio.** Demodulated audio leaves the Pi only
   through its speaker and USB. A networked app demodulates the I/Q
   itself.
-- **Remote CW.** Remote PTT in CW sends no carrier, and there's no
-  remote keying command yet, so CW from a computer (text, CW macros)
-  isn't possible. The keyer's mode and speed can be set remotely; the
-  text-sending commands (`b`, CAT `KY`) are the next step.
+- **Remote element keying.** CW from a computer goes as text (`b`,
+  `KY`), sent by the keyer; there's no way to key individual elements
+  remotely, and remote PTT in CW on its own sends no carrier.
 - **Transmit metering.** Forward/reflected power, SWR, and the INA260's
   supply voltage and current aren't exposed.
 - **Change notifications.** State is poll-only. Kenwood `AI` is
