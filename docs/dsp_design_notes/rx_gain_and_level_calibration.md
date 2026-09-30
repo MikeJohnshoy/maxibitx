@@ -263,6 +263,29 @@ See
 for where that sits in the TX sequence. Pure safety measure - no effect
 on RX sensitivity or TX power.
 
+**The mute is the codec's line-input mute, not the gain.** Turning
+`'Capture'` LEFT to 0 sets the WM8731's line-input volume to its lowest
+step, -34.5 dB - an attenuator, not a mute. The radio's own transmission,
+a few inches away, still came through it: during a CW transmission
+`rigctl_panel.py`'s spectrum showed a strong line at -1400 Hz and its
+image at +1400 Hz. The offset is the TX clock change: the receive chain
+keeps running during TX, but with clk1 moved from its RX value
+(`xtal_filter_center + RX_IF_FREQ_HZ` = 40,036,400 Hz) to `bfo_freq`
+(40,035,000 Hz), so a carrier on the dial comes out 1400 Hz low instead of
+at the center. `sound_set_rx_capture()` now switches `'Line'` LEFT off -
+the WM8731's LINMUTE bit, which cuts the left line input off from the ADC -
+and leaves `'Capture'` at its RX gain throughout. `'Line'` RIGHT, which
+carries the mic, is never touched. `setup_audio_codec()` tries the switch
+at start-up and says which way TX will mute:
+
+```
+sound: TX mutes RX capture with the line-input mute ('Line' LEFT)
+```
+
+If `'Line'` turns out to have no separate LEFT capture switch on some
+board, it says so and falls back to turning `'Capture'` LEFT down, as
+before.
+
 ## 9. Signal strength (rigctld `l STRENGTH`)
 
 A natural follow-on question once RX gain was validated: does an
