@@ -5,7 +5,8 @@
 
 #include "usb_gadget.h"
 #include "cw.h"
-#include "keyer.h"    // KS below
+#include "keyer.h"    // KS and KY below
+#include "morse.h"    // KY's text
 #include "radio.h"    // freq_hdr, in_tx, tuning, PTT, RIT, mode
 #include "rx_audio.h"
 #include <alsa/asoundlib.h>
@@ -850,7 +851,7 @@ int uac_is_active(void) { return uac_active; }
  * ======================================================================= */
 
 #define CAT_TTY_PATH "/dev/ttyGS0"
-#define CAT_LINE_MAX 64
+#define CAT_LINE_MAX 128 // room for a QMX-style KY of up to 80 characters
 #define CAT_OPEN_RETRY_MAX_MS 1000 // backoff cap while the device is missing/erroring
 
 static volatile int cat_running = 0;
@@ -1226,6 +1227,46 @@ static void cat_handle_command(char *cmd) {
     } else {
       printf("cat: KS%s -> not a number, ignored\n", cmd + 2);
     }
+    return;
+  }
+
+  // --- KY: send text. Bare "KY" gets the buffer state as a TS-480 reports
+  // it: KY0 while a 24-character message would fit, KY1 when it wouldn't.
+  // "KY <text>" queues the text - the TS-480's fixed 24 space-padded
+  // characters or the QMX's variable length alike, since a run of spaces is
+  // one word space to the keyer. Kenwood prosigns ([ BT, _ AR, < AS, # HH,
+  // > SK, ] KN, \ BK, % SN) are translated (morse.h). CW and CWR only. ---
+  if (len >= 2 && cmd[0] == 'K' && cmd[1] == 'Y') {
+    if (len == 2) {
+      static char last[8] = "";
+      const char *reply = keyer_text_room() >= 24 ? "KY0;" : "KY1;";
+      char log_line[48];
+      snprintf(log_line, sizeof(log_line), "cat: KY -> %c (%s)\n", reply[2],
+               reply[2] == '0' ? "room for a message" : "buffer full");
+      cat_send(reply);
+      cat_log_get(last, sizeof(last), reply, log_line);
+      return;
+    }
+    const char *text = cmd + 2;
+    if (*text == ' ')
+      text++;
+    enum radio_mode mode = radio_get_mode();
+    if (mode != RADIO_MODE_CW && mode != RADIO_MODE_CWR) {
+      printf("cat: KY %s -> ignored, text is sent in CW or CWR only\n", text);
+      return;
+    }
+    char internal[CAT_LINE_MAX], skipped[32];
+    morse_from_kenwood(text, internal, sizeof(internal), skipped, sizeof(skipped));
+    int r = keyer_send_text(internal);
+    if (r == 0)
+      cw_text_queued();
+    printf("cat: KY %s -> %s", text,
+           r == 0    ? "queued"
+           : r == -1 ? "ignored, text queue full"
+                     : "ignored, this keyer doesn't send text");
+    if (skipped[0])
+      printf(" (skipped, not in the Morse table: %s)", skipped);
+    printf("\n");
     return;
   }
 
