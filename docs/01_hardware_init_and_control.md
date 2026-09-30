@@ -18,7 +18,9 @@ happens to those samples once they arrive.
 4. `vfo_init_phase_table()` / `vfo_start()` / `radio_tune_to()` —
    software RX VFO and initial tuning (covered in
    [`02_rx_processing_pipeline.md`](02_rx_processing_pipeline.md))
-5. Networking and control surfaces — HPSDR, Hamlib/rigctld, USB gadget
+5. `cw_init()` / `key_input_start()` — the keyed tone, then the key jack
+   and its input thread ([The key jack](#the-key-jack), below)
+6. Networking and control surfaces — HPSDR, Hamlib/rigctld, USB gadget
    (covered in
    [`04_remote_control_and_iq_output.md`](04_remote_control_and_iq_output.md))
 
@@ -27,7 +29,7 @@ consistent `init: ...` format, ending with `minibitx: radio hardware
 initialization complete` once every step has run. See
 [`05_process_and_threading_model.md`](05_process_and_threading_model.md)
 for what the console reports after that point.
-5. `setup_audio_codec()` / `sound_thread_start()` — WM8731 codec and
+7. `setup_audio_codec()` / `sound_thread_start()` — WM8731 codec and
    capture stream (below)
 
 The ordering matters for one reason in particular: GPIO init happens
@@ -39,7 +41,7 @@ exists yet.
 `radio_hw_gpio_init()` (`radio_hw.c`) requests `TX_LINE`, `TX_POWER`,
 `EXT_PTT`, and the four LPF select lines (`LPF_A`–`LPF_D`) as outputs
 through `gpio.c`'s wrapper around the Linux GPIO character-device API
-(`/dev/gpiochip0`), and `CW_KEY` as an input with its pull-up enabled:
+(`/dev/gpiochip0`):
 
 ```c
 line_tx_line  = gpio_request_output(TX_LINE,  0, "maxibitx-tx_line");
@@ -49,8 +51,11 @@ line_lpf_a    = gpio_request_output(LPF_A,    0, "maxibitx-lpf_a");
 line_lpf_b    = gpio_request_output(LPF_B,    0, "maxibitx-lpf_b");
 line_lpf_c    = gpio_request_output(LPF_C,    0, "maxibitx-lpf_c");
 line_lpf_d    = gpio_request_output(LPF_D,    0, "maxibitx-lpf_d");
-line_cw_key   = gpio_request_input(CW_KEY, 1, "maxibitx-cw_key");
 ```
+
+The key jack's two contacts are inputs, claimed separately by
+`key_input_start()` (`key_input.c`) in one request with pull-ups and edge
+events — see [The key jack](#the-key-jack) below.
 
 Unlike the old wiringPi-based version, there's no separate "set the pin
 mode, then write it low" sequence — each `gpio_request_output()` call
@@ -93,12 +98,53 @@ leave behind rather than a live read of the radio's current state:
 | `LPF_B` | 6 | 25 | 22 | LPF band select |
 | `LPF_C` | 10 | 8 | 24 | LPF band select (shares SPI0's CE0 pin, unused as SPI here) |
 | `LPF_D` | 11 | 7 | 26 | LPF band select (shares SPI0's CE1 pin, unused as SPI here) |
-| `CW_KEY` | 7 | 4 | 7 | straight key input, pull-up, active low |
+| `KEY_RING_GPIO` | 7 | 4 | 7 | key jack ring: dash, straight key, mic PTT; pull-up, active low |
+| `KEY_TIP_GPIO` | 21 | 5 | 29 | key jack tip: dot, straight key; pull-up, active low |
 
 If this ever needs porting to different hardware (a different Pi model,
 a different board layout), re-derive this table the same way — from a
 real `gpio readall` (or equivalent) on that specific board — rather than
 assuming these BCM numbers carry over.
+
+## The key jack
+
+The key jack is a stereo socket: tip on BCM 5, ring on BCM 4, sleeve on
+ground, each contact pulled up and closing to ground. Measured on a DE
+board with a mono plug in the jack and the key open, maxibitx stopped:
+
+```
+$ gpioget -c gpiochip0 -b pull-up 4 5      # libgpiod 2.x
+"4"=inactive "5"=active
+```
+
+The mono plug's sleeve grounds the ring, so the line reading `inactive` is
+the ring. (libgpiod 1.x: `gpioget gpiochip0 4 5`, which prints `0 1`.)
+
+`key_input_start()` claims both in one request with edge events on both
+edges, so the kernel queues every edge with a `CLOCK_MONOTONIC` timestamp
+taken in its interrupt handler, and a thread of its own (`SCHED_FIFO`, one
+step below the audio thread) sleeps in `ppoll()` until one arrives. What a
+contact means:
+
+| Mode | Tip (BCM 5) | Ring (BCM 4) |
+|---|---|---|
+| CW, CWR | straight key | straight key |
+| USB, LSB | — | mic PTT (sbitx's `PTT` line) |
+| DIGITAL | — | — |
+| paddle keyer (not built yet) | dot | dash |
+
+`rigctld` `U PADREV 1` swaps the paddle roles (tip = dash, ring = dot); it
+has no effect on a straight key. Either contact keys the straight key, so
+a stereo plug wired to either works, and a mono plug works too: at
+start-up a contact found closed is ignored from the first moment, and if it
+stays closed for 250 ms the console says it is being treated as a ring
+grounded by a mono plug. The contact comes back into use when it opens —
+the plug has been changed. A mono plug inserted while maxibitx is running
+is indistinguishable from a key held down, so restart after changing to
+one. Debounce is `key_debounce_ms` in `hw_settings.ini` (3 ms if absent).
+How the edges reach the transmitted signal:
+[`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md) and
+[`cw_keyer_design_study.md`](dsp_design_notes/cw_keyer_design_study.md) §16.
 
 ## Board revision detection
 
