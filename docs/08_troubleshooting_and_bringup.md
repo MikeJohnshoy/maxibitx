@@ -129,3 +129,60 @@ and need recovery — exactly the "xrun, recovering" storm previously
 seen on every key-down. Writing silence the rest of the time keeps the
 device continuously running, the same design real sbitx's own
 full-duplex audio path uses.
+
+## The key jack
+
+At start-up maxibitx prints which lines it keys from:
+
+```
+init: key ready - tip BCM 5, ring BCM 4, edge-timestamped, 3 ms debounce; paddles tip = dot, ring = dash
+```
+
+**A mono plug in the stereo jack** grounds the ring. A contact found
+closed at start-up is ignored straight away, and 250 ms later, if it is
+still closed:
+
+```
+key: ring (BCM 4) closed since start-up - treating as a mono straight-key plug; that contact is ignored
+```
+
+The key then works from the tip. If instead the contact opens within the
+250 ms, it was a key held down during start-up, and both contacts are in
+use:
+
+```
+key: ring (BCM 4) opened within 250 ms - a key held down, not a mono plug; both contacts in use
+```
+
+Pulling the mono plug opens the ring and brings it back into use (`key:
+ring (BCM 4) opened - plug changed, both contacts in use`). A mono plug
+inserted **while maxibitx is running** can't be told from a key held down,
+and in CW it transmits until it is pulled — restart maxibitx after
+changing to one. Both contacts closed at start-up (a mono plug with the
+key held, or a squeezed paddle) ignores both until one opens.
+
+**Checking the jack by hand.** Stop maxibitx (it holds both lines), put a
+mono plug in the jack with the key open, and read both lines:
+
+```
+gpioget -c gpiochip0 -b pull-up 4 5      # libgpiod 2.x: "4"=inactive "5"=active
+gpioget gpiochip0 4 5                    # libgpiod 1.x: 0 1
+```
+
+The line reading `inactive`/0 is the ring, grounded by the plug's sleeve;
+on the DE board that is BCM 4. `-b pull-up` matters: without it an open
+contact's reading depends on whatever bias the last user of the line left.
+
+**Contact bounce.** `key_debounce_ms` (top-level in
+`data/hw_settings.ini`, above the first `[section]`; 3 if absent, 0–20)
+is how long a contact's further edges are ignored after one is taken. The
+edge itself is taken at its own time, so this adds no delay; it only
+limits the shortest mark or space. A key that still produces stray short
+elements wants more; `init: key_debounce_ms loaded from ...` confirms the
+value in use.
+
+**Warnings from the input thread.** `key: the kernel dropped N edge(s)`
+means the kernel's queue of edges overflowed before the thread read it,
+which should never happen with a real key; `key: edge queue full` means
+the audio thread stopped taking edges. Either way the key's state is
+recovered, but that element's timing isn't.
