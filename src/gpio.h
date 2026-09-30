@@ -12,9 +12,10 @@
 //
 // One line request (and one open file descriptor) per GPIO line - this
 // matches how radio_hw.c already treats each pin as its own independent
-// handle (pinMode() + digitalWrite()/digitalRead() by pin number); there
-// is no need here for the character-device API's multi-line atomic
-// request/read/write support.
+// handle (pinMode() + digitalWrite()/digitalRead() by pin number). The one
+// exception is the key jack: key_input.c takes both of its contacts in a
+// single request with edge events (gpio_request_edge_inputs()), so every
+// edge on either contact arrives, kernel-timestamped, on one fd.
 //
 // All offsets passed in here are BCM GPIO numbers - the kernel's own
 // numbering, and what /dev/gpiochip0 expects - NOT wiringPi's own pin
@@ -43,11 +44,25 @@ int gpio_request_output(unsigned int bcm_gpio, int initial_value,
                          const char *consumer_label);
 
 // Requests bcm_gpio as an input line, with the SoC's internal pull-up
-// enabled if pull_up is nonzero (matches wiringPi's PUD_UP - there is no
-// external pull-up on CW_KEY). Returns an opaque line handle (>= 0), or
+// enabled if pull_up is nonzero (matches wiringPi's PUD_UP). Returns an opaque line handle (>= 0), or
 // -1 on failure (already logged).
 int gpio_request_input(unsigned int bcm_gpio, int pull_up,
                         const char *consumer_label);
+
+// Requests n input lines (BCM numbers in bcm_gpio[]) in one request, pull-ups
+// on, reporting both edges on each as events: read() the returned fd for
+// struct gpio_v2_line_event (<linux/gpio.h>), each stamped by the kernel
+// with CLOCK_MONOTONIC at the interrupt. No kernel debounce - its debounced
+// events carry the time the debounce period ended, not the edge's
+// (key_input.c debounces instead). event_buffer is the kernel's queue depth
+// in events. Returns the fd, or -1 on failure (already logged).
+int gpio_request_edge_inputs(const unsigned int *bcm_gpio, int n, int event_buffer,
+                             const char *consumer_label);
+
+// Reads every line of a gpio_request_edge_inputs() request at once, as a
+// bitmask: bit i is line i's level, in the order they were requested.
+// Returns -1 on failure.
+int gpio_read_lines(int line, int n);
 
 // Drives a line previously returned by gpio_request_output() high
 // (nonzero) or low (0). Returns 0 on success, -1 on failure (logs its
