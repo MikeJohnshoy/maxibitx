@@ -67,6 +67,52 @@ int gpio_request_input(unsigned int bcm_gpio, int pull_up, const char *consumer_
   return gpio_request_line(bcm_gpio, flags, 0, 0, consumer_label);
 }
 
+int gpio_request_edge_inputs(const unsigned int *bcm_gpio, int n, int event_buffer,
+                             const char *consumer_label) {
+  if (n < 1 || n > GPIO_V2_LINES_MAX)
+    return -1;
+  int chip_fd = open(GPIO_CHIP_PATH, O_RDWR | O_CLOEXEC);
+  if (chip_fd < 0) {
+    fprintf(stderr, "gpio: cannot open %s: %s\n", GPIO_CHIP_PATH, strerror(errno));
+    return -1;
+  }
+
+  struct gpio_v2_line_request req;
+  memset(&req, 0, sizeof(req));
+  req.num_lines = (uint32_t)n;
+  for (int i = 0; i < n; i++)
+    req.offsets[i] = bcm_gpio[i];
+  strncpy(req.consumer, consumer_label, sizeof(req.consumer) - 1);
+  req.config.flags = GPIO_V2_LINE_FLAG_INPUT | GPIO_V2_LINE_FLAG_BIAS_PULL_UP |
+                     GPIO_V2_LINE_FLAG_EDGE_RISING | GPIO_V2_LINE_FLAG_EDGE_FALLING;
+  req.event_buffer_size = (uint32_t)event_buffer;
+
+  int ret = ioctl(chip_fd, GPIO_V2_GET_LINE_IOCTL, &req);
+  int saved_errno = errno;
+  close(chip_fd);
+  if (ret < 0) {
+    fprintf(stderr, "gpio: cannot request edge events on BCM%u", bcm_gpio[0]);
+    for (int i = 1; i < n; i++)
+      fprintf(stderr, "/BCM%u", bcm_gpio[i]);
+    fprintf(stderr, " ('%s'): %s\n", consumer_label, strerror(saved_errno));
+    return -1;
+  }
+  return req.fd;
+}
+
+int gpio_read_lines(int line, int n) {
+  if (line < 0 || n < 1 || n > 31)
+    return -1;
+  struct gpio_v2_line_values vals;
+  vals.mask = (1ULL << n) - 1;
+  vals.bits = 0;
+  if (ioctl(line, GPIO_V2_LINE_GET_VALUES_IOCTL, &vals) < 0) {
+    fprintf(stderr, "gpio: read failed on line fd %d: %s\n", line, strerror(errno));
+    return -1;
+  }
+  return (int)(vals.bits & vals.mask);
+}
+
 int gpio_write(int line, int value) {
   if (line < 0)
     return -1;
