@@ -30,7 +30,6 @@ static int line_lpf_a = -1;
 static int line_lpf_b = -1;
 static int line_lpf_c = -1;
 static int line_lpf_d = -1;
-static int line_cw_key = -1;
 
 int radio_hw_gpio_init(void) {
   // Outputs are driven to their idle/RX-safe value (LOW/0) as part of
@@ -48,13 +47,9 @@ int radio_hw_gpio_init(void) {
   line_lpf_c = gpio_request_output(LPF_C, 0, "maxibitx-lpf_c");
   line_lpf_d = gpio_request_output(LPF_D, 0, "maxibitx-lpf_d");
 
-  // idle high; key closes to ground - matches wiringPi's PUD_UP before.
-  line_cw_key = gpio_request_input(CW_KEY, 1, "maxibitx-cw_key");
-
   if (line_tx_line < 0 || line_tx_power < 0 || line_ext_ptt < 0 || line_lpf_a < 0 ||
-      line_lpf_b < 0 || line_lpf_c < 0 || line_lpf_d < 0 || line_cw_key < 0) {
-    // gpio_request_output()/gpio_request_input() already logged
-    // which pin and why.
+      line_lpf_b < 0 || line_lpf_c < 0 || line_lpf_d < 0) {
+    // gpio_request_output() already logged which pin and why.
     return -1;
   }
 
@@ -123,7 +118,6 @@ void radio_hw_set_ptt(int on) { gpio_write(line_ext_ptt, on ? 1 : 0); }
 
 void radio_hw_set_tx_relay(int on) { gpio_write(line_tx_line, on ? 1 : 0); }
 
-int radio_hw_key_down(void) { return gpio_read(line_cw_key) == 0; }
 
 /* ---- INA260 power monitor ------------------------------------------------ */
 
