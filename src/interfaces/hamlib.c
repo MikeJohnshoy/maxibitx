@@ -19,6 +19,7 @@
 #include "sound.h"    // mic gain, TX power and the ALC reading - l/L below
 #include "tone_gen.h" // u/U TONE below
 #include "hw_settings.h" // tx_band_scales[] - dump_state TX ranges
+#include "key_input.h"   // u/U PADREV below
 
 static int listen_fd = -1;
 static volatile int running = 0;
@@ -333,7 +334,8 @@ static int handle_line(int fd, char *line)
         // get_func <name>: NARROW (rx_audio.c's narrow stage-3 filter - its
         // EFFECTIVE state, so it reads 0 in DIGITAL however it was last set,
         // see rx_audio.h), FFTFILT (which stage-3 implementation it uses) and
-        // TONE (the TX test-tone generator, 0-2). Not Hamlib RIG_FUNC names - extensions
+        // TONE (the TX test-tone generator, 0-2) and PADREV (paddle reversal,
+        // key_input.h). Not Hamlib RIG_FUNC names - extensions
         // for tools/rigctl_panel.py. There is no MINPHASE: the FFT filter
         // always runs minimum phase, since nobody listening to CW would pick
         // 16ms of group delay over 4.5ms (rx_audio.h).
@@ -356,6 +358,11 @@ static int handle_line(int fd, char *line)
             snprintf(buf, sizeof(buf), "%d\n", (int)tone_gen_get_mode());
             send_line(fd, buf);
             printf("rigctl: u TONE -> %d\n", (int)tone_gen_get_mode());
+        } else if (strcmp(func_name, "PADREV") == 0) {
+            char buf[8];
+            snprintf(buf, sizeof(buf), "%d\n", key_input_get_reverse());
+            send_line(fd, buf);
+            printf("rigctl: u PADREV -> %d\n", key_input_get_reverse());
         } else {
             send_rprt(fd, -1);
             printf("rigctl: u %s -> unsupported function\n", func_name);
@@ -387,6 +394,13 @@ static int handle_line(int fd, char *line)
             send_rprt(fd, 0);
             printf("rigctl: U FFTFILT %d -> stage-3 implementation %s\n", val,
                    val ? "fft" : "elliptic");
+        } else if (strcmp(func_name, "PADREV") == 0) {
+            // Paddle reversal. Roles only matter to a paddle keyer; a
+            // straight key keys from either contact regardless.
+            key_input_set_reverse(val != 0);
+            send_rprt(fd, 0);
+            printf("rigctl: U PADREV %d -> paddles %s: dot = %s, dash = %s\n", val,
+                   val ? "reversed" : "normal", val ? "ring" : "tip", val ? "tip" : "ring");
         } else if (strcmp(func_name, "TONE") == 0) {
             // Test-tone generator: 0 off, 1 single tone, 2 two-tone
             // (tone_gen.h). Doesn't key the radio - any PTT source does.
