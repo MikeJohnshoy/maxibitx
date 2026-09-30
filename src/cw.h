@@ -15,25 +15,42 @@
 // from it so a key-down lands on the dial at any pitch.
 #define CW_PITCH_HZ 700
 
-// Call once at startup, after radio_hw_gpio_init() (CW_KEY must already
-// be configured) and after vfo_init_phase_table().
+#include <stdint.h>
+
+// Call once at startup, after vfo_init_phase_table() and before
+// key_input_start(), which is given cw_key_closed() below.
 void cw_init(void);
 
-// Call once per audio block (~10.7ms) from the audio thread. Polls the
-// key/PTT line and is the only place this module calls radio_set_tx().
-// What a closure means depends on radio_get_mode(): in CW a straight key
-// with semi break-in (hang timer); in USB/LSB a mic PTT switch (TX follows
-// the switch, no hang). DIGITAL ignores the line - its PTT comes from
-// CAT, rigctld or HPSDR.
-void cw_poll_key(void);
+// Call once per audio block (~10.7ms) from the audio thread, with the
+// CLOCK_MONOTONIC time the block's capture read returned and its length in
+// samples. Estimates where the block really ended from those times (cw.c),
+// takes the key's edges from key_input.c for the interval since the last
+// boundary and places each at its sample in the block about to be
+// generated, then requests or releases TX. What a closure means depends on
+// radio_get_mode(): in CW and CWR either contact is a straight key with semi
+// break-in (hang timer); in USB/LSB the ring is a mic PTT switch (TX follows
+// the switch, no hang). DIGITAL ignores the key - its PTT comes from CAT,
+// rigctld or HPSDR - and releases a TX the key started before the change.
+void cw_poll_key(int64_t capture_ns, int n);
 
-// True while cw_poll_key() has TX asserted, in any mode. sound.c checks
+// key_input.c's on_closed hook, run on its input thread when a contact
+// closes: requests TX at once in CW and CWR, rather than a block later
+// when cw_poll_key() sees the edge.
+void cw_key_closed(void);
+
+// Called by the audio thread as it exits, for any reason: releases a TX
+// this file asserted and refuses any further request, since from then on
+// nothing would release one.
+void cw_audio_stopped(void);
+
+// True while cw.c has TX asserted, in any mode. sound.c checks
 // it before pulling TX audio (this tone in CW, the mic in USB/LSB); remote
 // PTT paths check it so the local key wins.
 int cw_tx_active(void);
 
 // Call exactly once per audio sample while transmitting in CW - it
-// owns the envelope advance. Returns the current-pitch tone times the
+// owns the envelope advance, and counts samples to apply each key edge at
+// its offset in the block. Returns the current-pitch tone times the
 // attack/decay envelope, approximately [-1, 1]. Each fall starts
 // cw_weighting_hold_samples() after key-up, which makes the transmitted mark
 // equal the key-down time at the envelope's 50% points (cw.c).
