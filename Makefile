@@ -40,7 +40,8 @@ CFLAGS  := -O3 -march=native -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces
 LDFLAGS := -lm -lasound -lpthread -ldl -lfftw3f
 SRC := src/maxibitx.c src/radio.c src/radio_hw.c src/interfaces/hpsdr_p1.c src/interfaces/usb_gadget.c src/i2c.c \
      src/si5351v2.c src/sound.c src/vfo.c src/interfaces/hamlib.c src/hw_settings.c src/antialias.c src/decim48k.c src/cw.c \
-     src/rx_audio.c src/gpio.c src/interfaces/iq_stream.c src/fft_filter.c src/tx_pipeline.c src/rx_filter.c src/upsample48k.c src/tone_gen.c
+     src/rx_audio.c src/gpio.c src/interfaces/iq_stream.c src/fft_filter.c src/tx_pipeline.c src/rx_filter.c src/upsample48k.c src/tone_gen.c \
+     src/key_input.c
 OBJ := $(SRC:.c=.o)
 
 all: maxibitx
@@ -71,7 +72,7 @@ check-filters:
 	python3 tools/gen_narrow_filters.py --check
 
 clean:
-	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw \
+	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw test-key-input \
 		src/fft_filter.o src/fft_filter_test.o src/tx_pipeline.o src/tx_pipeline_test.o \
 		src/rx_filter.o src/rx_filter_test.o src/rx_audio_test.o src/rx_audio_impulse_test.o src/upsample48k_test.o
 
@@ -142,12 +143,21 @@ test-rx-audio-impulse: src/rx_audio.c src/rx_audio_impulse_test.c src/rx_audio.h
 test-upsample48k: src/upsample48k.c src/upsample48k_test.c src/upsample48k.h
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/upsample48k.c src/upsample48k_test.c -o $@ -lm
 
-# cw.c's keying envelope and its 1:1 weighting correction: drives the key a
-# block at a time through cw_poll_key() and checks each mark and space at the
-# envelope's 50% points against the key-down and key-up times, and that TX is
-# requested and released once per burst. Links cw.c and vfo.c with the radio
-# calls stubbed (cw_envelope_test.c), so no hardware or FFTW. Same "not part
-# of the build" convention as the other test- targets above. See
-# docs/dsp_design_notes/cw_keyer_design_study.md §17.
-test-cw: src/cw.c src/cw.h src/cw_envelope_test.c src/vfo.c src/vfo.h
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/cw.c src/vfo.c src/cw_envelope_test.c -o $@ -lm
+# cw.c's keying envelope and its 1:1 weighting correction, with the key's
+# edges arriving the way they do on the radio: through key_input.c's queue
+# at their own timestamps, placed at sample offsets by cw_poll_key(). Checks
+# each mark and space at the envelope's 50% points against the time between
+# the edges, and TX request and release. Links cw.c, key_input.c, gpio.c
+# and vfo.c with the radio calls stubbed (cw_envelope_test.c) - the GPIO
+# code is linked but never called, so no hardware or FFTW. Same "not part of
+# the build" convention as the other test- targets above. See
+# docs/dsp_design_notes/cw_keyer_design_study.md §16 and §17.
+test-cw: src/cw.c src/cw.h src/cw_envelope_test.c src/key_input.c src/key_input.h src/gpio.c src/vfo.c src/vfo.h
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/cw.c src/key_input.c src/gpio.c src/vfo.c src/cw_envelope_test.c -o $@ -lm -lpthread
+
+# key_input.c's input logic without the GPIO: synthetic edges, bounce and
+# plug scenarios fed to the same steps its thread runs, checking debounce,
+# mono-plug detection, paddle reversal, the TX-request hook, and how
+# key_input_take() places edges in a block. See key_input_test.c.
+test-key-input: src/key_input.c src/key_input.h src/key_input_test.c src/gpio.c
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/key_input.c src/gpio.c src/key_input_test.c -o $@ -lpthread
