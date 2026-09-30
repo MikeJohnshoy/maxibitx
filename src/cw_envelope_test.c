@@ -1,31 +1,29 @@
 // cw_envelope_test.c
 //
 // Bench harness for cw.c's keying: the envelope and its 1:1 weighting
-// correction, with the key's edges arriving the way they do on the radio.
-// Each edge goes through key_input.c's steps at its own timestamp (as its
-// input thread would deliver it), cw_poll_key() takes them once per block
-// against a simulated capture time, and cw_get_sample() runs for every
-// sample of every block that transmits, as sound.c does. The envelope is
-// measured at its 50% points (cw_envelope_level()). Checks:
+// correction, with the key's edges arriving as on the radio - through
+// key_input.c's steps at their own timestamps, taken by cw_poll_key() once
+// per block against a simulated capture time, with cw_get_sample() run for
+// every sample that transmits, as sound.c does. Checks, at the envelope's
+// 50% points (cw_envelope_level()):
 //
 //   - the hold cw_init() derives from the table is 150 samples;
-//   - each mark and space, between the envelope's 50% points, equals the
-//     time between the key's edges - to within 0.23 samples when the edges
-//     fall on block boundaries, and within a sample more (placing an edge
-//     rounds down to a sample) anywhere else, including a mark shorter than
-//     a block, and when capture reads return late - by scheduling latency,
-//     or by 8 ms once, as when the audio thread stalls and catches up;
-//   - the envelope is back at the table's floor after the last element;
-//   - in CW, TX is requested by the input thread's hook before the audio
-//     thread has taken the edge, once per burst, and released once, after
-//     the fall and the hang time; in USB the ring is PTT and the tip does
-//     nothing; a change to DIGITAL releases a TX the key started; once the
-//     audio thread has stopped (cw_audio_stopped()) a closure keys nothing.
+//   - each mark and space equals the time between the key's edges: within
+//     0.23 samples on block boundaries, within a sample more anywhere else
+//     (an edge's position rounds down), including a mark shorter than a
+//     block, capture reads returning late, and a 300 ppm codec clock;
+//   - keyer.c's iambic elements at 60 WPM are T and 3T to within 0.23;
+//   - TX: requested by the input thread's hook before the audio thread
+//     takes the edge, released once after the fall and the hang; the ring
+//     is PTT in USB; DIGITAL releases a TX the key started; nothing keys
+//     after cw_audio_stopped(); queued text requests TX at once and holds it
+//     through a 5 WPM word space.
 //
 //   make test-cw && ./test-cw
 //
-// Links cw.c, key_input.c, gpio.c and vfo.c, with radio_get_mode() and
-// radio_set_tx() stubbed below. gpio.c is linked but never called.
+// Links cw.c, key_input.c, keyer.c, morse.c, gpio.c and vfo.c, with
+// radio_get_mode() and radio_set_tx() stubbed below. gpio.c is linked but
+// never called.
 
 #include <math.h>
 #include <stdio.h>
@@ -343,6 +341,38 @@ int main(void) {
            tx_on_block, tx_off_block);
   check(tx_on_calls == 1 && tx_off_calls == 1 && tx_on_block == 5 && tx_off_block == 19, msg);
   mode = RADIO_MODE_CW;
+
+  printf("text at 5 WPM: TX held through the word space\n");
+  cw_init();
+  key_input_arm(0, T0, 3, cw_key_closed);
+  keyer_set_wpm(5);
+  tx_on_calls = tx_off_calls = 0;
+  in_audio_thread = 0;
+  keyer_send_text("E E");
+  cw_text_queued();
+  snprintf(msg, sizeof msg, "queueing text requests TX at once (%d)", tx_on_calls);
+  check(tx_on_calls == 1 && cw_tx_active(), msg);
+  in_audio_thread = 1;
+  int marks_seen = 0, was_up = 1;
+  for (long k = 1; k < 600; k++) {
+    cur_block = k;
+    cw_poll_key(capture_ns(k, 0), BLOCK);
+    if (cw_tx_active())
+      for (int i = 0; i < BLOCK; i++) {
+        (void)cw_get_sample();
+        int up = cw_envelope_level() < 0.5;
+        if (was_up && !up)
+          marks_seen++;
+        was_up = up;
+      }
+  }
+  // 5 WPM: T = 23040 samples; E, 7T, E is 9T = 203 blocks, and the 7T hang
+  // floor (158 blocks) is well past CW_HANG_POLLS (28).
+  snprintf(msg, sizeof msg, "%d marks, TX on %d and off %d times, off at block %ld", marks_seen,
+           tx_on_calls, tx_off_calls, tx_off_block);
+  check(marks_seen == 2 && tx_on_calls == 1 && tx_off_calls == 1 && tx_off_block > 203 + 150,
+        msg);
+  keyer_set_wpm(KEYER_WPM_DEFAULT);
 
   printf("CW to DIGITAL inside the hang time\n");
   e[0] = (struct edge){(int64_t)(50.0 * MS), KEY_RING, 1};
