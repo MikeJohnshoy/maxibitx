@@ -47,6 +47,10 @@
 // RX_CAPTURE_GAIN_PERCENT.
 #define RX_LINE_INPUT_ON 1
 
+// 1 while TX mutes RX capture with 'Line' LEFT, the line-input mute; 0 if
+// setup_audio_codec() found that switch unusable (sound_set_rx_capture()).
+static int rx_mute_by_switch = 1;
+
 // WM8731 'Capture': the only analog gain ahead of the ADC (there's no RF
 // preamp). sound_mixer() maps percent onto the 0-31 raw range; 70 is step
 // 21, ~-3.0dB. Bench-derived, not a final calibration - see
@@ -351,6 +355,36 @@ static void sound_mixer_capture_channel(char *card_name, char *element,
   snd_mixer_close(handle);
 }
 
+// Sets one channel of an element's capture switch - for 'Line', the
+// WM8731's per-channel line-input mute (LINMUTE/RINMUTE). Returns 0, or -1
+// if the element is missing, has no capture switch, or has one switch for
+// both channels (which would take the mic down with it); the caller falls
+// back to the volume.
+static int sound_mixer_capture_switch(const char *card_name, const char *element,
+                                      snd_mixer_selem_channel_id_t channel, int on) {
+  snd_mixer_t *handle;
+  snd_mixer_selem_id_t *sid;
+  int result = -1;
+
+  snd_mixer_open(&handle, 0);
+  snd_mixer_attach(handle, card_name);
+  snd_mixer_selem_register(handle, NULL, NULL);
+  snd_mixer_load(handle);
+
+  snd_mixer_selem_id_alloca(&sid);
+  snd_mixer_selem_id_set_index(sid, 0);
+  snd_mixer_selem_id_set_name(sid, element);
+  snd_mixer_elem_t *elem = snd_mixer_find_selem(handle, sid);
+
+  if (elem && snd_mixer_selem_has_capture_switch(elem) &&
+      !snd_mixer_selem_has_capture_switch_joined(elem) &&
+      snd_mixer_selem_set_capture_switch(elem, channel, on != 0) == 0)
+    result = 0;
+
+  snd_mixer_close(handle);
+  return result;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Codec hardware setup - barebones WM8731 init                      */
 /* ------------------------------------------------------------------ */
@@ -370,18 +404,37 @@ void setup_audio_codec(void) {
   sound_mixer("hw:0", "Output Mixer HiFi", 1);
   sound_mixer("hw:0", "Output Mixer Line Bypass", 0);
   sound_mixer("hw:0", "Output Mixer Mic Sidetone", 0);
+
+  // Say now how TX will mute RX capture, by trying it: setting 'Line' LEFT
+  // to the on it already is changes nothing if it works.
+  if (sound_mixer_capture_switch("hw:0", "Line", SND_MIXER_SCHN_FRONT_LEFT, 1) == 0) {
+    printf("sound: TX mutes RX capture with the line-input mute ('Line' LEFT)\n");
+  } else {
+    rx_mute_by_switch = 0;
+    printf("sound: 'Line' has no separate LEFT capture switch - TX will turn "
+           "'Capture' LEFT down to its minimum instead, which only attenuates\n");
+  }
 }
 
-// Mute/restore the RX side of 'Capture' around a TX burst. radio.c's
-// radio_tx_apply() mutes it before any TX RF exists and restores it once
-// the relay has settled, protecting the ADC from TX energy
+// Mute/restore RX capture around a TX burst. radio.c's radio_tx_apply()
+// mutes it before any TX RF exists and restores it once the relay has
+// settled, protecting the ADC from TX energy
 // (rx_gain_and_level_calibration.md §8).
 //
-// LEFT channel only: the mic reaches the ADC on the RIGHT channel of this
-// same control, so muting both would silence USB/LSB TX audio
-// (ARCHITECTURE.md §10 step 8). Relies on 'Capture' accepting per-channel
-// writes; sound_mixer_capture_channel() warns if it doesn't.
+// With the codec's line-input mute ('Line' LEFT, LINMUTE): the ADC's left
+// input is cut off, not just turned down. 'Capture' at its minimum is still
+// -34.5 dB, through which the radio's own transmission shows plainly in
+// the I/Q during TX (rx_gain_and_level_calibration.md §8). 'Capture' keeps
+// its RX gain throughout. If that switch isn't usable (setup_audio_codec()
+// says so), 'Capture' LEFT is turned down instead.
+//
+// LEFT channel only either way: the mic reaches the ADC on the RIGHT
+// channel, so muting both would silence USB/LSB TX audio
+// (ARCHITECTURE.md §10 step 8).
 void sound_set_rx_capture(int enable) {
+  if (rx_mute_by_switch &&
+      sound_mixer_capture_switch("hw:0", "Line", SND_MIXER_SCHN_FRONT_LEFT, enable) == 0)
+    return;
   sound_mixer_capture_channel("hw:0", "Capture", SND_MIXER_SCHN_FRONT_LEFT,
                                enable ? RX_CAPTURE_GAIN_PERCENT : 0);
 }
