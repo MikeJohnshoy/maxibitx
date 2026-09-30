@@ -23,6 +23,7 @@ int tx_band_scale_count = 0;
 double tx_full_scale_power = HW_DEFAULT_FULL_SCALE_POWER;
 double tx_max_power = HW_DEFAULT_MAX_POWER;
 int tx_ext_ptt_delay_ms = HW_DEFAULT_EXT_PTT_DELAY_MS;
+int key_debounce_ms = HW_DEFAULT_KEY_DEBOUNCE_MS;
 
 // Section state while scanning the file - only [tx_band] sections are
 // acted on today; [tcxo] and any others are recognized (so their key=value
@@ -34,7 +35,7 @@ enum hw_section { HW_SECTION_TOP, HW_SECTION_TCXO, HW_SECTION_TX_BAND, HW_SECTIO
 // the last [tx_band] - would otherwise be skipped without a word.
 static int is_top_level_key(const char *key) {
   static const char *const keys[] = { "bfo_freq", "xtal_filter_center", "full_scale_power",
-                                      "max_power", "ext_ptt_delay_ms" };
+                                      "max_power", "ext_ptt_delay_ms", "key_debounce_ms" };
   for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
     if (!strcmp(key, keys[i]))
       return 1;
@@ -137,6 +138,18 @@ void hw_settings_load(void) {
                  HW_SETTINGS_PATH);
         else
           printf("init: ext_ptt_delay_ms loaded from %s: %ld ms\n", HW_SETTINGS_PATH, ms);
+      } else if (!strcmp(key, "key_debounce_ms")) {
+        long ms = value;
+        if (ms < 0)
+          ms = 0;
+        if (ms > HW_MAX_KEY_DEBOUNCE_MS)
+          ms = HW_MAX_KEY_DEBOUNCE_MS;
+        key_debounce_ms = (int)ms;
+        if (ms != value)
+          printf("init: key_debounce_ms=%ld in %s is outside 0-%d - using %ld ms\n", value,
+                 HW_SETTINGS_PATH, HW_MAX_KEY_DEBOUNCE_MS, ms);
+        else
+          printf("init: key_debounce_ms loaded from %s: %ld ms\n", HW_SETTINGS_PATH, ms);
       } else if (!strcmp(key, "full_scale_power") || !strcmp(key, "max_power")) {
         // Watts, and fractional on a real board (5.5) - re-parse as a
         // double, the %ld above only captured the integer truncation.
