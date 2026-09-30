@@ -2,8 +2,9 @@
 
 Status: **study, with the first pieces implemented** — the playback-queue
 setting, the T/R measurement and `ext_ptt_delay_ms` (§7, §8), the 1:1
-weighting correction in `cw.c` (§17), and the input path, `key_input.c`
-(§16, "As built"). The keyer itself is not built yet.
+weighting correction in `cw.c` (§17), the input path, `key_input.c`
+(§16, "As built"), and the keyer, `keyer.c` (§15, "As built"). Text to CW
+is not built yet.
 Written as the precursor to building a keyer, to find out before any code exists whether the
 requested design holds up, and where it doesn't, what to do instead.
 §1–§13 are the study as first written. **§14 records the decisions taken
@@ -687,9 +688,12 @@ Each step stands alone and is useful even if the keyer is never finished.
 5. **`keyer.c` and a `keyer_test` harness**, written from §15: scripted
    events in, element sequences and timings out, 1–60 WPM, all modes, with
    `keyer_spec_model.c`'s golden cases as the acceptance test and
-   `keyer_straight.c` built alongside to keep the seam honest.
-6. **Text**: table, queue, spacing, `b`/`KY`/`KS`/`KEYSPD`, abort on
-   paddle, the speed-dependent hang floor.
+   `keyer_straight.c` built alongside to keep the seam honest. *Done (§15,
+   "As built"), with `KEYSPD`, `KS` and the panel's mode, speed and
+   reverse controls brought forward from steps 6 and 7 so the keyer can be
+   used on the air.*
+6. **Text**: table, queue, spacing, `b`/`KY`, abort on paddle, the
+   speed-dependent hang floor.
 7. **Panel controls.**
 
 ## 13. Reproducing the numbers
@@ -849,6 +853,54 @@ belongs to the envelope table, and is applied where the table is (§17).
 
 Each case also checks that every mark the keyer times is exactly `T` or
 `3T` and every space between elements exactly `T`, in samples.
+
+### As built
+
+`keyer.c` implements this section, behind the one seam §10 proposed:
+
+```c
+int keyer_run_block(const struct key_event *ev, int n_events, uint8_t *key, int n);
+```
+
+called by `cw_poll_key()` once per block with the edges `key_input_take()`
+placed, writing the key value for every sample of the block, which
+`cw_get_sample()` follows. It returns nonzero while TX is wanted — the key
+was down, or an element (its trailing space included) was in progress, at
+some point in the block — and `cw.c`'s hang timer counts from there.
+Rather than stepping every sample as the model does, a block is walked
+from one instant that matters to the next: an edge, a mark's end, a
+decision point. Times are absolute sample counts, so an element that
+spans blocks, or a whole character, is timed without reference to where
+the blocks fall.
+
+It runs in every radio mode, so its paddle state always matches the jack,
+but only CW and CWR key from it. The mic PTT in USB/LSB is read from the
+contacts by `cw.c` itself, independent of the keyer mode.
+
+`keyer_straight.c` is the same interface with the straight key alone;
+`make KEYER=keyer_straight` builds it instead, and `U KEYER` then refuses
+every other mode. `test-keyer` and `test-keyer-straight` are one harness
+built against each:
+
+| Check | Result |
+|---|---|
+| The golden cases above, block size 1024 | all 15 pass; every timed mark `T` or `3T` and every space `T`, exactly |
+| Random paddle input, every mode at 5, 20 and 60 WPM, blocks of random length 1–1500 samples, against `keyer_spec_model.c` (compiled into the harness) | 600 runs, all identical to the model sample for sample |
+| A speed change during a dash | that dash and its space keep the old `T`; the next element has the new one |
+| A mode change while elements are repeating | none until the paddle is released and the keyer is idle; then the new mode |
+| TX wanted | through a dot tapped inside one block and the dot's trailing space, and not after |
+| `keyer_straight.c` | the straight-key cases pass; every other mode refused |
+
+`test-cw` adds the end-to-end check: iambic B at 60 WPM through
+`key_input.c`, `keyer.c` and the envelope, where every mark between the
+envelope's 50% points is 1920 or 5760 samples and every space 1920, each
+within 0.23 samples.
+
+Controls: rigctld `u`/`U KEYER` (0 straight, 1 bug, 2 ultimatic, 3 iambic
+A, 4 iambic B), `l`/`L KEYSPD` (a real Hamlib level, now advertised in
+`dump_state`), CAT `KS`, and in `rigctl_panel.py` a keyer group with mode,
+WPM and paddle reversal. maxibitx starts in straight-key mode at 20 WPM
+each time; nothing is saved.
 
 ## 16. Input path
 
