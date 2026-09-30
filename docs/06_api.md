@@ -369,3 +369,9 @@ What an application can't do today without changes to the daemon:
   settings, and a calibrated S-meter.
 - **HPSDR sample rates other than 96 kHz**, and more than one HPSDR
   client.
+
+A TCI server, which would provide network receive and transmit audio,
+CW text and change notifications over one WebSocket connection, is
+studied in
+[`dsp_design_notes/tci_design_study.md`](dsp_design_notes/tci_design_study.md);
+nothing of it is built.
