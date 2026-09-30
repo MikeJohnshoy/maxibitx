@@ -43,6 +43,11 @@ void cw_key_closed(void);
 // nothing would release one.
 void cw_audio_stopped(void);
 
+// Control surfaces call this after queueing text with keyer_send_text():
+// requests TX at once in CW and CWR, as a key closure does, so the T/R
+// sequence starts before the first element does.
+void cw_text_queued(void);
+
 // True while cw.c has TX asserted, in any mode. sound.c checks
 // it before pulling TX audio (this tone in CW, the mic in USB/LSB); remote
 // PTT paths check it so the local key wins.
