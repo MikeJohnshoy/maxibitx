@@ -492,7 +492,9 @@ are GPIO lines read as edge events: the kernel timestamps every edge, a
 thread of its own receives them and requests TX on a closure, and once per
 audio block `cw_poll_key()` places each edge at its own sample, one block
 late. So a mark is as long as the key was down, to the sample, whatever
-the block size. Either contact is a straight key, a mono plug is detected
+the block size. A paddle works too: `keyer.c` is a bug, ultimatic or
+iambic A/B keyer at 1-60 WPM, chosen with rigctld `U KEYER` and
+`L KEYSPD` or the control panel. As a straight key either contact keys, a mono plug is detected
 at start-up, and the ring doubles as the mic PTT in USB/LSB
 ([`01_hardware_init_and_control.md`](01_hardware_init_and_control.md),
 "The key jack"). The microphone arrives through the WM8731 codec and
@@ -586,7 +588,7 @@ would be good at.
 
 Run the bench tests — `make test-fft-filter`, `test-tx-pipeline`,
 `test-rx-filter`, `test-rx-audio`, `test-upsample48k`, `test-cw`,
-`test-key-input`. They link the DSP
+`test-key-input`, `test-keyer`. They link the DSP
 files without any hardware code, so they run anywhere, and they print
 measured numbers against expected ones rather than just passing or
 failing. `make check-comments` flags comments that have drifted into
