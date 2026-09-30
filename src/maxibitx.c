@@ -14,6 +14,7 @@
 #include "hamlib.h"
 #include "hw_settings.h"
 #include "cw.h"
+#include "key_input.h"
 #include "rx_audio.h"
 #include "tone_gen.h"
 #include <stdio.h>
@@ -51,9 +52,10 @@ int main(int argc, char **argv) {
   // varies radio to radio. Load it before anything below uses either.
   hw_settings_load();
  
-  // Claim all GPIO lines (LPF relays, TX_LINE, TX_POWER, EXT_PTT, CW_KEY)
-  // via the kernel's GPIO character-device API (src/gpio.c) and put the
-  // outputs into their idle state.
+  // Claim the output GPIO lines (LPF relays, TX_LINE, TX_POWER, EXT_PTT)
+  // via the kernel's GPIO character-device API (src/gpio.c) and put them
+  // into their idle state. The key jack's inputs are key_input_start()'s,
+  // below.
   if (radio_hw_gpio_init() < 0) {
     fprintf(stderr, "init: GPIO setup failed\n");
     return -1;
@@ -94,7 +96,17 @@ int main(int argc, char **argv) {
   // Straight-key CW support (src/cw.c) - needs the phase table above
   // already built, since it starts its software oscillator.
   cw_init();
-  printf("init: CW straight key ready (GPIO %d)\n", CW_KEY);
+
+  // The key jack (src/key_input.c): both contacts as timestamped edge
+  // events, read by a thread of its own that requests TX through cw.c on a
+  // closure. Before the audio thread, which takes its edges.
+  if (key_input_start(key_debounce_ms, cw_key_closed) < 0) {
+    fprintf(stderr, "init: key input setup failed\n");
+    return -1;
+  }
+  printf("init: key ready - tip BCM %d, ring BCM %d, edge-timestamped, %d ms debounce; "
+         "paddles tip = dot, ring = dash\n",
+         KEY_TIP_GPIO, KEY_RING_GPIO, key_debounce_ms);
 
   // RX audio demod (src/rx_audio.c) - turns the receiver's own I/Q into
   // an audible CW tone on the local monitor output. Needs the phase
