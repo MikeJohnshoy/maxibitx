@@ -260,3 +260,20 @@ already used in `antialias_filter_design.md`.
   (28.0-28.8ms, within 1ms of the derivation), and so is the T/R race,
   with `MAXIBITX_TR_TIMING`: 6-10ms spare at four periods, ~13ms clipped
   at two, as predicted.
+- [`tci_design_study.md`](tci_design_study.md) — whether maxibitx can
+  offer TCI (Expert Electronics' Transceiver Control Interface: one
+  WebSocket carrying text commands, RX/TX audio and I/Q) beside
+  `hpsdr_p1.c` and the USB gadget. Feasible, and every radio function
+  behind it already exists; the new parts are a small WebSocket server
+  and the protocol layer. TCI complements rather than replaces HPSDR:
+  the programs that connect as TCI clients are digital-mode programs
+  (JTDX, MSHV, WSJT-X Improved), loggers and Hamlib's TCI backend, while
+  the panadapters maxibitx serves over HPSDR are TCI servers themselves.
+  Collects, from the clients' and three other servers' source, the
+  compatibility rules no spec states (lowercase keywords, one command per
+  message, an echo of every set, `start;` before `ready;`, a sensor value
+  that must contain a decimal point), maps TCI's commands onto `radio.h`,
+  `sound.h` and the keyer, sizes the streams, covers CW macros through
+  `keyer_send_text()`, and proposes four files, an order of work with a
+  harness per step, NCM over USB as an option, and six decisions to take
+  before building. Status: **study only - nothing is implemented.**
