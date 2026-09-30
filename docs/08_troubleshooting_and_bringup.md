@@ -130,6 +130,24 @@ seen on every key-down. Writing silence the rest of the time keeps the
 device continuously running, the same design real sbitx's own
 full-duplex audio path uses.
 
+## Your own signal on the spectrum during TX
+
+The receive chain keeps running during TX, so anything reaching the RX
+input shows on the panel's spectrum (and in SparkSDR over HPSDR), 1400 Hz
+low because clk1 moves to `bfo_freq` for TX. TX mutes the WM8731's left
+line input to prevent that; start-up says how:
+
+```
+sound: TX mutes RX capture with the line-input mute ('Line' LEFT)
+```
+
+To check it during a transmission, `amixer -c 0 sget 'Line'` should show
+the left channel `[off]` and the right (mic) `[on]`. If start-up instead
+says `'Line' has no separate LEFT capture switch`, TX is only turning
+`'Capture'` LEFT down (-34.5 dB), and a strong line at -1400 Hz with its
+image at +1400 Hz is expected while transmitting.
+[`rx_gain_and_level_calibration.md`](dsp_design_notes/rx_gain_and_level_calibration.md) §8.
+
 ## The key jack
 
 At start-up maxibitx prints which lines it keys from:
