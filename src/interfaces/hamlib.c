@@ -20,7 +20,8 @@
 #include "tone_gen.h" // u/U TONE below
 #include "hw_settings.h" // tx_band_scales[] - dump_state TX ranges
 #include "key_input.h"   // u/U PADREV below
-#include "keyer.h"       // l/L KEYSPD, u/U KEYER below
+#include "keyer.h"       // l/L KEYSPD, u/U KEYER, b and \stop_morse below
+#include "morse.h"       // b's text
 
 static int listen_fd = -1;
 static volatile int running = 0;
@@ -348,8 +349,9 @@ static int handle_line(int fd, char *line)
         // EFFECTIVE state, so it reads 0 in DIGITAL however it was last set,
         // see rx_audio.h), FFTFILT (which stage-3 implementation it uses) and
         // TONE (the TX test-tone generator, 0-2), PADREV (paddle reversal,
-        // key_input.h) and KEYER (the keyer's mode, 0-4, keyer.h's enum
-        // keyer_mode). Not Hamlib RIG_FUNC names - extensions
+        // key_input.h), KEYER (the keyer's mode, 0-4, keyer.h's enum
+        // keyer_mode) and MORSE (1 while text is queued or being sent,
+        // read-only). Not Hamlib RIG_FUNC names - extensions
         // for tools/rigctl_panel.py. There is no MINPHASE: the FFT filter
         // always runs minimum phase, since nobody listening to CW would pick
         // 16ms of group delay over 4.5ms (rx_audio.h).
@@ -383,6 +385,11 @@ static int handle_line(int fd, char *line)
             send_line(fd, buf);
             printf("rigctl: u KEYER -> %d (%s)\n", (int)keyer_get_mode(),
                    keyer_mode_name(keyer_get_mode()));
+        } else if (strcmp(func_name, "MORSE") == 0) {
+            char buf[8];
+            snprintf(buf, sizeof(buf), "%d\n", keyer_text_busy() ? 1 : 0);
+            send_line(fd, buf);
+            printf("rigctl: u MORSE -> %d\n", keyer_text_busy() ? 1 : 0);
         } else {
             send_rprt(fd, -1);
             printf("rigctl: u %s -> unsupported function\n", func_name);
@@ -427,7 +434,7 @@ static int handle_line(int fd, char *line)
             // doesn't offer (make KEYER=keyer_straight) is refused.
             if (keyer_set_mode((enum keyer_mode)val) != 0) {
                 send_rprt(fd, -1);
-                printf("rigctl: U KEYER %d -> not offered by this keyer, ignored\n", val);
+                printf("rigctl: U KEYER %d -> not a keyer mode this build offers, ignored\n", val);
             } else {
                 send_rprt(fd, 0);
                 printf("rigctl: U KEYER %d -> keyer %s\n", val, keyer_mode_name((enum keyer_mode)val));
@@ -464,6 +471,44 @@ static int handle_line(int fd, char *line)
         return 0;
     }
 
+    if ((cmd[0] == 'b' && cmd[1] == ' ') || strncmp(cmd, "\\send_morse ", 12) == 0) {
+        // send_morse <text>: queued for the keyer at its current speed, in
+        // CW and CWR only. Prosigns as <AR>, <SK>, <BT>, <KN>, <AS>, <BK>,
+        // <HH>, <SN> (morse.h). Refused whole, with RPRT -1, if it doesn't
+        // fit in the queue.
+        const char *text = (cmd[0] == 'b') ? cmd + 2 : cmd + 12;
+        enum radio_mode mode = radio_get_mode();
+        char internal[LINE_MAX_LEN], skipped[32];
+        int n = morse_from_plain(text, internal, sizeof(internal), skipped, sizeof(skipped));
+        if (mode != RADIO_MODE_CW && mode != RADIO_MODE_CWR) {
+            send_rprt(fd, -1);
+            printf("rigctl: b %s -> refused, text is sent in CW or CWR only\n", text);
+        } else {
+            int r = keyer_send_text(internal);
+            if (r == 0)
+                cw_text_queued();
+            send_rprt(fd, r == 0 ? 0 : -1);
+            printf("rigctl: b %s -> %s", text,
+                   r == 0    ? "queued"
+                   : r == -1 ? "refused, not enough room in the text queue"
+                             : "refused, this keyer doesn't send text");
+            if (r == 0)
+                printf(", %d characters at %d WPM", n, keyer_get_wpm());
+            if (skipped[0])
+                printf(" (skipped, not in the Morse table: %s)", skipped);
+            printf("\n");
+        }
+        return 0;
+    }
+
+    if (strcmp(cmd, "\\stop_morse") == 0) {
+        // The element being sent completes; the rest of the text is dropped.
+        keyer_stop_text();
+        send_rprt(fd, 0);
+        printf("rigctl: \\stop_morse -> text stopped\n");
+        return 0;
+    }
+
     if (strcmp(cmd, "chk_vfo") == 0 || strcmp(cmd, "\\chk_vfo") == 0) {
         // Single-VFO radio - report "not in VFO mode" so callers send
         // plain f/F/t/T without needing a VFO argument.
@@ -485,7 +530,8 @@ static int handle_line(int fd, char *line)
         // Nor is CWWIDTH, which isn't a RIG_LEVEL at all. CWPITCH is, though
         // quantized here: a client's set is honored to the nearest pitch, as
         // on a rig with a coarse pitch control. has_get_func/set_func stay
-        // 0: NARROW, FFTFILT, TONE, PADREV and KEYER aren't RIG_FUNC bits.
+        // 0: NARROW, FFTFILT, TONE, PADREV, KEYER and MORSE aren't
+        // RIG_FUNC bits.
         //
         // Mode masks carry the modes m/M actually handle: CW (0x2), USB
         // (0x4), LSB (0x8), CWR (0x80) and PKTUSB (0x800, DIGITAL) =
