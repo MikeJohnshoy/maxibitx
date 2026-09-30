@@ -164,17 +164,19 @@ connected.
 | `u FFTFILT` / `U FFTFILT <0\|1>` | `1` / `RPRT 0` | Which CW filter: 1 the FFT filter (the default, always minimum phase), 0 an elliptic IIR from the pre-designed bank. `CWPITCH`/`CWWIDTH` apply to either (extension) |
 | `l CWPITCH` / `L CWPITCH <hz>` | `700` / `RPRT 0` | CW pitch: 500 to 1000 Hz in 100 Hz steps. Moves four things together — the RX BFO (the tone you hear), stage 3's filter center, the TX sidetone, and the CW IF shift that keeps the carrier on the dial. The transmitted frequency does not change. Refused while transmitting (`RPRT 0`, pitch unchanged — read it back). A real Hamlib level, advertised in `dump_state` |
 | `l CWWIDTH` / `L CWWIDTH <hz>` | `300` / `RPRT 0` | Stage 3's width: 150, 300, 450 or 600 Hz (extension). Both settings snap to the nearest value `src/narrow_filter_bank.h` carries; the log line reports which one was selected, and a client should display the `l` readback rather than what it asked for |
-| `u PADREV` / `U PADREV <0\|1>` | `0` / `RPRT 0` | Paddle reversal: 0 tip = dot, ring = dash (the default); 1 swaps them. For the paddle keyer, which is not built yet — a straight key keys from either contact regardless (extension) |
+| `u KEYER` / `U KEYER <0-4>` | `0` / `RPRT 0` | CW keyer mode: 0 straight key, 1 bug, 2 ultimatic, 3 iambic A, 4 iambic B. Takes effect once the keyer is idle. A mode a `make KEYER=keyer_straight` build doesn't offer: `RPRT -1` (extension) |
+| `l KEYSPD` / `L KEYSPD <1-60>` | `20` / `RPRT 0` | Keyer speed, WPM; clamped to 1-60. Takes effect at the next element. A real Hamlib level, advertised in `dump_state` |
+| `u PADREV` / `U PADREV <0\|1>` | `0` / `RPRT 0` | Paddle reversal: 0 tip = dot, ring = dash (the default); 1 swaps them. No effect on a straight key, which keys from either contact (extension) |
 | `u TONE` / `U TONE <0\|1\|2>` | `0` / `RPRT 0` | TX test-tone generator: 0 off, 1 single 1 kHz, 2 two-tone 700 + 1900 Hz. Doesn't key the radio; any PTT does. Off after 30 s in TX. Out of range: `RPRT -1` (extension) |
 | `v` / `V <vfo>` | `VFOA` / `RPRT 0` | Single VFO; any `V` is accepted. |
 | `chk_vfo` | `0` | Not in VFO mode - send commands without a VFO argument. |
-| `dump_state` | capability block | Protocol 0. TX ranges come from `data/hw_settings.ini`'s `[tx_band]` entries at 5 W; modes CW/USB/LSB/PKTUSB; max RIT 9999. `has_get_level` is `AF\|CWPITCH\|RFPOWER\|STRENGTH`, `has_set_level` is `AF\|CWPITCH\|RFPOWER`. |
+| `dump_state` | capability block | Protocol 0. TX ranges come from `data/hw_settings.ini`'s `[tx_band]` entries at 5 W; modes CW/USB/LSB/PKTUSB; max RIT 9999. `has_get_level` is `AF\|CWPITCH\|RFPOWER\|KEYSPD\|STRENGTH` (`0x40005808`), `has_set_level` is `AF\|CWPITCH\|RFPOWER\|KEYSPD` (`0x5808`). |
 | `q`, `Q`, `quit` | (connection closes) | |
 
 Anything else replies `RPRT -1`. The extensions (`MICGAIN`, `ALC`,
-`NARROW`, `FFTFILT`, `CWWIDTH`, `TONE`, `PADREV`) aren't Hamlib names or aren't in Hamlib's
+`NARROW`, `FFTFILT`, `CWWIDTH`, `TONE`, `PADREV`, `KEYER`) aren't Hamlib names or aren't in Hamlib's
 units, so a stock Hamlib client won't use them, but they follow the same
-syntax. `AF`, `CWPITCH`, `RFPOWER` and `STRENGTH` are real Hamlib levels and are
+syntax. `AF`, `CWPITCH`, `KEYSPD`, `RFPOWER` and `STRENGTH` are real Hamlib levels and are
 advertised in `dump_state`.
 
 Two of these are easy to confuse. `RFPOWER` sets a ceiling: it lowers
@@ -296,6 +298,7 @@ commands are silently ignored (Kenwood convention).
 | `IF;` | 38-byte status | Frequency, RIT, RIT on, TX/RX, mode, in Hamlib's TS-480 layout |
 | `PS;` | `PS1;` | Always on; a set is ignored |
 | `AI;` | `AI0;` | No auto-information; a set is ignored |
+| `KS;` / `KS025;` | `KS020;` / — | Keyer speed, WPM; clamped to 1-60 (the TS-480's range is 10-60) |
 | `AC…;` | — | Ignored (no tuner) |
 
 **DIGITAL over CAT.** A TS-480 has no data mode, so DIGITAL reports as
@@ -349,8 +352,9 @@ What an application can't do today without changes to the daemon:
   through its speaker and USB. A networked app demodulates the I/Q
   itself.
 - **Remote CW.** Remote PTT in CW sends no carrier, and there's no
-  remote keying command, so CW from a computer (a keyer, CW macros)
-  isn't possible.
+  remote keying command yet, so CW from a computer (text, CW macros)
+  isn't possible. The keyer's mode and speed can be set remotely; the
+  text-sending commands (`b`, CAT `KY`) are the next step.
 - **Transmit metering.** Forward/reflected power, SWR, and the INA260's
   supply voltage and current aren't exposed.
 - **Change notifications.** State is poll-only. Kenwood `AI` is
