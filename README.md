@@ -41,7 +41,7 @@ the USB gadget providing an audio connection and CAT control interface (~ 1,300 
 | Hardware: GPIO, I2C, si5351 clocks, LPF relays, board calibration | `radio_hw.c`, `gpio.c`, `i2c.c`, `si5351v2.c`, `hw_settings.c` |
 | Real-time audio thread and WM8731 codec | `sound.c` |
 | RX: I/Q mixing, anti-aliasing, demodulation | `vfo.c`, `antialias.c`, `rx_audio.c`, `rx_filter.c` |
-| TX: CW keying, shared FFT TX pipeline | `cw.c`, `key_input.c`, `keyer.c`, `tx_pipeline.c`, `fft_filter.c` |
+| TX: CW keying, shared FFT TX pipeline | `cw.c`, `key_input.c`, `keyer.c`, `morse.c`, `tx_pipeline.c`, `fft_filter.c` |
 | USB audio rate conversion | `decim48k.c`, `upsample48k.c` |
 | External interfaces | `interfaces/hamlib.c` (rigctld), `interfaces/hpsdr_p1.c` (HPSDR Protocol 1), `interfaces/usb_gadget.c` (USB audio + Kenwood CAT), `interfaces/iq_stream.c` (I/Q for the control panel) |
 
