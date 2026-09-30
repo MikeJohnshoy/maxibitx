@@ -249,7 +249,10 @@ already used in `antialias_filter_design.md`.
   read by their own thread, leading-edge debounce, early TX request,
   mono-plug detection and paddle reversal (tip = dot by default; tip is
   BCM 5 on a DE board), with marks placed within a sample of the key's
-  edges anywhere in a block; the keyer itself is not built yet. The playback queue is measured on a Pi 4
+  edges anywhere in a block; and so is **the keyer, `keyer.c`**: bug,
+  ultimatic, iambic A/B and straight key at 1-60 WPM, identical to the
+  specification model sample for sample on random input, selected with
+  rigctld `U KEYER`/`L KEYSPD`, CAT `KS` or the panel. Text to CW is next. The playback queue is measured on a Pi 4
   (28.0-28.8ms, within 1ms of the derivation), and so is the T/R race,
   with `MAXIBITX_TR_TIMING`: 6-10ms spare at four periods, ~13ms clipped
   at two, as predicted.
