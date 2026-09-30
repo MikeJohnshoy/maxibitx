@@ -298,9 +298,11 @@ A few things about this codec that were learned the hard way:
   reaches the ADC on Line-In RIGHT, and `'Mic'` (the codec's own mic
   preamp path) may do nothing on this board - unconfirmed; check with
   `amixer -c 0 sget 'Mic'`. That's why the TX capture mute
-  (`sound_set_rx_capture()`) touches `'Capture'` LEFT only: muting both
-  channels silenced USB/LSB TX audio on the first on-air SSB test
-  (`ARCHITECTURE.md` §10 step 8).
+  (`sound_set_rx_capture()`) touches the LEFT channel only - the
+  line-input mute, `'Line'` LEFT: muting both channels silenced USB/LSB
+  TX audio on the first on-air SSB test (`ARCHITECTURE.md` §10 step 8).
+  Why it is the switch and not `'Capture'`'s gain:
+  [`rx_gain_and_level_calibration.md`](dsp_design_notes/rx_gain_and_level_calibration.md) §8.
 
 Once the mixer is configured, `sound_thread_start("hw:0,0")` opens the
 ALSA capture (and playback) PCM devices at the fixed 96 kHz sample rate
