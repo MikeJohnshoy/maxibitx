@@ -136,7 +136,8 @@ contact means:
 
 The keyer mode and speed are `rigctld` `U KEYER` / `L KEYSPD` (or CAT
 `KS`); `U PADREV 1` swaps the paddle roles (tip = dash, ring = dot), which
-has no effect on a straight key. Either contact keys the straight key, so
+has no effect on a straight key. Closing either contact also stops any
+text the keyer is sending (rigctld `b`, CAT `KY`). Either contact keys the straight key, so
 a stereo plug wired to either works, and a mono plug works too: at
 start-up a contact found closed is ignored from the first moment, and if it
 stays closed for 250 ms the console says it is being treated as a ring
