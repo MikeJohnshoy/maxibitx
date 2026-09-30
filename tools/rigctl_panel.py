@@ -47,6 +47,14 @@ beyond the commands it actually exercises:
                                   nearest value the filter bank carries
                                   (src/narrow_filter_bank.h) and the reply
                                   says which one was selected
+    u KEYER / U KEYER <0-4>      get / set the CW keyer: 0 straight, 1 bug,
+                                  2 ultimatic, 3 iambic A, 4 iambic B. Takes
+                                  effect once the keyer is idle
+    l KEYSPD / L KEYSPD <wpm>    get / set the keyer's speed, 1-60 WPM (a
+                                  real Hamlib level). Takes effect at the
+                                  next element
+    u PADREV / U PADREV <0|1>    get / set paddle reversal: 0 tip = dot,
+                                  1 tip = dash
 
 It also shows a live spectrum, fed by a second, independent UDP
 connection to src/interfaces/iq_stream.c's lightweight I/Q telemetry stream (UDP
@@ -111,6 +119,9 @@ CONFIG_PATH = os.path.expanduser("~/.maxibitx_panel.json")
 OLD_CONFIG_PATH = os.path.expanduser("~/.minibitx_panel.json")
 DEFAULT_PORT = 4532
 POLL_INTERVAL_S = 1.0
+
+# The keyer's modes in u/U KEYER's numbering (src/keyer.h's enum keyer_mode).
+KEYER_MODES = ("Straight", "Bug", "Ultimatic", "Iambic A", "Iambic B")
 SOCKET_TIMEOUT_S = 2.0
 # Full scale for the ALC bar. Correctly-set mic gain reads a couple of dB
 # on peaks, so the useful part of the scale is its bottom third; anything
@@ -437,6 +448,12 @@ class Panel(tk.Tk):
         # Same guard, same reasoning, for the TX test controls below.
         self._syncing_tone = False
         self._syncing_ptt = False
+        # Same guard, same reasoning, for the keyer controls. The WPM box is a
+        # text entry as well, so like the frequency entry it isn't overwritten
+        # by a poll while it has focus.
+        self._syncing_keyer = False
+        self._syncing_padrev = False
+        self.wpm_focused = False
 
         cfg = load_config()
 
@@ -525,6 +542,33 @@ class Panel(tk.Tk):
             ttk.Radiobutton(mode, text=name, value=name, variable=self.mode_var,
                              command=self.on_mode_changed).grid(row=0, column=i, padx=(0 if i == 0 else 10, 0))
 
+        # --- keyer ---
+        # rigctld's u/U KEYER (src/keyer.h's mode), l/L KEYSPD (a real Hamlib
+        # level, in WPM) and u/U PADREV (paddle reversal, src/key_input.h).
+        # The server applies a mode change once the keyer is idle and a speed
+        # change at the next element, so a change mid-character never cuts an
+        # element short. Polled like everything else, so a speed set over CAT
+        # (Kenwood KS) shows up here too. Reversal only matters to the paddle
+        # modes; a straight key keys from either contact.
+        kf = ttk.LabelFrame(self.body, text="Keyer (CW)", padding=8)
+        kf.grid(row=3, column=0, sticky="ew", padx=8, pady=4)
+        self.keyer_var = tk.StringVar(value=KEYER_MODES[0])
+        self.keyer_combo = ttk.Combobox(kf, textvariable=self.keyer_var, width=10,
+                                         state="readonly", values=KEYER_MODES)
+        self.keyer_combo.grid(row=0, column=0)
+        self.keyer_combo.bind("<<ComboboxSelected>>", self.on_keyer_selected)
+        ttk.Label(kf, text="WPM").grid(row=0, column=1, padx=(12, 4))
+        self.wpm_var = tk.StringVar(value="20")
+        self.wpm_spin = ttk.Spinbox(kf, from_=1, to=60, width=4, textvariable=self.wpm_var,
+                                    command=self.on_wpm_changed)
+        self.wpm_spin.grid(row=0, column=2)
+        self.wpm_spin.bind("<Return>", lambda e: self.on_wpm_changed())
+        self.wpm_spin.bind("<FocusIn>", lambda e: setattr(self, "wpm_focused", True))
+        self.wpm_spin.bind("<FocusOut>", self.on_wpm_focus_out)
+        self.padrev_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(kf, text="Reverse paddles", variable=self.padrev_var,
+                        command=self.on_padrev_toggled).grid(row=0, column=3, padx=(12, 0))
+
         # --- RIT ---
         # rigctld's j/J (radio.c's radio_set_rit()/radio_get_rit()) - a
         # receive-only offset, see this file's module docstring. Unlike
@@ -533,7 +577,7 @@ class Panel(tk.Tk):
         # real Hamlib rigs use - so Clear is just "J 0" spelled out as
         # its own button for a one-click reset mid-QSO.
         rit = ttk.LabelFrame(self.body, text="RIT - receive only (Hz)", padding=8)
-        rit.grid(row=3, column=0, sticky="ew", padx=8, pady=4)
+        rit.grid(row=4, column=0, sticky="ew", padx=8, pady=4)
         self.rit_display_var = tk.StringVar(value="—")
         ttk.Label(rit, textvariable=self.rit_display_var, font=("monospace", 16)).grid(
             row=0, column=0, columnspan=6, pady=(0, 6))
@@ -555,7 +599,7 @@ class Panel(tk.Tk):
 
         # --- volume ---
         vol = ttk.LabelFrame(self.body, text="Volume", padding=8)
-        vol.grid(row=4, column=0, sticky="ew", padx=8, pady=(4, 8))
+        vol.grid(row=5, column=0, sticky="ew", padx=8, pady=(4, 8))
         self.vol_var = tk.IntVar(value=50)
         self.vol_scale = ttk.Scale(vol, from_=0, to=100, orient="horizontal",
                                     variable=self.vol_var, length=280,
@@ -580,7 +624,7 @@ class Panel(tk.Tk):
         # reaching the local monitor speaker but no measurable power out,
         # consistent with this needing to go up from its 1.0 default.
         mg = ttk.LabelFrame(self.body, text="Mic Gain (TX, USB/LSB)", padding=8)
-        mg.grid(row=5, column=0, sticky="ew", padx=8, pady=(0, 8))
+        mg.grid(row=6, column=0, sticky="ew", padx=8, pady=(0, 8))
         self.micgain_var = tk.DoubleVar(value=1.0)
         self.micgain_scale = ttk.Scale(mg, from_=0.0, to=64.0, orient="horizontal",
                                          variable=self.micgain_var, length=280,
@@ -600,7 +644,7 @@ class Panel(tk.Tk):
         # function - see hamlib.c's u/U comment). The whole group is
         # disabled in DIGITAL - see set_rx_filter_gate() below.
         nf = ttk.LabelFrame(self.body, text="RX Filter", padding=8)
-        nf.grid(row=6, column=0, sticky="ew", padx=8, pady=(0, 8))
+        nf.grid(row=7, column=0, sticky="ew", padx=8, pady=(0, 8))
         # Kept for set_rx_filter_gate() below, which retitles this frame in
         # DIGITAL. The title carries the explanation rather than a separate
         # label: the panel is already ~1200px of content, and every row added
@@ -683,7 +727,7 @@ class Panel(tk.Tk):
         # drive a network write, just a bar + label kept current by
         # refresh_once()'s poll, same as the frequency readout above.
         sm = ttk.LabelFrame(self.body, text="Signal Strength (uncalibrated)", padding=8)
-        sm.grid(row=7, column=0, sticky="ew", padx=8, pady=(0, 8))
+        sm.grid(row=8, column=0, sticky="ew", padx=8, pady=(0, 8))
         self.smeter_canvas_w = 380
         self.smeter_canvas_h = 40
         self.smeter_canvas = tk.Canvas(sm, width=self.smeter_canvas_w,
@@ -697,7 +741,7 @@ class Panel(tk.Tk):
 
         # --- spectrum ---
         spec = ttk.LabelFrame(self.body, text="Spectrum", padding=8)
-        spec.grid(row=8, column=0, sticky="ew", padx=8, pady=(0, 8))
+        spec.grid(row=9, column=0, sticky="ew", padx=8, pady=(0, 8))
         self.spectrum_canvas_w = 560
         self.spectrum_canvas_h = 180
         self.spectrum_canvas = tk.Canvas(spec, width=self.spectrum_canvas_w,
@@ -738,7 +782,7 @@ class Panel(tk.Tk):
         # tone off and drops PTT after TONE_GEN_TIMEOUT_S (30 s).
         # docs/dsp_design_notes/tx_test_tones_and_alc.md.
         txt = ttk.LabelFrame(self.body, text="TX Test - dummy load or low power", padding=8)
-        txt.grid(row=9, column=0, sticky="ew", padx=8, pady=(0, 8))
+        txt.grid(row=10, column=0, sticky="ew", padx=8, pady=(0, 8))
         self.tone_var = tk.IntVar(value=0)
         for i, (label, val) in enumerate((("Off", 0), ("1 kHz tone", 1),
                                           ("Two-tone 700 + 1900 Hz", 2))):
@@ -761,7 +805,7 @@ class Panel(tk.Tk):
         # turning Mic Gain up drives harder into the ceiling and shows up
         # here instead. docs/03_tx_processing_pipeline.md, "Setting power".
         pw = ttk.LabelFrame(self.body, text="TX Power", padding=8)
-        pw.grid(row=10, column=0, sticky="ew", padx=8, pady=(0, 8))
+        pw.grid(row=11, column=0, sticky="ew", padx=8, pady=(0, 8))
         self.power_var = tk.DoubleVar(value=100.0)
         self.power_scale = ttk.Scale(pw, from_=0, to=100, orient="horizontal",
                                       variable=self.power_var, length=280,
@@ -945,13 +989,17 @@ class Panel(tk.Tk):
         ptt_reply = self.client.query("t")
         power_reply = self.client.query("l RFPOWER")
         alc_reply = self.client.query("l ALC")
+        keyer_reply = self.client.query("u KEYER")
+        wpm_reply = self.client.query("l KEYSPD")
+        padrev_reply = self.client.query("u PADREV")
         if freq_reply is None or rit_reply is None or vol_reply is None \
                 or micgain_reply is None or mode_reply is None or narrow_reply is None \
                 or fftfilt_reply is None \
                 or pitch_reply is None or width_reply is None \
                 or strength_reply is None \
                 or tone_reply is None or ptt_reply is None \
-                or power_reply is None or alc_reply is None:
+                or power_reply is None or alc_reply is None \
+                or keyer_reply is None or wpm_reply is None or padrev_reply is None:
             self.after(0, self.disconnect)
             return
         self.after(0, lambda: self.apply_freq(freq_reply))
@@ -968,6 +1016,9 @@ class Panel(tk.Tk):
         self.after(0, lambda: self.apply_ptt(ptt_reply))
         self.after(0, lambda: self.apply_power(power_reply))
         self.after(0, lambda: self.apply_alc(alc_reply))
+        self.after(0, lambda: self.apply_keyer(keyer_reply))
+        self.after(0, lambda: self.apply_wpm(wpm_reply))
+        self.after(0, lambda: self.apply_padrev(padrev_reply))
 
     def apply_freq(self, reply):
         try:
@@ -1195,6 +1246,36 @@ class Panel(tk.Tk):
         self.tone_var.set(val)
         self._syncing_tone = False
 
+    # Keyer readbacks. An older maxibitx without the keyer replies RPRT -1 to
+    # these, which doesn't parse and is ignored.
+    def apply_keyer(self, reply):
+        try:
+            idx = int(reply)
+        except ValueError:
+            return
+        if 0 <= idx < len(KEYER_MODES):
+            self._syncing_keyer = True
+            self.keyer_var.set(KEYER_MODES[idx])
+            self._syncing_keyer = False
+
+    def apply_wpm(self, reply):
+        if self.wpm_focused:
+            return  # the operator is typing a speed
+        try:
+            wpm = int(float(reply))
+        except ValueError:
+            return
+        self.wpm_var.set(str(wpm))
+
+    def apply_padrev(self, reply):
+        try:
+            on = int(reply) != 0
+        except ValueError:
+            return
+        self._syncing_padrev = True
+        self.padrev_var.set(on)
+        self._syncing_padrev = False
+
     def apply_ptt(self, reply):
         try:
             on = int(reply) != 0
@@ -1339,6 +1420,35 @@ class Panel(tk.Tk):
             return
         use_fft = 1 if self.fftfilt_var.get() else 0
         threading.Thread(target=lambda: self.client.query(f"U FFTFILT {use_fft}"),
+                          daemon=True).start()
+
+    def on_keyer_selected(self, _event=None):
+        if self._syncing_keyer or not self.client.connected():
+            return
+        idx = KEYER_MODES.index(self.keyer_var.get())
+        threading.Thread(target=lambda: self.client.query(f"U KEYER {idx}"),
+                          daemon=True).start()
+
+    def on_wpm_changed(self):
+        if not self.client.connected():
+            return
+        try:
+            wpm = int(float(self.wpm_var.get()))
+        except ValueError:
+            return  # not a number; the next poll puts the server's value back
+        wpm = max(1, min(60, wpm))
+        threading.Thread(target=lambda: self.client.query(f"L KEYSPD {wpm}"),
+                          daemon=True).start()
+
+    def on_wpm_focus_out(self, _event=None):
+        self.wpm_focused = False
+        self.on_wpm_changed()
+
+    def on_padrev_toggled(self):
+        if self._syncing_padrev or not self.client.connected():
+            return
+        on = 1 if self.padrev_var.get() else 0
+        threading.Thread(target=lambda: self.client.query(f"U PADREV {on}"),
                           daemon=True).start()
 
     def on_pitch_selected(self, _event=None):
