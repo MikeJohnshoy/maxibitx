@@ -20,7 +20,7 @@ happens to those samples once they arrive.
    [`02_rx_processing_pipeline.md`](02_rx_processing_pipeline.md))
 5. `cw_init()` / `key_input_start()` — the keyed tone, then the key jack
    and its input thread ([The key jack](#the-key-jack), below)
-6. Networking and control surfaces — HPSDR, Hamlib/rigctld, USB gadget
+6. Networking and control surfaces — Hamlib/rigctld, TCI, HPSDR, USB gadget
    (covered in
    [`04_remote_control_and_iq_output.md`](04_remote_control_and_iq_output.md))
 
