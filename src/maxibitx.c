@@ -12,6 +12,7 @@
 #include "radio_hw.h"
 #include "usb_gadget.h"
 #include "hamlib.h"
+#include "tci.h"
 #include "hw_settings.h"
 #include "cw.h"
 #include "key_input.h"
@@ -132,6 +133,19 @@ int main(int argc, char **argv) {
            HAMLIB_PORT);
   }
  
+  // The TCI server (src/interfaces/tci.c): control, receive and transmit
+  // audio, and I/Q over one WebSocket per client, for JTDX, WSJT-X Improved,
+  // loggers and Hamlib's TCI backend. Not a hard failure either; tci_port=0
+  // in hw_settings.ini turns it off.
+  if (tci_port == 0) {
+    printf("init: TCI server off (tci_port=0)\n");
+  } else if (tci_init(tci_bind, tci_port, tci_max_clients) < 0) {
+    printf("init: TCI server unavailable on TCP %d, continuing without it\n", tci_port);
+  } else {
+    printf("init: TCI server listening on TCP %d%s%s, up to %d clients\n", tci_port,
+           tci_bind[0] ? " at " : "", tci_bind, tci_max_clients);
+  }
+
   // Initialize Networking (HPSDR Protocol 1)
   if (hpsdr_init() < 0) {
     fprintf(stderr, "init: HPSDR socket bind failed\n");
@@ -233,6 +247,7 @@ int main(int argc, char **argv) {
   uac_stop();
   hpsdr_stop();
   iq_stream_stop();
+  tci_stop();
   hamlib_stop();
  
   printf("maxiBitx: shutdown complete.\n");
