@@ -43,11 +43,12 @@ the USB gadget providing an audio connection and CAT control interface (~ 1,300 
 | RX: I/Q mixing, anti-aliasing, demodulation | `vfo.c`, `antialias.c`, `rx_audio.c`, `rx_filter.c` |
 | TX: CW keying, shared FFT TX pipeline | `cw.c`, `key_input.c`, `keyer.c`, `morse.c`, `tx_pipeline.c`, `fft_filter.c` |
 | USB audio rate conversion | `decim48k.c`, `upsample48k.c` |
-| External interfaces | `interfaces/hamlib.c` (rigctld), `interfaces/hpsdr_p1.c` (HPSDR Protocol 1), `interfaces/usb_gadget.c` (USB audio + Kenwood CAT), `interfaces/iq_stream.c` (I/Q for the control panel) |
+| External interfaces | `interfaces/hamlib.c` (rigctld), `interfaces/hpsdr_p1.c` (HPSDR Protocol 1), `interfaces/usb_gadget.c` (USB audio + Kenwood CAT), `interfaces/iq_stream.c` (I/Q for the control panel), `interfaces/tci.c`, `tci_stream.c`, `tci_ws.c` (TCI: control, audio and I/Q over a WebSocket) |
 
 The DSP is bench-tested on its own (`make test-fft-filter`,
 `test-tx-pipeline`, `test-rx-filter`, `test-rx-audio`,
-`test-upsample48k`, `test-cw`, `test-key-input`, `test-keyer`), without any hardware attached.
+`test-upsample48k`, `test-cw`, `test-key-input`, `test-keyer`), and so is the TCI
+server (`test-tci-ws`, `test-tci`, over loopback), without any hardware attached.
 
 ## What works
 
@@ -62,7 +63,11 @@ The DSP is bench-tested on its own (`make test-fft-filter`,
   [`docs/03_tx_processing_pipeline.md`](docs/03_tx_processing_pipeline.md).
 - **Control:** rigctld-compatible TCP (port 4532), Kenwood TS-480 CAT
   over USB serial, HPSDR, and `tools/rigctl_panel.py` (tuning, mode,
-  volume, filters, mic gain and a live spectrum).
+  volume, filters, mic gain and a live spectrum). A TCI server (port
+  50001) carries control, receive and transmit audio and I/Q over one
+  network connection for JTDX, WSJT-X Improved, loggers and Hamlib's TCI
+  backend; it is bench-tested, including against Hamlib's own TCI client,
+  but not yet on the air.
 
 ## Building and running
 
@@ -88,7 +93,7 @@ device-mode USB port and a few kernel options - see
 | [`docs/03_tx_processing_pipeline.md`](docs/03_tx_processing_pipeline.md) | Audio source to antenna: keying/PTT, `tx_pipeline.c`, power, known limitations |
 | [`docs/04_remote_control_and_iq_output.md`](docs/04_remote_control_and_iq_output.md) | How the external interfaces are implemented |
 | [`docs/05_process_and_threading_model.md`](docs/05_process_and_threading_model.md) | Startup sequence, threads, and a map for reading `sound.c` |
-| [`docs/06_api.md`](docs/06_api.md) | The external interfaces - rigctld, I/Q streams, USB audio and CAT - for building an app on maxibitx, plus WSJT-X setup |
+| [`docs/06_api.md`](docs/06_api.md) | The external interfaces - rigctld, I/Q streams, USB audio and CAT, TCI - for building an app on maxibitx, plus WSJT-X setup |
 | [`docs/07_build_and_deployment.md`](docs/07_build_and_deployment.md) | Build, kernel/overlay dependencies, deployment |
 | [`docs/08_troubleshooting_and_bringup.md`](docs/08_troubleshooting_and_bringup.md) | Hardware bring-up gotchas |
 | [`docs/09_faq.md`](docs/09_faq.md) | Common questions: where it came from, why the design is the way it is, ALC, the interfaces, what's not done |
