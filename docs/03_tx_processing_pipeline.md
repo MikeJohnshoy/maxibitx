@@ -115,9 +115,10 @@ for why). Who calls it:
   in straight-key mode it follows either contact; as a bug, ultimatic or
   iambic A/B keyer it times dots and dashes at `L KEYSPD` WPM (1-60),
   exactly `T` and `3T` with `T` spaces. It also sends text (rigctld `b`,
-  CAT `KY`, the panel), with `3T` between characters and `7T` between
-  words; touching the key or paddle stops the text after the element
-  being sent. In CW and CWR that keys the transmitter with semi break-in:
+  CAT `KY`, the panel, TCI's `cw_macros` and `cw_msg`), with `3T` between
+  characters and `7T` between words; touching the key or paddle stops the
+  text after the element being sent. TCI's terminal mode
+  (`cw_hold_tx()`) holds TX on after its text ends, until turned off. In CW and CWR that keys the transmitter with semi break-in:
   a hang timer holds TX through the gaps the keyer leaves so the relay
   doesn't chatter - `CW_HANG_POLLS` (~300 ms) for a straight key, and at
   least a word space (7 dits) for a paddle mode or text, so TX doesn't
@@ -522,8 +523,8 @@ calibrated — that is still an open item — or about whether
   [`01_hardware_init_and_control.md`](01_hardware_init_and_control.md).
 - **Remote PTT in CW sends no carrier** (see "Keying and PTT") unless
   the test-tone generator is on. CW from a computer goes as text instead:
-  rigctld `b`, CAT `KY`, or the control panel's text line, sent by the
-  keyer. There is no remote keying of individual elements.
+  rigctld `b`, CAT `KY`, TCI's `cw_macros`/`cw_msg`, or the control
+  panel's text line, sent by the keyer. There is no remote keying of individual elements.
 - **Voice levels uncalibrated.** The limiter holds the peak, but real
   speech hasn't been checked on a wattmeter and `mic_tx_gain`'s best
   default isn't settled (`ARCHITECTURE.md` §9, §10 step 10).
