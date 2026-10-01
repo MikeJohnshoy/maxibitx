@@ -117,6 +117,7 @@ static int hang_counter = 0;   // polls remaining before TX releases
 static int text_in_burst = 0;  // the keyer sent text during this transmission
 static pthread_mutex_t tx_lock = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic int keying_enabled = 1; // cleared by cw_audio_stopped()
+static _Atomic int tx_hold = 0;        // cw_hold_tx()
 
 // The block being generated: keyer.c's key value for each sample, which
 // cw_get_sample() follows.
@@ -148,6 +149,7 @@ void cw_init(void) {
     key_down = 0;
     atomic_store(&tx_active, 0);
     atomic_store(&keying_enabled, 1);
+    atomic_store(&tx_hold, 0);
     hang_counter = 0;
     key_block_len = sample_index = 0;
     contacts_closed = 0;
@@ -238,6 +240,12 @@ void cw_text_queued(void) {
     cw_key_closed();
 }
 
+void cw_hold_tx(int hold) {
+    atomic_store(&tx_hold, hold != 0);
+    if (hold)
+        cw_key_closed();
+}
+
 // The hang time in polls of n samples: CW_HANG_POLLS, or a word space at
 // the keyer's speed if that is longer and the keyer is timing the gaps - a
 // paddle mode, or text - so TX doesn't drop between characters or words.
@@ -304,7 +312,7 @@ void cw_poll_key(int64_t capture_ns, int n) {
         int text = keyer_text_busy();
         if (text)
             text_in_burst = 1;
-        if (any_down || text) {
+        if (any_down || text || atomic_load(&tx_hold)) {
             tx_start(1);
             hang_counter = hang_polls(n);
         } else if (atomic_load(&tx_active)) {
@@ -318,9 +326,10 @@ void cw_poll_key(int64_t capture_ns, int n) {
         return;
     }
 
-    // Outside CW and CWR text has nowhere to go.
+    // Outside CW and CWR text has nowhere to go, and nothing holds TX.
     if (keyer_text_busy())
         keyer_stop_text();
+    atomic_store(&tx_hold, 0);
     if (mode == RADIO_MODE_USB || mode == RADIO_MODE_LSB) {
         // Mic PTT on the ring: TX follows the switch, no hang timer (as
         // sbitx does on the same GPIO).
