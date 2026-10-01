@@ -48,6 +48,12 @@ void cw_audio_stopped(void);
 // sequence starts before the first element does.
 void cw_text_queued(void);
 
+// TCI's terminal mode: while held, CW TX stays on after text ends, as if
+// the key were down, until released - then the hang time runs as usual.
+// Holding requests TX at once. Only CW and CWR hold; in any other mode the
+// hold is dropped. Any thread.
+void cw_hold_tx(int hold);
+
 // True while cw.c has TX asserted, in any mode. sound.c checks
 // it before pulling TX audio (this tone in CW, the mic in USB/LSB); remote
 // PTT paths check it so the local key wins.
