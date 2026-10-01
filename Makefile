@@ -47,7 +47,8 @@ LDFLAGS := -lm -lasound -lpthread -ldl -lfftw3f
 SRC := src/maxibitx.c src/radio.c src/radio_hw.c src/interfaces/hpsdr_p1.c src/interfaces/usb_gadget.c src/i2c.c \
      src/si5351v2.c src/sound.c src/vfo.c src/interfaces/hamlib.c src/hw_settings.c src/antialias.c src/decim48k.c src/cw.c \
      src/rx_audio.c src/gpio.c src/interfaces/iq_stream.c src/fft_filter.c src/tx_pipeline.c src/rx_filter.c src/upsample48k.c src/tone_gen.c \
-     src/key_input.c src/$(KEYER).c src/morse.c
+     src/key_input.c src/$(KEYER).c src/morse.c src/interfaces/tci.c src/interfaces/tci_stream.c \
+     src/interfaces/tci_ws.c
 OBJ := $(SRC:.c=.o)
 
 all: maxibitx
@@ -78,7 +79,7 @@ check-filters:
 	python3 tools/gen_narrow_filters.py --check
 
 clean:
-	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw test-key-input test-keyer test-keyer-straight \
+	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw test-key-input test-keyer test-keyer-straight test-tci-ws test-tci \
 		src/fft_filter.o src/fft_filter_test.o src/tx_pipeline.o src/tx_pipeline_test.o \
 		src/rx_filter.o src/rx_filter_test.o src/rx_audio_test.o src/rx_audio_impulse_test.o src/upsample48k_test.o
 
@@ -179,3 +180,19 @@ test-keyer: src/keyer.c src/keyer.h src/morse.c src/morse.h src/keyer_test.c src
 
 test-keyer-straight: src/keyer_straight.c src/keyer.h src/morse.c src/morse.h src/keyer_test.c src/key_input.h tools/keyer_study/keyer_spec_model.c
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Itools/keyer_study src/keyer_straight.c src/morse.c src/keyer_test.c -o $@ -lpthread
+
+# The TCI server, twice, over loopback with no radio. test-tci-ws: tci_ws.c's
+# WebSocket server alone - the RFC 6455 accept vector, handshake, framing,
+# close, protocol errors, the client limit, the send queue's drop policy.
+# test-tci: the whole server with the radio stubbed, driven by scripted
+# client sessions (JTDX's and Hamlib's start-up and rules, echoes, PTT, and
+# every stream format). `./test-tci --serve [port]` runs that stubbed server
+# with a test tone, for trying a client without a radio. See
+# docs/dsp_design_notes/tci_design_study.md §13.
+TCI_TEST_HDRS := src/interfaces/tci.h src/interfaces/tci_ws.h src/interfaces/tci_stream.h src/interfaces/ws_test_client.h
+
+test-tci-ws: src/interfaces/tci_ws.c src/interfaces/tci_ws_test.c $(TCI_TEST_HDRS)
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces src/interfaces/tci_ws.c src/interfaces/tci_ws_test.c -o $@ -lpthread
+
+test-tci: src/interfaces/tci.c src/interfaces/tci_stream.c src/interfaces/tci_ws.c src/interfaces/tci_test.c $(TCI_TEST_HDRS)
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces src/interfaces/tci.c src/interfaces/tci_stream.c src/interfaces/tci_ws.c src/interfaces/tci_test.c -o $@ -lpthread -lm
