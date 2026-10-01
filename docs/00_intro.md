@@ -20,7 +20,9 @@ then serves three kinds of clients:
   demodulation and filtering.
 - Digital-mode and logging software such as WSJT-X, which sees the
   radio as a USB sound card plus a USB serial port (Kenwood CAT)
-  through the Pi's USB gadget.
+  through the Pi's USB gadget - or, for programs that speak TCI (JTDX,
+  WSJT-X Improved, loggers), control, audio and I/Q over one network
+  connection.
 - Remote control: a rigctld-compatible TCP port, used by
   `tools/rigctl_panel.py` (a small desktop control panel with a
   spectrum display) and Hamlib clients.
