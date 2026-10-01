@@ -31,8 +31,8 @@ goes through a narrow, documented interface
 ([`docs/06_api.md`](docs/06_api.md)).
 
 The whole daemon is about 6,300 lines of C in 21 files; a big part of that is 
-in the external interfaces.  The largest is
-the USB gadget providing an audio connection and CAT control interface (~ 1,300 lines).
+in a collection of external interfaces. These provide a variety of ways to connect
+applications to maxibitx.
 
 | Job | Files |
 |---|---|
