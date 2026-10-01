@@ -11,6 +11,8 @@ test-cw
 test-key-input
 test-keyer
 test-keyer-straight
+test-tci-ws
+test-tci
 src/*.o
 *.o
 
