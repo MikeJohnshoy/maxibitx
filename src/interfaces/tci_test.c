@@ -6,9 +6,11 @@
 // (lowercase, one command per message, start before ready, within 1.5 s),
 // echoes of every set to every client, reads answered to the asker alone,
 // Hamlib's uppercase commands, the PTT rules, receive audio in each format,
-// rate and channel count, I/Q at 96 and 48 kHz, and transmit audio pulled
-// with TX_CHRONO the way JTDX answers it. The harness plays the audio
-// thread itself.
+// rate and channel count, I/Q at 96 and 48 kHz, transmit audio pulled
+// with TX_CHRONO the way JTDX answers it, and CW text - cw_macros with
+// prosigns and speed changes, cw_msg with callsign corrections, stopping,
+// terminal mode, a paddle taking over - read back from what the real keyer
+// keys. The harness plays the audio thread itself.
 //
 // Build and run: make test-tci
 // ./test-tci --serve [port] instead runs the stubbed server with a test
@@ -22,6 +24,7 @@
 #include "cw.h"
 #include "hw_settings.h"
 #include "keyer.h"
+#include "morse.h"
 #include "radio.h"
 #include "rx_audio.h"
 #include "sound.h"
@@ -30,6 +33,7 @@
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <time.h>
 
@@ -38,7 +42,7 @@
 int freq_hdr = 14074000;
 int in_tx;
 static enum radio_mode stub_mode = RADIO_MODE_USB;
-static int stub_rit, stub_rit_on, stub_volume = 67, stub_wpm = 20, stub_tx_allowed = 1;
+static int stub_rit, stub_rit_on, stub_volume = 67, stub_tx_allowed = 1;
 static int stub_key_holds_tx, stub_verbose;
 static double stub_power = 1.0;
 
@@ -74,8 +78,9 @@ int hw_settings_tx_allowed(int f) {
   return stub_tx_allowed;
 }
 int cw_tx_active(void) { return stub_key_holds_tx; }
-int keyer_get_wpm(void) { return stub_wpm; }
-int keyer_set_wpm(int w) { return stub_wpm = w; }
+static int stub_text_queued, stub_hold;
+void cw_text_queued(void) { stub_text_queued++; }
+void cw_hold_tx(int h) { stub_hold = h; }
 int rx_audio_get_volume(void) { return stub_volume; }
 void rx_audio_set_volume(int p) { stub_volume = p; }
 int rx_audio_get_strength_db(void) { return 0; }
@@ -349,7 +354,7 @@ static void test_control(void) {
   CHECK(expect(a, "rit_enable:0,true;", 1000) && stub_rit_on, "rit_enable");
   send_text(a, "cw_macros_speed:25;");
   gather(a, 200, got, sizeof(got));
-  CHECK(strstr(got, "cw_macros_speed:25;") && strstr(got, "cw_keyer_speed:25;") && stub_wpm == 25,
+  CHECK(strstr(got, "cw_macros_speed:25;") && strstr(got, "cw_keyer_speed:25;") && keyer_get_wpm() == 25,
         "speed 25 WPM, both speeds echoed");
 
   send_text(a, "split_enable:false;");
@@ -641,6 +646,284 @@ static void test_tx(void) {
   CHECK(expect(a, "trx:0,false;", 500), "and the others are told");
 }
 
+/* ---- CW text, read back from the keyer ----------------------------------- */
+
+// The keyer, run in real time as the audio thread runs it; inject asks for a
+// dot paddle tap in the next block.
+static uint8_t cw_key[96000 * 40];
+static atomic_long cw_pos;
+static atomic_int cw_run, cw_inject;
+static pthread_t cw_thread;
+
+static void *keyer_main(void *arg) {
+  (void)arg;
+  struct timespec next;
+  clock_gettime(CLOCK_MONOTONIC, &next);
+  while (atomic_load(&cw_run)) {
+    next.tv_nsec += 10666667;
+    if (next.tv_nsec >= 1000000000L) {
+      next.tv_nsec -= 1000000000L;
+      next.tv_sec++;
+    }
+    clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
+    struct key_event ev[2];
+    int k = 0;
+    if (atomic_exchange(&cw_inject, 0)) {
+      ev[k++] = (struct key_event){.offset = 100, .contact = KEY_TIP, .paddle = KEY_DOT, .closed = 1};
+      ev[k++] = (struct key_event){.offset = 400, .contact = KEY_TIP, .paddle = KEY_DOT, .closed = 0};
+    }
+    long at = atomic_load(&cw_pos);
+    if (at + 1024 <= (long)sizeof(cw_key)) {
+      keyer_run_block(ev, k, cw_key + at, 1024);
+      atomic_store(&cw_pos, at + 1024);
+    }
+  }
+  return NULL;
+}
+
+// Reads key[from..to) back as text. A mark is a dash if longer than twice
+// base_T (speeds stay within a step of the base); a gap under 2T of the mark
+// before it joins elements, under 5T ends a character, longer ends a word.
+// Prosigns read as <XX>. Each character's speed, from its first element,
+// goes in wpm[] (spaces get 0).
+static int decode(long from, long to, long base_T, char *out, int max, int *wpm) {
+  int no = 0, nw = 0;
+  char pat[16];
+  int np = 0, char_wpm = 0;
+  long i = from;
+  while (i < to && !cw_key[i])
+    i++;
+  while (i < to) {
+    long s0 = i;
+    while (i < to && cw_key[i])
+      i++;
+    long len = i - s0;
+    int dash = len > 2 * base_T;
+    long T = dash ? len / 3 : len;
+    if (np == 0)
+      char_wpm = (int)((115200.0 / T) + 0.5);
+    if (np < 15)
+      pat[np++] = dash ? '-' : '.';
+    pat[np] = 0;
+    long g = i;
+    while (i < to && !cw_key[i])
+      i++;
+    long gap = i - g;
+    if (i < to && gap < 2 * T)
+      continue;
+    const char *name = NULL;
+    char c = '?';
+    for (int k = 32; k < MORSE_PROSIGN_END; k++)
+      if (morse_pattern((unsigned char)k) && !strcmp(morse_pattern((unsigned char)k), pat)) {
+        c = (char)k;
+        name = morse_prosign_name((unsigned char)k);
+        break;
+      }
+    if (name && no + 4 < max) {
+      no += snprintf(out + no, (size_t)(max - no), "<%s>", name);
+    } else if (no < max - 1) {
+      out[no++] = c;
+    }
+    wpm[nw++] = char_wpm;
+    if (i < to && gap >= 5 * T && no < max - 1) {
+      out[no++] = ' ';
+      wpm[nw++] = 0;
+    }
+    np = 0;
+  }
+  out[no] = 0;
+  return nw;
+}
+
+// 1 if every mark in key[from..to) is T or 3T and every space between marks
+// T, 3T or 7T, exactly.
+static int timing_exact(long from, long to, long T) {
+  long i = from;
+  while (i < to && !cw_key[i])
+    i++;
+  while (i < to) {
+    long s0 = i;
+    while (i < to && cw_key[i])
+      i++;
+    if (i - s0 != T && i - s0 != 3 * T)
+      return 0;
+    long g = i;
+    while (i < to && !cw_key[i])
+      i++;
+    if (i < to && i - g != T && i - g != 3 * T && i - g != 7 * T)
+      return 0;
+  }
+  return 1;
+}
+
+// Waits until the keyer has sent everything and been idle for 300 ms.
+static void wait_cw_idle(int timeout_ms) {
+  long long end = now_ms() + timeout_ms, quiet_since = now_ms();
+  while (now_ms() < end) {
+    if (keyer_text_busy() || keyer_text_queued())
+      quiet_since = now_ms();
+    else if (now_ms() - quiet_since > 300)
+      return;
+    usleep(10000);
+  }
+}
+
+static void test_cw(void) {
+  printf("CW text\n");
+  char got[256], txt[4096];
+  int wpm[128];
+  const long T40 = (115200 + 20) / 40;
+  stub_mode = RADIO_MODE_CW;
+  send_text(a, "cw_macros_speed:40;");
+  expect(a, "cw_macros_speed:40;", 500);
+  keyer_reset();
+  atomic_store(&cw_pos, 0);
+  atomic_store(&cw_run, 1);
+  pthread_create(&cw_thread, NULL, keyer_main, NULL);
+  drain(a);
+
+  long p0 = atomic_load(&cw_pos);
+  int queued_before = stub_text_queued;
+  send_text(a, "cw_macros:0,tu >5nn< |sk|;");
+  wait_cw_idle(8000);
+  int n = decode(p0, atomic_load(&cw_pos), T40, got, sizeof(got), wpm);
+  CHECK(!strcmp(got, "TU 5NN <SK>") && stub_text_queued > queued_before,
+        "cw_macros:0,tu >5nn< |sk|; keys \"%s\" and asks for TX", got);
+  CHECK(n == 8 && wpm[0] == 40 && wpm[1] == 40 && wpm[3] == 45 && wpm[5] == 45 && wpm[7] == 40,
+        "speeds %d %d / %d %d %d / %d WPM: > raises 5NN by 5, < lowers it back", wpm[0], wpm[1],
+        wpm[3], wpm[4], wpm[5], wpm[7]);
+  p0 = atomic_load(&cw_pos);
+  send_text(a, "cw_macros:0,e;");
+  wait_cw_idle(4000);
+  decode(p0, atomic_load(&cw_pos), T40, got, sizeof(got), wpm);
+  CHECK(!strcmp(got, "E") && wpm[0] == 40, "the next macro starts at the keyer's speed again");
+
+  p0 = atomic_load(&cw_pos);
+  send_text(a, "cw_msg:0,R,K1$2,5;");
+  send_text(a, "cw_msg:W1AW;");
+  CHECK(expect(a, "callsign_send:W1AW;", 8000), "callsign_send:W1AW; once the callsign is out");
+  send_text(a, "cw_msg:XX9X;"); // too late: ignored
+  wait_cw_idle(8000);
+  decode(p0, atomic_load(&cw_pos), T40, got, sizeof(got), wpm);
+  CHECK(!strcmp(got, "R W1AW W1AW 5"),
+        "cw_msg:0,R,K1$2,5; corrected at once to W1AW keys \"%s\"; a later correction is ignored",
+        got);
+  CHECK(timing_exact(p0, atomic_load(&cw_pos), T40),
+        "fed a character at a time, every mark and space is still exact");
+
+  p0 = atomic_load(&cw_pos);
+  send_text(a, "cw_msg:0,_,AB1CD,_;");
+  usleep(290000); // A and most of the gap after it, at 40 WPM
+  send_text(a, "cw_msg:AB9XY;");
+  wait_cw_idle(8000);
+  decode(p0, atomic_load(&cw_pos), T40, got, sizeof(got), wpm);
+  CHECK(strlen(got) == 5 && !strncmp(got, "AB", 2) && !strcmp(got + 3, "XY"),
+        "a correction mid-callsign changes what isn't yet started: \"%s\"", got);
+  CHECK(expect(a, "callsign_send:AB9XY;", 1000), "and callsign_send reports the corrected one");
+
+  p0 = atomic_load(&cw_pos);
+  send_text(a, "cw_msg:0,R,K1,5;");
+  send_text(a, "cw_macros:0, EE;");
+  wait_cw_idle(8000);
+  decode(p0, atomic_load(&cw_pos), T40, got, sizeof(got), wpm);
+  CHECK(!strcmp(got, "R K1 5 EE"), "cw_macros during a cw_msg waits for it: \"%s\"", got);
+
+  p0 = atomic_load(&cw_pos);
+  send_text(a, "cw_macros:0,TTTTTTTTTT;");
+  usleep(400000);
+  send_text(a, "cw_msg:0,_,K1,_;");
+  wait_cw_idle(8000);
+  decode(p0, atomic_load(&cw_pos), T40, got, sizeof(got), wpm);
+  size_t nt = strspn(got, "T");
+  CHECK(nt >= 2 && nt < 10 && !strcmp(got + nt, " K1"),
+        "cw_msg during cw_macros stops it, a word space before: \"%s\"", got);
+
+  p0 = atomic_load(&cw_pos);
+  send_text(a, "cw_macros:0,EEEEEEEEEE;");
+  usleep(300000);
+  send_text(a, "cw_macros_stop;");
+  wait_cw_idle(4000);
+  decode(p0, atomic_load(&cw_pos), T40, got, sizeof(got), wpm);
+  nt = strspn(got, "E");
+  CHECK(nt >= 2 && nt < 10 && got[nt] == 0, "cw_macros_stop: %zu of 10 sent", nt);
+
+  drain(a);
+  send_text(a, "cw_terminal:true;");
+  CHECK(expect(a, "cw_terminal:true;", 500), "cw_terminal:true; echoed");
+  send_text(a, "cw_macros:0,EE <;"); // a trailing space and code don't delay it
+  long long t0 = now_ms();
+  CHECK(expect(a, "cw_macros_empty;", 3000) && stub_hold == 1 && now_ms() - t0 < 200,
+        "terminal mode: TX held, cw_macros_empty; after %lld ms (as the last E starts)",
+        now_ms() - t0);
+  wait_cw_idle(4000);
+  send_text(a, "cw_macros:0,EEEEEEEEEE;");
+  usleep(150000);
+  atomic_store(&cw_inject, 1);
+  wait_cw_idle(4000);
+  usleep(50000);
+  CHECK(stub_hold == 0, "a paddle tap in terminal mode ends the TX hold");
+  send_text(a, "cw_terminal:0,false;");
+  CHECK(expect(a, "cw_terminal:false;", 500) && stub_hold == 0, "cw_terminal:0,false; releases it");
+  send_text(a, "cw_macros:0,E;");
+  wait_cw_idle(4000);
+  gather(a, 200, txt, sizeof(txt));
+  CHECK(!strstr(txt, "cw_macros_empty"), "no cw_macros_empty outside terminal mode");
+
+  p0 = atomic_load(&cw_pos);
+  send_text(a, "cw_msg:0,TEST,K1,TU;");
+  send_text(a, "cw_macros:0, EE;");
+  usleep(400000);
+  atomic_store(&cw_inject, 1); // the operator touches the paddle
+  wait_cw_idle(4000);
+  usleep(300000);
+  decode(p0, atomic_load(&cw_pos), T40, got, sizeof(got), wpm);
+  CHECK(strncmp(got, "TEST", 4) && !strstr(got, "K1") && !strstr(got, "EE"),
+        "a paddle tap ends the message and what waited behind it: \"%s\"", got);
+
+  p0 = atomic_load(&cw_pos);
+  send_text(a, "cw_msg:0,CQ,K1;");
+  wait_cw_idle(8000);
+  decode(p0, atomic_load(&cw_pos), T40, got, sizeof(got), wpm);
+  CHECK(!strcmp(got, "CQ K1"), "cw_msg without a suffix field: \"%s\"", got);
+  p0 = atomic_load(&cw_pos);
+  send_text(a, "cw_msg:0,TU,_,73;");
+  wait_cw_idle(8000);
+  decode(p0, atomic_load(&cw_pos), T40, got, sizeof(got), wpm);
+  CHECK(!strcmp(got, "TU 73"), "cw_msg with an empty callsign: \"%s\"", got);
+  queued_before = stub_text_queued;
+  send_text(a, "cw_macros:0,#;");
+  usleep(100000);
+  CHECK(stub_text_queued == queued_before && !keyer_text_busy(),
+        "a macro with nothing to send doesn't ask for TX");
+
+  // A message replacing a macro that fills the keyer's queue waits for room
+  // rather than being refused.
+  static char big[600];
+  snprintf(big, sizeof(big), "cw_macros:0,%0511d;", 0);
+  for (char *q = big + 12; *q == '0'; q++)
+    *q = 'E';
+  p0 = atomic_load(&cw_pos);
+  send_text(a, big);
+  usleep(50000);
+  send_text(a, "cw_msg:0,R,K1,_;");
+  wait_cw_idle(8000);
+  decode(p0, atomic_load(&cw_pos), T40, got, sizeof(got), wpm);
+  nt = strspn(got, "E");
+  CHECK(nt >= 1 && nt < 20 && !strcmp(got + nt, " R K1"),
+        "a cw_msg behind a full queue still goes: \"%s\"", got);
+
+  stub_mode = RADIO_MODE_USB;
+  int before = keyer_text_queued() + keyer_text_busy();
+  send_text(a, "cw_macros:0,EEE;");
+  usleep(100000);
+  CHECK(before == 0 && !keyer_text_busy() && !keyer_text_queued(), "cw_macros in USB is ignored");
+  stub_mode = RADIO_MODE_CW;
+
+  atomic_store(&cw_run, 0);
+  pthread_join(cw_thread, NULL);
+  drain(a);
+}
+
 static void test_counts(void) {
   CHECK(text_seen > 100 && text_bad == 0,
         "all %d text messages: one command, lowercase keyword%s%s", text_seen,
@@ -663,8 +946,9 @@ static int serve(int port) {
     return 1;
   }
   printf("stubbed TCI server on TCP %d: receive audio is a 1000 Hz tone, I/Q a tone 1500 Hz\n"
-         "above the dial; Ctrl-C stops\n", port);
-  int ph_a = 0, ph_iq = 0, tx_blocks = 0;
+         "above the dial, CW text is printed as the keyer keys it; Ctrl-C stops\n", port);
+  int ph_a = 0, ph_iq = 0, tx_blocks = 0, idle_blocks = 0;
+  long burst_from = -1;
   double tx_sum = 0;
   struct timespec next;
   clock_gettime(CLOCK_MONOTONIC, &next);
@@ -698,6 +982,27 @@ static int serve(int port) {
       tci_tx_audio_idle();
       tx_blocks = 0;
     }
+
+    // The keyer, as the audio thread runs it; each burst of CW text is
+    // printed once the keyer has been idle a third of a second.
+    long at = atomic_load(&cw_pos);
+    if (at + 1024 > (long)sizeof(cw_key)) {
+      at = 0;
+      burst_from = -1;
+    }
+    keyer_run_block(NULL, 0, cw_key + at, 1024);
+    atomic_store(&cw_pos, at + 1024);
+    if (keyer_text_busy()) {
+      if (burst_from < 0)
+        burst_from = at;
+      idle_blocks = 0;
+    } else if (burst_from >= 0 && ++idle_blocks > 30) {
+      char text[512];
+      int wpm[256], w = keyer_get_wpm();
+      decode(burst_from, at, (115200 + w / 2) / w, text, sizeof(text), wpm);
+      printf("keyed: %s\n", text);
+      burst_from = -1;
+    }
   }
   tci_stop();
   return 0;
@@ -716,6 +1021,7 @@ int main(int argc, char **argv) {
   test_rx_audio();
   test_iq();
   test_tx();
+  test_cw();
   test_counts();
   close(a);
   tci_stop();
