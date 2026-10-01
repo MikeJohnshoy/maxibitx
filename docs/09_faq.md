@@ -454,6 +454,14 @@ to subscribe, re-send within five seconds to stay subscribed, and
 packets of 128 I/Q pairs arrive with a four-byte magic and a sequence
 number.
 
+**TCI** (TCP 50001) exists because the digital-mode programs and loggers
+that support Expert Electronics' TCI - JTDX, WSJT-X Improved, MSHV, Log4OM
+and others, and Hamlib's TCI backend - get control, receive and transmit
+audio, and I/Q over one network connection, with no USB cable, virtual
+audio cable or COM port. It complements HPSDR rather than replacing it:
+SparkSDR and Thetis are TCI servers themselves, not clients
+([`dsp_design_notes/tci_design_study.md`](dsp_design_notes/tci_design_study.md)).
+
 The underlying principle is in the README: no UI in the process, and
 everything a display or controller needs goes through a documented
 interface. Several interfaces is the cost of that, and it's a much lower
@@ -589,7 +597,8 @@ would be good at.
 
 Run the bench tests — `make test-fft-filter`, `test-tx-pipeline`,
 `test-rx-filter`, `test-rx-audio`, `test-upsample48k`, `test-cw`,
-`test-key-input`, `test-keyer`. They link the DSP
+`test-key-input`, `test-keyer`, and for the TCI server `test-tci-ws` and
+`test-tci`. They link the DSP
 files without any hardware code, so they run anywhere, and they print
 measured numbers against expected ones rather than just passing or
 failing. `make check-comments` flags comments that have drifted into
@@ -631,8 +640,9 @@ The current list, from
 design notes: two-tone power and IMD measurements to establish this
 board's honest rated output; voice power never checked on a wattmeter;
 `POWER` and `ALC` bench-tested but not yet exercised against a running
-daemon; remote element keying and remote voice audio absent (CW text
-works); carrier placement a
+daemon; remote element keying absent (CW text works); CW text over TCI
+not built yet, and TCI's audio paths not yet tried on the air; carrier
+placement a
 few Hz low from whole-bin rotation (6.25 Hz on SSB, 9.4 Hz on CW); and
 the pipeline carrying about a block of the previous transmission in its
 overlap-save history, with nothing resetting it between bursts.
