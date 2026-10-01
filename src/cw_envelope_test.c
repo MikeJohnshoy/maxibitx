@@ -17,7 +17,8 @@
 //     takes the edge, released once after the fall and the hang; the ring
 //     is PTT in USB; DIGITAL releases a TX the key started; nothing keys
 //     after cw_audio_stopped(); queued text requests TX at once and holds it
-//     through a 5 WPM word space.
+//     through a 5 WPM word space; cw_hold_tx() holds TX past the hang until
+//     released, and is dropped outside CW.
 //
 //   make test-cw && ./test-cw
 //
@@ -373,6 +374,40 @@ int main(void) {
   check(marks_seen == 2 && tx_on_calls == 1 && tx_off_calls == 1 && tx_off_block > 203 + 150,
         msg);
   keyer_set_wpm(KEYER_WPM_DEFAULT);
+
+  printf("terminal hold (cw_hold_tx)\n");
+  cw_init();
+  key_input_arm(0, T0, 3, cw_key_closed);
+  tx_on_calls = tx_off_calls = 0;
+  in_audio_thread = 0;
+  keyer_send_text("E");
+  cw_hold_tx(1);
+  check(tx_on_calls == 1 && cw_tx_active(), "holding requests TX at once");
+  in_audio_thread = 1;
+  for (long k = 1; k < 300; k++) { // E and the hang are over by block 60
+    cur_block = k;
+    cw_poll_key(capture_ns(k, 0), BLOCK);
+  }
+  check(cw_tx_active() && tx_off_calls == 0, "held long past the text and the hang");
+  cw_hold_tx(0);
+  long released_at = -1;
+  for (long k = 300; k < 400 && released_at < 0; k++) {
+    cur_block = k;
+    cw_poll_key(capture_ns(k, 0), BLOCK);
+    if (!cw_tx_active())
+      released_at = k;
+  }
+  snprintf(msg, sizeof msg, "released, then the hang runs out: off at block %ld", released_at);
+  check(released_at >= 300 + 28 && released_at < 400 && tx_off_calls == 1, msg);
+  cw_hold_tx(1);
+  mode = RADIO_MODE_USB;
+  cw_poll_key(capture_ns(400, 0), BLOCK);
+  mode = RADIO_MODE_CW;
+  for (long k = 401; k < 500; k++) {
+    cur_block = k;
+    cw_poll_key(capture_ns(k, 0), BLOCK);
+  }
+  check(!cw_tx_active(), "a block outside CW drops the hold");
 
   printf("CW to DIGITAL inside the hang time\n");
   e[0] = (struct edge){(int64_t)(50.0 * MS), KEY_RING, 1};
