@@ -211,3 +211,25 @@ means the kernel's queue of edges overflowed before the thread read it,
 which should never happen with a real key; `key: edge queue full` means
 the audio thread stopped taking edges. Either way the key's state is
 recovered, but that element's timing isn't.
+
+## TCI clients
+
+**Nothing connects.** The console says `init: TCI server listening on TCP
+50001` at start-up, or why not (`tci_port=0`, or the port already in
+use). Check the client from a laptop with `tools/tci_client.py --host
+<pi>`, which also checks the start-up exchange JTDX and Hamlib depend on.
+A client that finds all the slots full gets HTTP 503 and the console
+says `tci: connection from ... refused`; raise `tci_max_clients`.
+
+**Seeing what a client sends.** `MAXIBITX_TCI_TRACE=1 ./maxibitx` prints
+every TCI command in each direction (`tci: <- 0 vfo:0,0,14074000;`,
+`tci: -> all ...`), with the client's slot number. Commands maxibitx
+doesn't know are ignored silently, so a client waiting on a reply that
+never comes shows up here as a command with no answer.
+
+**Transmitting.** The console reports each TCI PTT and where its audio
+comes from: `tci: client 0 TX on (audio from its TCI stream)` is what
+JTDX and WSJT-X Improved should produce (they key with source `tci`).
+`audio from the USB gadget` or `no TCI stream` means the client keyed
+without it - check its TCI audio setting. A client that disconnects while
+transmitting releases TX and says so.
