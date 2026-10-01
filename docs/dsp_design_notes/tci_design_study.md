@@ -1,10 +1,10 @@
 # TCI server: a design study
 
-Status: **first delivery implemented** - steps 1, 2, 3 and 5 of §13 (the
-WebSocket server, control, receive and transmit audio, I/Q), as decided in
-§14 and described as built in §15; bench-tested (§16), including against
-Hamlib's own TCI client, but **not yet on the air**. CW over TCI (step 4)
-and NCM (step 6) are not built. Written before any code,
+Status: **implemented** - steps 1, 2, 3 and 5 of §13 (the WebSocket
+server, control, receive and transmit audio, I/Q), as decided in §14 and
+described as built in §15, then step 4, CW over TCI (§17); bench-tested
+(§16), including against Hamlib's own TCI client, but **not yet on the
+air**. NCM (step 6) is not built. Written before any code,
 as the keyer's was ([`cw_keyer_design_study.md`](cw_keyer_design_study.md)),
 to find out whether a TCI server fits maxibitx, what it has to do to work
 with the programs that would actually connect to it, and in what order to
@@ -559,9 +559,8 @@ proposed:
 - **Settings** (§9): `tci_port`, `tci_max_clients` (1-16) and `tci_bind`
   as proposed; they are read from `hw_settings.ini`, which is left as it
   is, so the defaults apply until a key is added.
-- **Not built:** CW over TCI (§8; `cw_macros`, `cw_msg` and
-  `cw_macros_stop` are ignored), NCM (§11), 192/384 kHz I/Q, a second
-  receiver, the line-out stream.
+- **Not built:** NCM (§11), 192/384 kHz I/Q, a second receiver, the
+  line-out stream. CW over TCI followed as step 4 (§17).
 
 ## 16. Testing, as done
 
@@ -580,8 +579,8 @@ On the bench, over loopback, with no radio:
   the old id refused; and a client that stops reading (binary frames
   dropped past 2 MB queued, text still accepted). Clean under
   ThreadSanitizer and AddressSanitizer.
-- **`make test-tci`** (61 checks), the whole server with the radio
-  stubbed: the start-up burst as JTDX and Hamlib see it (33 messages,
+- **`make test-tci`** (83 checks), the whole server with the radio
+  stubbed but the real keyer: the start-up burst as JTDX and Hamlib see it (33 messages,
   under 5 ms, protocol then device first, `start;` before `ready;`);
   every text message received in the run checked for one command and a
   lowercase keyword; echoes to every client, reads to the asker alone,
@@ -595,8 +594,10 @@ On the bench, over loopback, with no radio:
   and delivered in order; the pacing; a late answer kept from the next
   transmission; and the PTT rules - Hamlib's `Vac` source, TX released
   elsewhere, refusal outside the bands, the local key, a second client's
-  trx ignored while the first holds TX, a disconnect while transmitting. No findings under AddressSanitizer; ThreadSanitizer
-  reports only the harness's own writes to its stub radio state.
+  trx ignored while the first holds TX, a disconnect while transmitting;
+  and CW text, read back from what the keyer keys (§17). No findings
+  under AddressSanitizer; ThreadSanitizer reports only the harness's own
+  writes to its stub radio state.
 - **Hamlib's own TCI client.** Hamlib master (September 2026) built from
   source, its `rigctl -m 43001` (TCI 2.0) run against `./test-tci
   --serve`: `f`, `m`, `t`, `l RFPOWER`, `l AF`, `l STRENGTH`, `F`, `M
@@ -609,9 +610,104 @@ On the bench, over loopback, with no radio:
   -13.5 dBFS rms, as it should.
 
 Still to do on the radio (§13): JTDX and WSJT-X Improved receiving and
-making an FT8 contact over TCI; a logger following the frequency; a TCI
-panadapter client confirming the I/Q orientation; and the Pi Zero 2W's
-CPU and Wi-Fi with I/Q flowing.
+making an FT8 contact over TCI; a logger following the frequency; a
+contest logger's CW macros; a TCI panadapter client confirming the I/Q
+orientation; and the Pi Zero 2W's CPU and Wi-Fi with I/Q flowing.
+
+## 17. CW over TCI, as built
+
+Step 4 of §13, in `tci_cw.c` (369 lines), with small additions to
+`keyer.c`, `morse.c` and `cw.c`. Everything §8 proposed is built:
+
+| Command | As built |
+|---|---|
+| `cw_macros:0,<text>;` | Queued for the keyer in order, through `morse_from_tci()`: `\|SK\|`-style prosigns, `<`/`>` 5 WPM slower/faster, `^ ~ *` for `: , ;`. Letters between bars that aren't a prosign go as ordinary letters. The text after the first comma is taken as it came - commas a client didn't escape, and spaces at its ends, included - since consecutive macros rely on their own spaces. |
+| `cw_msg:0,<prefix>,<callsign>,<suffix>;` | Prefix, callsign and suffix, a word space between each; `_` is an empty part (as is a missing suffix), and `<callsign>$N` sends it N times (up to 5). |
+| `cw_msg:<callsign>;` | Corrects the callsign of the message in progress for everything not yet started but one character; ignored once the callsign is out. |
+| `callsign_send:<callsign>;` | Sent to every client when the last of the callsign has started, with the callsign as corrected. |
+| `cw_macros_stop;` | The element in progress completes; the rest, and any message, are dropped; terminal mode's TX hold is released. |
+| `cw_terminal:true\|false;` (also `cw_terminal:0,true;`) | While true, TX stays on after text ends (`cw_hold_tx()` in `cw.c`), and `cw_macros_empty;` is sent to every client as the last queued character starts. Echoed to every client. |
+| `cw_macros_speed_up:N;`, `cw_macros_speed_down:N;` | The keyer's speed, by N WPM; both speeds echoed. |
+| `cw_macros_delay[:ms];` | Answered `cw_macros_delay:0;`: TX starts as soon as the T/R sequence allows. |
+| `keyer:…;` | Ignored, as §8 decided. |
+
+How the pieces work, and what was decided on the way:
+
+- **The callsign is fed a character at a time.** The service thread
+  hands the keyer the next character of the callsign as soon as the one
+  before it has started (`keyer_text_queued()` reaching 0), so a
+  correction applies to everything except the character already waiting.
+  The keyer has a whole character's time to spare - two dots and a space
+  at the least - so feeding every 5 ms never leaves a gap: the harness
+  checks every mark and space of a fed message exactly.
+- **Priorities, as the spec gives them:** a new `cw_msg` stops whatever
+  text is going out and starts at once; a `cw_macros` during a `cw_msg`
+  waits until the message is out; a `cw_msg` during a `cw_macros` stops
+  the macro.
+- **A stop drops only the text before it.** `keyer_stop_text()` used to
+  discard everything at the audio thread's next block, which would have
+  discarded a message queued right after the stop as well. It now records
+  where the queue stood, and text queued after the stop starts a word
+  space after the element in progress completes - so a message replacing
+  a macro is never run on into its last letter.
+- **Speed changes are text-only and per macro.** They don't move the
+  keyer's speed (or what `cw_macros_speed` reports), and each macro that
+  uses them ends with a return to the keyer's speed, so the next macro
+  starts where the operator set it, as Thetis's server does.
+- **The operator wins.** A key or paddle closing stops TCI text as it
+  stops any text; `keyer_text_interrupts()` tells `tci_cw.c`, which drops
+  the message and anything waiting behind it rather than feeding the rest,
+  and ends terminal mode's TX hold (TX then drops after the operator's own
+  hang time; the next macro holds it again).
+- **Text waits for room rather than being refused.** The keyer's queue is
+  512 characters; what doesn't fit waits in `tci_cw.c` (up to 2048), in
+  order, and goes in as the keyer makes room. That matters most when a
+  `cw_msg` replaces a macro that fills the queue: the stop frees the room
+  only at the audio thread's next block.
+- **The keyer never runs letters together.** If the queue runs dry at a
+  decision point - a callsign character fed late because `tci.c`'s lock
+  was held through a slow command - text arriving afterwards waits until a
+  full character space (`3T`) has passed, rather than starting `T` after
+  the last mark.
+  Outside CW and CWR, CW text is ignored with a console line, and a mode
+  change drops it.
+- **`cw_macros_empty;` is the spec's form**, without the receiver number
+  Thetis adds, and only in terminal mode, as the spec says. It counts
+  letters only (`keyer_text_letters_queued()`), so a macro's trailing
+  space or speed code doesn't hold it back until the last letter ends.
+- **Terminal mode** holds TX only once text has been sent, and ends when
+  turned off, on `cw_macros_stop`, when the client that set it
+  disconnects, or outside CW.
+
+An independent review of the first version found, besides the cases
+above: `keyer_stop_text()` had come to take the text queue's lock, and
+`cw.c` calls it from the audio thread outside CW - so it is lock-free,
+moving its stop mark forward with a compare-and-swap; a stop could cut a
+character queued after it in a narrow window, so the keyer now cuts only a
+character queued before the stop; and a UTF-8 byte from 0x80 to 0x87 in
+any surface's text would have passed as a prosign code, so the
+translators take ASCII only.
+
+`make test-tci` checks it by running the real keyer in real time and
+reading back what it keys: `cw_macros:0,tu >5nn< |sk|;` keys `TU 5NN
+<SK>` with `5NN` at 45 WPM and the rest at 40, and the next macro back at
+40; `cw_msg:0,R,K1$2,5;` corrected at once to `W1AW` keys `R W1AW W1AW 5`
+with every mark and space exact, `callsign_send:W1AW;` follows, and a
+later correction is ignored; a correction two characters into `AB1CD`
+keys `AB1XY`; a macro during a message follows it; a message during a
+macro stops it with a word space; `cw_macros_stop` stops; terminal mode
+holds TX and sends `cw_macros_empty;` as the last `E` starts (about
+120 ms into `EE <` at 40 WPM, the trailing space and code notwithstanding),
+and not outside terminal mode; a paddle tap ends the hold, and ends a
+message and the macro waiting behind it; a message with no suffix field,
+and one with an empty callsign, are spaced correctly; a macro with nothing
+to send asks for no TX; a message replacing a 511-character macro waits
+for room and goes; and nothing is sent in USB. `test-keyer` checks the keyer's side: `morse_from_tci()`, the speed
+codes' timing, the queued count, the interruption count, text queued
+after a stop following `7T` later, from a mark and from a letter gap, and
+text queued just after the last ran out following `3T` after it.
+`test-cw` checks the TX hold. `./test-tci --serve` prints each burst of
+CW text as keyed, for trying a logger without a radio.
 
 ## Sources
 
