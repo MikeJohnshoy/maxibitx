@@ -914,6 +914,7 @@ so no protocol's punctuation reaches the table:
 |---|---|---|
 | rigctld `b` / `\send_morse`, the panel | `<AR>` `<AS>` `<BK>` `<BT>` `<HH>` `<KN>` `<SK>` `<SN>`, either case | `morse_from_plain()` |
 | CAT `KY` | `[` BT, `_` AR, `<` AS, `#` HH, `>` SK, `]` KN, `\` BK, `%` SN | `morse_from_kenwood()` |
+| TCI `cw_macros`, `cw_msg` | `\|AR\|` `\|SK\|` …, either case; `<` and `>` are speed changes; `^ ~ *` stand for `: , ;` | `morse_from_tci()` |
 
 A character the table lacks is skipped and named on the console (an
 unknown `<XY>` loses its brackets and sends the letters). `+ = & (` stay
@@ -938,8 +939,16 @@ or to `7T` before a word. Decisions made while building it:
   FLRig itself (§9).
 - **Text is sent in CW and CWR only.** The surfaces refuse it in other
   modes, and a mode change while it is going out stops it.
-- **Any contact closing stops it** (§15), and so does `\stop_morse`: the
-  element in progress completes, the rest is discarded. A closure during a
+- **Any contact closing stops it** (§15), and so does `\stop_morse`
+  (`keyer_stop_text()`): the element in progress completes, the rest is
+  discarded. A stop drops only the text queued before it: text queued
+  after it - TCI's `cw_msg` replacing a macro - starts a word space after
+  that element. `keyer_stop_text()` never blocks, since `cw.c` calls it
+  from the audio thread when the mode leaves CW.
+- **Text queued just after the queue ran dry waits out a character
+  space** (`3T` after the last mark) instead of starting `T` after it, so
+  text that arrives a character at a time - TCI's callsign feed - can't
+  run letters together if a character comes late. A closure during a
   text element leaves the paddle keyer exactly as a closure during its own
   element would — the iambic memory of the other paddle, or the same
   paddle still held — so the operator's element follows on at the next
@@ -947,6 +956,15 @@ or to `7T` before a word. Decisions made while building it:
   is discarded, for the same reason.
 - **Queued text requests TX at once** (`cw_text_queued()`), from the
   control thread, before the first element starts.
+- **Speed codes inside the text** (`MORSE_SPEED_DOWN`, `_UP`, `_BASE`, for
+  TCI's `<` and `>`) move the text's speed 5 WPM from the next character
+  on, the gap before it included, and take no time themselves. The
+  keyer's own speed is unchanged, and the text returns to it when the text
+  ends or at `MORSE_SPEED_BASE` (which TCI puts at the end of each macro).
+- **Two counts for the control side:** `keyer_text_queued()`, the
+  characters not yet started, and `keyer_text_interrupts()`, how many times
+  a contact closing has stopped text - which is how TCI's `cw_msg` knows
+  the operator took over.
 - **The hang time is at least a word space in a paddle mode or while text
   has been sent** — 7 dits, which is longer than `CW_HANG_POLLS`'s 300 ms
   below about 25 WPM — so TX doesn't drop between characters or words at
@@ -961,6 +979,10 @@ Checked by `test-keyer` part 4 and `test-cw`:
 | `"CQ "`, then `"DE"` during the word gap | `CQ DE`, `7T` between |
 | A dot paddle tapped in the second dash of `TTTT` (iambic B) | that dash completes, the tap's dot follows `T` later, the rest dropped |
 | `\stop_morse` in the third `E` of ten | three `E`s, the last complete |
+| A stop, then `T` queued at once - in a mark, and in a letter gap | `T` follows exactly `7T` after the last `E` |
+| `E`, speed up, `E`, base, `E` at 20 WPM | marks `T20`, `T25`, `T20`; gaps `T20 + 2·T25` and `T25 + 2·T20` |
+| Two speed-ups, `E`; then a new text `E` | 30 WPM, then 20 again |
+| `T` queued 768 samples after `E` ran out | `3T` after the `E` |
 | A speed change during a dash of `MM` | the next dash at the new speed |
 | Straight-key mode | text sent with the same timing |
 | 513 characters | refused, queue unchanged |
