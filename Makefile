@@ -48,7 +48,7 @@ SRC := src/maxibitx.c src/radio.c src/radio_hw.c src/interfaces/hpsdr_p1.c src/i
      src/si5351v2.c src/sound.c src/vfo.c src/interfaces/hamlib.c src/hw_settings.c src/antialias.c src/decim48k.c src/cw.c \
      src/rx_audio.c src/gpio.c src/interfaces/iq_stream.c src/fft_filter.c src/tx_pipeline.c src/rx_filter.c src/upsample48k.c src/tone_gen.c \
      src/key_input.c src/$(KEYER).c src/morse.c src/interfaces/tci.c src/interfaces/tci_stream.c \
-     src/interfaces/tci_ws.c
+     src/interfaces/tci_ws.c src/interfaces/tci_cw.c
 OBJ := $(SRC:.c=.o)
 
 all: maxibitx
@@ -184,9 +184,10 @@ test-keyer-straight: src/keyer_straight.c src/keyer.h src/morse.c src/morse.h sr
 # The TCI server, twice, over loopback with no radio. test-tci-ws: tci_ws.c's
 # WebSocket server alone - the RFC 6455 accept vector, handshake, framing,
 # close, protocol errors, the client limit, the send queue's drop policy.
-# test-tci: the whole server with the radio stubbed, driven by scripted
-# client sessions (JTDX's and Hamlib's start-up and rules, echoes, PTT, and
-# every stream format). `./test-tci --serve [port]` runs that stubbed server
+# test-tci: the whole server with the radio stubbed but the real keyer,
+# driven by scripted client sessions (JTDX's and Hamlib's start-up and
+# rules, echoes, PTT, every stream format, and CW text read back from what
+# the keyer keys). `./test-tci --serve [port]` runs that stubbed server
 # with a test tone, for trying a client without a radio. See
 # docs/dsp_design_notes/tci_design_study.md §13.
 TCI_TEST_HDRS := src/interfaces/tci.h src/interfaces/tci_ws.h src/interfaces/tci_stream.h src/interfaces/ws_test_client.h
@@ -194,5 +195,5 @@ TCI_TEST_HDRS := src/interfaces/tci.h src/interfaces/tci_ws.h src/interfaces/tci
 test-tci-ws: src/interfaces/tci_ws.c src/interfaces/tci_ws_test.c $(TCI_TEST_HDRS)
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces src/interfaces/tci_ws.c src/interfaces/tci_ws_test.c -o $@ -lpthread
 
-test-tci: src/interfaces/tci.c src/interfaces/tci_stream.c src/interfaces/tci_ws.c src/interfaces/tci_test.c $(TCI_TEST_HDRS)
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces src/interfaces/tci.c src/interfaces/tci_stream.c src/interfaces/tci_ws.c src/interfaces/tci_test.c -o $@ -lpthread -lm
+test-tci: src/interfaces/tci.c src/interfaces/tci_stream.c src/interfaces/tci_ws.c src/interfaces/tci_cw.c src/interfaces/tci_test.c src/keyer.c src/morse.c src/keyer.h src/morse.h src/interfaces/tci_cw.h $(TCI_TEST_HDRS)
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces src/interfaces/tci.c src/interfaces/tci_stream.c src/interfaces/tci_ws.c src/interfaces/tci_cw.c src/keyer.c src/morse.c src/interfaces/tci_test.c -o $@ -lpthread -lm
