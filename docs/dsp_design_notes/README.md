@@ -276,4 +276,12 @@ already used in `antialias_filter_design.md`.
   `sound.h` and the keyer, sizes the streams, covers CW macros through
   `keyer_send_text()`, and proposes four files, an order of work with a
   harness per step, NCM over USB as an option, and six decisions to take
-  before building. Status: **study only - nothing is implemented.**
+  before building. §14 records the decisions (port 50001, CW and CWR only,
+  no transmit sensors, I/Q in the first delivery, no NCM yet), §15 the
+  server as built - `tci_ws.c`, `tci.c`, `tci_stream.c`, 1925 lines, with
+  the study's claim about rigctld `T` taking the mic corrected - and §16
+  the testing: two loopback harnesses (`test-tci-ws`, `test-tci`), and
+  Hamlib's own TCI client driving a stubbed server. Status: **first
+  delivery implemented** (WebSocket, control, receive and transmit audio,
+  I/Q) and bench-tested; **not yet on the air**; CW over TCI and NCM not
+  built.
