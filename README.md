@@ -43,7 +43,7 @@ applications to maxibitx.
 | RX: I/Q mixing, anti-aliasing, demodulation | `vfo.c`, `antialias.c`, `rx_audio.c`, `rx_filter.c` |
 | TX: CW keying, shared FFT TX pipeline | `cw.c`, `key_input.c`, `keyer.c`, `morse.c`, `tx_pipeline.c`, `fft_filter.c` |
 | USB audio rate conversion | `decim48k.c`, `upsample48k.c` |
-| External interfaces | `interfaces/hamlib.c` (rigctld), `interfaces/hpsdr_p1.c` (HPSDR Protocol 1), `interfaces/usb_gadget.c` (USB audio + Kenwood CAT), `interfaces/iq_stream.c` (I/Q for the control panel), `interfaces/tci.c`, `tci_stream.c`, `tci_ws.c` (TCI: control, audio and I/Q over a WebSocket) |
+| External interfaces | `interfaces/hamlib.c` (rigctld), `interfaces/hpsdr_p1.c` (HPSDR Protocol 1), `interfaces/usb_gadget.c` (USB audio + Kenwood CAT), `interfaces/iq_stream.c` (I/Q for the control panel), `interfaces/tci.c`, `tci_cw.c`, `tci_stream.c`, `tci_ws.c` (TCI: control, audio, I/Q and CW text over a WebSocket) |
 
 The DSP is bench-tested on its own (`make test-fft-filter`,
 `test-tx-pipeline`, `test-rx-filter`, `test-rx-audio`,
