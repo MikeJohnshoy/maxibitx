@@ -7,7 +7,7 @@ I/Q produced in
 the SDR application actually using it. The two are documented together
 because one file — `hpsdr_p1.c` — does both jobs. Every file this
 document covers (`hpsdr_p1.c`, `usb_gadget.c`, `iq_stream.c`, `hamlib.c`,
-and the TCI server's `tci.c`, `tci_stream.c` and `tci_ws.c`) lives under
+and the TCI server's `tci.c`, `tci_cw.c`, `tci_stream.c` and `tci_ws.c`) lives under
 `src/interfaces/` - kept separate from the DSP/radio-control
 core (`sound.c`, `rx_audio.c`, `radio.c`, `cw.c`, `vfo.c`, ...) in plain
 `src/`, since none of these four decide anything about the signal path
@@ -348,10 +348,10 @@ running on whatever subset of control/streaming surfaces came up
 successfully; see
 [`05_process_and_threading_model.md`](05_process_and_threading_model.md).
 
-## TCI server (`tci.c`, `tci_stream.c`, `tci_ws.c`)
+## TCI server (`tci.c`, `tci_cw.c`, `tci_stream.c`, `tci_ws.c`)
 
 A server for Expert Electronics' Transceiver Control Interface (TCI v2.0):
-control, 48 kHz receive and transmit audio, and I/Q, over one WebSocket
+control, 48 kHz receive and transmit audio, I/Q, and CW text, over one WebSocket
 connection per client, TCP 50001 by default. It serves the programs that
 connect to a TCI radio - JTDX, WSJT-X Improved, MSHV, loggers, and
 Hamlib's TCI backend - so they need neither the USB gadget nor CAT. It
@@ -361,7 +361,7 @@ reference is [`06_api.md`](06_api.md), "TCI"; the design, and what the
 clients were found to need, is
 [`dsp_design_notes/tci_design_study.md`](dsp_design_notes/tci_design_study.md).
 
-Three files, in layers:
+Four files, in layers:
 
 - **`tci_ws.c`** — a WebSocket server (RFC 6455, server side), knowing
   nothing of TCI. An accept thread, and per client a reader thread
@@ -378,6 +378,12 @@ Three files, in layers:
   other surface. Changes made elsewhere have no notification, so a service
   thread samples the state TCI publishes every 50 ms and sends what
   changed; the same thread, every 5 ms, runs `tci_stream.c`.
+- **`tci_cw.c`** — CW text: `cw_macros` and `cw_msg` translated
+  (`morse_from_tci()`) and queued for the keyer, as rigctld's `b` queues
+  its text; a message's callsign fed a character at a time so it can be
+  corrected while it goes out; `callsign_send`, `cw_macros_stop`, and
+  terminal mode, which holds TX through `cw_hold_tx()` in `cw.c`. It runs
+  under `tci.c`'s lock, from the commands and the service thread.
 - **`tci_stream.c`** — three lock-free single-producer, single-consumer
   rings between the audio thread and TCI (receive audio, I/Q, transmit
   audio), and the conversion of each to what every client asked for:
