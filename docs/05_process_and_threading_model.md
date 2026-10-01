@@ -11,7 +11,7 @@ reading `sound.c`.
   at its RX value) → board revision/INA260 → software VFO and initial
   tune → CW tone (`cw_init()`) → key jack and its input thread
   (`key_input_start()`) → RX demodulator (`rx_audio_init()`) →
-  Hamlib/rigctld → HPSDR → I/Q telemetry stream (`iq_stream.c`) → USB
+  Hamlib/rigctld → TCI server (`tci_init()`) → HPSDR → I/Q telemetry stream (`iq_stream.c`) → USB
   gadget (`uac_init()`) → Kenwood CAT on the gadget's serial port
   (`cat_init()`) → audio codec → audio thread. See
   [`01_hardware_init_and_control.md`](01_hardware_init_and_control.md)
@@ -40,6 +40,13 @@ reading `sound.c`.
   - the I/Q telemetry stream's listener and pacer threads
     (`iq_stream.c`);
   - the Hamlib accept thread plus one thread per connected client;
+  - the TCI server's threads (`tci.c`, `tci_ws.c`): an accept thread,
+    a reader and a writer thread per connected client, and a service
+    thread that wakes every 5 ms to turn the audio thread's receive-audio
+    and I/Q rings into frames and pace TX_CHRONO requests, and every
+    50 ms to send clients the state changes made elsewhere. One mutex
+    serializes the TCI threads; the audio thread never takes it, meeting
+    TCI only through lock-free rings and atomic flags;
   - the USB gadget's UAC writer thread, and its reader thread when the
     capture (TX audio) side came up (see
     [`usb_gadget_OS_setup.md`](dsp_design_notes/usb_gadget_OS_setup.md) §7);
@@ -83,7 +90,8 @@ reading `sound.c`.
   feeds `hpsdr_send_iq()`, `iq_stream_send()` and
   `uac_push_audio_rx()`, so no consumer races a producer still calling
   into it), then `cat_stop()`, `uac_stop()`, `hpsdr_stop()`,
-  `iq_stream_stop()`, `hamlib_stop()`. See
+  `iq_stream_stop()`, `tci_stop()` (which disconnects every TCI client),
+  `hamlib_stop()`. See
   [`usb_gadget_OS_setup.md`](dsp_design_notes/usb_gadget_OS_setup.md) §8 for the failure
   mode this fixed (a restart-without-rebooting used to leave the USB
   gadget's configfs tree bound to a dead process) and for the
@@ -100,7 +108,7 @@ reading `sound.c`.
 - Failure handling at startup: GPIO (the outputs and the key jack), the
   HPSDR socket bind and audio capture are fatal - `main()` exits if any fails. Everything else is
   best-effort and logs that it's continuing without it: Hamlib/rigctld,
-  the I/Q telemetry stream, the USB gadget (and its TX audio direction
+  the TCI server, the I/Q telemetry stream, the USB gadget (and its TX audio direction
   separately), Kenwood CAT, the INA260 power monitor, and audio
   playback (without it there's no local audio and no TX). A missing
   `hw_settings.ini` falls back to compiled-in defaults.
