@@ -19,6 +19,7 @@
 #include "radio.h"
 #include "rx_audio.h"
 #include "sound.h"
+#include "tci.h"
 #include "tone_gen.h"
 #include "tx_pipeline.h"
 #include "upsample48k.h"
@@ -679,6 +680,7 @@ static void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output
   // Each I/Q consumer gets its own copy; any subset may be active.
   hpsdr_send_iq(i_samples, q_samples, n_samples);
   iq_stream_send(i_samples, q_samples, n_samples);
+  tci_push_iq(i_samples, q_samples, n_samples);
 
   // Demodulate: output_speaker gets the local speaker audio, uac_audio the
   // same audio before rx_volume. output_tx stays silent here; audio_loop()
@@ -686,13 +688,18 @@ static void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output
   rx_audio_process(i_samples, q_samples, n_samples, output_speaker, uac_audio);
   memset(output_tx, 0, n_samples * sizeof(int32_t));
 
-  // The USB audio gadget runs at 48kHz; decim48k_apply() yields a sample on
-  // every other call.
+  // The USB audio gadget and TCI run at 48kHz; decim48k_apply() yields a
+  // sample on every other call.
+  static double audio_48k[2048];
+  int n_48k = 0;
   for (int n = 0; n < n_samples; n++) {
     double out_audio;
-    if (decim48k_apply(&dec_audio, uac_audio[n], &out_audio))
+    if (decim48k_apply(&dec_audio, uac_audio[n], &out_audio)) {
       uac_push_audio_rx(out_audio);
+      audio_48k[n_48k++] = out_audio;
+    }
   }
+  tci_push_audio_rx(audio_48k, n_48k);
 }
 
 /* ------------------------------------------------------------------ */
@@ -950,10 +957,16 @@ static void *audio_loop(void *arg) {
       // TX when the key/mic PTT is down (cw_tx_active()), or when in_tx is set
       // in DIGITAL - that mode's PTT is CAT-only, and cw_poll_key() ignores the
       // key GPIO there - or with the test-tone generator on, which any PTT
-      // source keys.
+      // source keys, or in USB/LSB/DIGITAL when a TCI client keyed with its own
+      // audio (tci.h). The mic PTT, if down, keeps the mic.
       int tone_on = tone_gen_get_mode() != TONE_GEN_OFF;
+      enum radio_mode mode_now = radio_get_mode();
+      int tci_audio = tci_tx_audio_owned() && mode_now != RADIO_MODE_CW &&
+                      mode_now != RADIO_MODE_CWR && !cw_tx_active();
       int tx_audio_active =
-          cw_tx_active() || (in_tx && (radio_get_mode() == RADIO_MODE_DIGITAL || tone_on));
+          cw_tx_active() || (in_tx && (mode_now == RADIO_MODE_DIGITAL || tone_on || tci_audio));
+      if (!(tx_audio_active && tci_audio && !tone_on)) // not reading it this block
+        tci_tx_audio_idle();
 
       // Clear the pipeline's carried state when a transmission starts, so
       // the first block is filtered against silence rather than against
@@ -994,7 +1007,7 @@ static void *audio_loop(void *arg) {
         static struct upsample48k_state tx_upsampler;
         static double tx_audio_48k[MAX_FRAMES / 2 + 1];
 
-        enum radio_mode tx_mode = radio_get_mode();
+        enum radio_mode tx_mode = mode_now;
         enum tx_pipeline_signal signal = TX_PIPELINE_CW;
 
         if (tone_on) {
@@ -1016,11 +1029,12 @@ static void *audio_loop(void *arg) {
           for (int i = 0; i < n; i++)
             tx_audio_buf[i] = cw_get_sample();
           signal = TX_PIPELINE_CW;
-        } else if (tx_mode == RADIO_MODE_DIGITAL) {
-          // WSJT-X's audio from the USB gadget (48kHz), upsampled 2x;
-          // ceil(n/2) inputs cover n outputs.
+        } else if (tx_mode == RADIO_MODE_DIGITAL || tci_audio) {
+          // A TCI client's audio, or WSJT-X's from the USB gadget - both
+          // 48kHz, upsampled 2x; ceil(n/2) inputs cover n outputs.
           int need_48k = (n + 1) / 2;
-          int got_48k = uac_pull_audio_tx(tx_audio_48k, need_48k);
+          int got_48k = tci_audio ? tci_pull_audio_tx(tx_audio_48k, need_48k)
+                                  : uac_pull_audio_tx(tx_audio_48k, need_48k);
           int out_idx = 0;
           for (int i = 0; i < need_48k; i++) {
             // Past what the host sent (WSJT-X not running, or a gap), feed
@@ -1033,7 +1047,9 @@ static void *audio_loop(void *arg) {
             if (out_idx < n)
               tx_audio_buf[out_idx++] = out2[1];
           }
-          signal = TX_PIPELINE_USB; // FT8/digital convention: always USB
+          // DIGITAL is always USB (the FT8/digital convention); TCI audio
+          // in USB or LSB follows the mode.
+          signal = (tx_mode == RADIO_MODE_LSB) ? TX_PIPELINE_LSB : TX_PIPELINE_USB;
         } else {
           // USB/LSB: mic audio, through the fixed unit conversion and the
           // live mic gain. (cw_poll_key() only asserts TX for CW, USB and
