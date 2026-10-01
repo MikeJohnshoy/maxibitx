@@ -19,6 +19,8 @@
 // have no notification, so a service thread samples the published state
 // every 50 ms and sends what changed; the same thread runs tci_stream.c.
 //
+// CW text - cw_macros, cw_msg and the rest - is tci_cw.c's.
+//
 // PTT follows the rules rigctld T and CAT TX follow - refused outside the
 // [tx_band] table, ignored while the local key holds TX - plus: trx with
 // source "tci" takes the transmit audio from that client's stream; while one
@@ -33,6 +35,7 @@
 #include "radio.h"
 #include "rx_audio.h"
 #include "sound.h"
+#include "tci_cw.h"
 #include "tci_stream.h"
 #include "tci_ws.h"
 #include <ctype.h>
@@ -83,7 +86,7 @@ static long long now_ms(void) {
 
 /* ---- Sending ------------------------------------------------------------ */
 
-static void send_to(int slot, const char *fmt, ...) {
+void tci_send_to(int slot, const char *fmt, ...) {
   char msg[256];
   va_list ap;
   va_start(ap, fmt);
@@ -94,7 +97,7 @@ static void send_to(int slot, const char *fmt, ...) {
   ws_send_text(clients[slot].id, msg);
 }
 
-static void broadcast(const char *fmt, ...) {
+void tci_broadcast(const char *fmt, ...) {
   char msg[256];
   va_list ap;
   va_start(ap, fmt);
@@ -166,47 +169,47 @@ static const char *tf(int b) { return b ? "true" : "false"; }
 
 // Each sends one piece of state to every client and records it as sent.
 static void pub_freq(const struct state *s) {
-  broadcast("dds:0,%d;", s->freq);
-  broadcast("vfo:0,0,%d;", s->freq);
-  broadcast("vfo:0,1,%d;", s->freq);
+  tci_broadcast("dds:0,%d;", s->freq);
+  tci_broadcast("vfo:0,0,%d;", s->freq);
+  tci_broadcast("vfo:0,1,%d;", s->freq);
   pub.freq = s->freq;
 }
 static void pub_mode(const struct state *s) {
-  broadcast("modulation:0,%s;", mode_name(s->mode));
+  tci_broadcast("modulation:0,%s;", mode_name(s->mode));
   pub.mode = s->mode;
 }
 static void pub_tx(const struct state *s) {
-  broadcast("trx:0,%s;", tf(s->tx));
+  tci_broadcast("trx:0,%s;", tf(s->tx));
   pub.tx = s->tx;
 }
 static void pub_drive(const struct state *s) {
-  broadcast("drive:0,%d;", s->drive);
+  tci_broadcast("drive:0,%d;", s->drive);
   pub.drive = s->drive;
 }
 static void pub_volume(const struct state *s) {
-  broadcast("volume:%d;", s->volume_db);
+  tci_broadcast("volume:%d;", s->volume_db);
   pub.volume_db = s->volume_db;
 }
 static void pub_mute(const struct state *s) {
-  broadcast("mute:%s;", tf(s->mute));
-  broadcast("rx_mute:0,%s;", tf(s->mute));
+  tci_broadcast("mute:%s;", tf(s->mute));
+  tci_broadcast("rx_mute:0,%s;", tf(s->mute));
   pub.mute = s->mute;
 }
 static void pub_rit_on(const struct state *s) {
-  broadcast("rit_enable:0,%s;", tf(s->rit_on));
+  tci_broadcast("rit_enable:0,%s;", tf(s->rit_on));
   pub.rit_on = s->rit_on;
 }
 static void pub_rit(const struct state *s) {
-  broadcast("rit_offset:0,%d;", s->rit);
+  tci_broadcast("rit_offset:0,%d;", s->rit);
   pub.rit = s->rit;
 }
 static void pub_tx_enable(const struct state *s) {
-  broadcast("tx_enable:0,%s;", tf(s->tx_enable));
+  tci_broadcast("tx_enable:0,%s;", tf(s->tx_enable));
   pub.tx_enable = s->tx_enable;
 }
 static void pub_wpm(const struct state *s) {
-  broadcast("cw_macros_speed:%d;", s->wpm);
-  broadcast("cw_keyer_speed:%d;", s->wpm);
+  tci_broadcast("cw_macros_speed:%d;", s->wpm);
+  tci_broadcast("cw_keyer_speed:%d;", s->wpm);
   pub.wpm = s->wpm;
 }
 
@@ -310,12 +313,25 @@ static const char *const fixed_off[] = {
     "rx_nf_enable",   "lock",          "vfo_lock"};
 
 static void handle(int slot, char *cmd) {
-  // "name" or "name:arg,arg,..."; spaces around any part are ignored
+  // "name" or "name:arg,arg,..."; spaces around any part are ignored, except
+  // in CW text (tci_cw.c), which gets its arguments as they came
   char *argv[TCI_MAX_ARGS];
   int argc = 0;
   char *colon = strchr(cmd, ':');
-  if (colon) {
+  if (colon)
     *colon = '\0';
+  char *name = cmd;
+  while (isspace((unsigned char)*name))
+    name++;
+  for (char *e = name + strlen(name); e > name && isspace((unsigned char)e[-1]);)
+    *--e = '\0';
+  for (char *p = name; *p; p++)
+    *p = (char)tolower((unsigned char)*p);
+  if (!*name)
+    return;
+  if (tci_cw_command(slot, name, colon ? colon + 1 : NULL))
+    return;
+  if (colon) {
     char *save = NULL;
     for (char *a = strtok_r(colon + 1, ",", &save); a && argc < TCI_MAX_ARGS;
          a = strtok_r(NULL, ",", &save)) {
@@ -327,15 +343,6 @@ static void handle(int slot, char *cmd) {
       argv[argc++] = a;
     }
   }
-  char *name = cmd;
-  while (isspace((unsigned char)*name))
-    name++;
-  for (char *e = name + strlen(name); e > name && isspace((unsigned char)e[-1]);)
-    *--e = '\0';
-  for (char *p = name; *p; p++)
-    *p = (char)tolower((unsigned char)*p);
-  if (!*name)
-    return;
 
   struct client *c = &clients[slot];
   struct state s;
@@ -345,7 +352,7 @@ static void handle(int slot, char *cmd) {
   int trx0 = argc >= 1 && parse_int(argv[0], &v) && v == 0;
 
   if (!strcmp(name, "start")) {
-    send_to(slot, "start;");
+    tci_send_to(slot, "start;");
   } else if (!strcmp(name, "stop")) {
     // maxibitx has no stopped state; clients send this as they close
   } else if (!strcmp(name, "vfo") && trx0 && argc >= 2) {
@@ -357,7 +364,7 @@ static void handle(int slot, char *cmd) {
       snapshot(&s);
       pub_freq(&s); // echo, with the frequency in force
     } else {
-      send_to(slot, "vfo:0,%lld,%d;", ch, freq_hdr);
+      tci_send_to(slot, "vfo:0,%lld,%d;", ch, freq_hdr);
     }
   } else if (!strcmp(name, "dds") && trx0) {
     if (argc >= 2) {
@@ -366,13 +373,13 @@ static void handle(int slot, char *cmd) {
       snapshot(&s);
       pub_freq(&s);
     } else {
-      send_to(slot, "dds:0,%d;", freq_hdr);
+      tci_send_to(slot, "dds:0,%d;", freq_hdr);
     }
   } else if (!strcmp(name, "if") && trx0 && argc >= 2) {
     if (argc >= 3)
-      broadcast("if:0,%s,0;", argv[1]); // the offset is always 0
+      tci_broadcast("if:0,%s,0;", argv[1]); // the offset is always 0
     else
-      send_to(slot, "if:0,%s,0;", argv[1]);
+      tci_send_to(slot, "if:0,%s,0;", argv[1]);
   } else if (!strcmp(name, "modulation") && trx0) {
     enum radio_mode m;
     if (argc >= 2 && mode_from_name(argv[1], &m))
@@ -381,12 +388,12 @@ static void handle(int slot, char *cmd) {
     if (argc >= 2)
       pub_mode(&s);
     else
-      send_to(slot, "modulation:0,%s;", mode_name(s.mode));
+      tci_send_to(slot, "modulation:0,%s;", mode_name(s.mode));
   } else if (!strcmp(name, "trx") && trx0) {
     if (argc >= 2 && parse_bool(argv[1], &b))
       cmd_trx(slot, b, argc >= 3 ? argv[2] : "");
     else
-      send_to(slot, "trx:0,%s;", tf(in_tx));
+      tci_send_to(slot, "trx:0,%s;", tf(in_tx));
   } else if (!strcmp(name, "drive") && trx0) {
     if (argc >= 2 && parse_int(argv[1], &v) && v >= 0 && v <= 100)
       sound_set_tx_power((double)v / 100.0);
@@ -394,10 +401,10 @@ static void handle(int slot, char *cmd) {
     if (argc >= 2)
       pub_drive(&s);
     else
-      send_to(slot, "drive:0,%d;", s.drive);
+      tci_send_to(slot, "drive:0,%d;", s.drive);
   } else if (!strcmp(name, "tune_drive") && trx0) {
     snapshot(&s);
-    send_to(slot, "tune_drive:0,%d;", s.drive);
+    tci_send_to(slot, "tune_drive:0,%d;", s.drive);
   } else if (!strcmp(name, "rit_enable") && trx0) {
     if (argc >= 2 && parse_bool(argv[1], &b))
       radio_set_rit_enabled(b);
@@ -405,7 +412,7 @@ static void handle(int slot, char *cmd) {
     if (argc >= 2)
       pub_rit_on(&s);
     else
-      send_to(slot, "rit_enable:0,%s;", tf(s.rit_on));
+      tci_send_to(slot, "rit_enable:0,%s;", tf(s.rit_on));
   } else if (!strcmp(name, "rit_offset") && trx0) {
     if (argc >= 2 && parse_int(argv[1], &v) && v >= -RIT_MAX_HZ && v <= RIT_MAX_HZ) {
       int on = radio_rit_enabled(); // TCI sets the offset and the switch separately
@@ -418,20 +425,20 @@ static void handle(int slot, char *cmd) {
       if (s.rit_on != pub.rit_on)
         pub_rit_on(&s);
     } else {
-      send_to(slot, "rit_offset:0,%d;", s.rit);
+      tci_send_to(slot, "rit_offset:0,%d;", s.rit);
     }
   } else if (!strcmp(name, "xit_offset") && trx0) {
     if (argc >= 2)
-      broadcast("xit_offset:0,0;");
+      tci_broadcast("xit_offset:0,0;");
     else
-      send_to(slot, "xit_offset:0,0;");
+      tci_send_to(slot, "xit_offset:0,0;");
   } else if (!strcmp(name, "split_enable")) {
     // Always off. WSJT-X Improved sets it with no transceiver number.
     int bare_set = argc == 1 && (!strcasecmp(argv[0], "true") || !strcasecmp(argv[0], "false"));
     if (bare_set || (argc >= 2 && trx0))
-      broadcast("split_enable:0,false;");
+      tci_broadcast("split_enable:0,false;");
     else if (argc == 0 || trx0)
-      send_to(slot, "split_enable:0,false;");
+      tci_send_to(slot, "split_enable:0,false;");
   } else if (!strcmp(name, "volume")) {
     if (argc >= 1 && parse_int(argv[0], &v) && v >= -60 && v <= 0) {
       int percent = volume_percent((int)v);
@@ -445,7 +452,7 @@ static void handle(int slot, char *cmd) {
       if (s.mute != pub.mute)
         pub_mute(&s);
     } else {
-      send_to(slot, "volume:%d;", s.volume_db);
+      tci_send_to(slot, "volume:%d;", s.volume_db);
     }
   } else if (!strcmp(name, "mute") || (!strcmp(name, "rx_mute") && trx0)) {
     int at = !strcmp(name, "mute") ? 0 : 1;
@@ -464,9 +471,9 @@ static void handle(int slot, char *cmd) {
       if (s.volume_db != pub.volume_db)
         pub_volume(&s);
     } else if (at == 0) {
-      send_to(slot, "mute:%s;", tf(s.mute));
+      tci_send_to(slot, "mute:%s;", tf(s.mute));
     } else {
-      send_to(slot, "rx_mute:0,%s;", tf(s.mute));
+      tci_send_to(slot, "rx_mute:0,%s;", tf(s.mute));
     }
   } else if (!strcmp(name, "cw_macros_speed") || !strcmp(name, "cw_keyer_speed")) {
     if (argc >= 1 && parse_int(argv[0], &v) && v >= KEYER_WPM_MIN && v <= KEYER_WPM_MAX)
@@ -475,15 +482,22 @@ static void handle(int slot, char *cmd) {
     if (argc >= 1)
       pub_wpm(&s);
     else
-      send_to(slot, "%s:%d;", name, s.wpm);
+      tci_send_to(slot, "%s:%d;", name, s.wpm);
+  } else if (!strcmp(name, "cw_macros_speed_up") || !strcmp(name, "cw_macros_speed_down")) {
+    if (argc >= 1 && parse_int(argv[0], &v) && v > 0 && v <= KEYER_WPM_MAX) {
+      int step = name[16] == 'u' ? (int)v : -(int)v;
+      keyer_set_wpm(keyer_get_wpm() + step);
+    }
+    snapshot(&s);
+    pub_wpm(&s);
   } else if (!strcmp(name, "rx_enable") && argc >= 1 && parse_int(argv[0], &v)) {
-    send_to(slot, "rx_enable:%lld,%s;", v, tf(v == 0));
+    tci_send_to(slot, "rx_enable:%lld,%s;", v, tf(v == 0));
   } else if (!strcmp(name, "rx_channel_enable") && argc >= 2 && parse_int(argv[0], &v)) {
     long long ch = -1;
     parse_int(argv[1], &ch);
-    send_to(slot, "rx_channel_enable:%lld,%lld,%s;", v, ch, tf(v == 0 && ch == 0));
+    tci_send_to(slot, "rx_channel_enable:%lld,%lld,%s;", v, ch, tf(v == 0 && ch == 0));
   } else if (!strcmp(name, "rx_smeter") && trx0) {
-    send_to(slot, "rx_smeter:0,0,%d;", -73 + rx_audio_get_strength_db());
+    tci_send_to(slot, "rx_smeter:0,0,%d;", -73 + rx_audio_get_strength_db());
   } else if (!strcmp(name, "rx_sensors_enable") && argc >= 1 && parse_bool(argv[0], &b)) {
     c->rx_sensors = b;
     c->rx_sensors_ms = 200;
@@ -495,36 +509,36 @@ static void handle(int slot, char *cmd) {
   } else if ((!strcmp(name, "audio_start") || !strcmp(name, "audio_stop")) && trx0) {
     c->cfg.audio_on = !strcmp(name, "audio_start");
     apply_stream(slot);
-    send_to(slot, "%s:0;", name);
+    tci_send_to(slot, "%s:0;", name);
   } else if ((!strcmp(name, "iq_start") || !strcmp(name, "iq_stop")) && trx0) {
     c->cfg.iq_on = !strcmp(name, "iq_start");
     apply_stream(slot);
-    send_to(slot, "%s:0;", name);
+    tci_send_to(slot, "%s:0;", name);
   } else if (!strcmp(name, "audio_samplerate")) {
     if (argc >= 1 && parse_int(argv[0], &v) && (v == 8000 || v == 12000 || v == 24000 || v == 48000)) {
       c->cfg.audio_rate = (int)v;
       apply_stream(slot);
     }
-    send_to(slot, "audio_samplerate:%d;", c->cfg.audio_rate);
+    tci_send_to(slot, "audio_samplerate:%d;", c->cfg.audio_rate);
   } else if (!strcmp(name, "iq_samplerate")) {
     if (argc >= 1 && parse_int(argv[0], &v) && (v == 48000 || v == 96000)) {
       c->cfg.iq_rate = (int)v;
       apply_stream(slot);
     }
-    send_to(slot, "iq_samplerate:%d;", c->cfg.iq_rate);
+    tci_send_to(slot, "iq_samplerate:%d;", c->cfg.iq_rate);
   } else if (!strcmp(name, "audio_stream_sample_type")) {
     static const char *const types[] = {"int16", "int24", "int32", "float32"};
     for (int k = 0; argc >= 1 && k < 4; k++)
       if (!strcasecmp(argv[0], types[k]))
         c->cfg.audio_type = k;
     apply_stream(slot);
-    send_to(slot, "audio_stream_sample_type:%s;", types[c->cfg.audio_type]);
+    tci_send_to(slot, "audio_stream_sample_type:%s;", types[c->cfg.audio_type]);
   } else if (!strcmp(name, "audio_stream_channels")) {
     if (argc >= 1 && parse_int(argv[0], &v) && (v == 1 || v == 2)) {
       c->cfg.audio_channels = (int)v;
       apply_stream(slot);
     }
-    send_to(slot, "audio_stream_channels:%d;", c->cfg.audio_channels);
+    tci_send_to(slot, "audio_stream_channels:%d;", c->cfg.audio_channels);
   } else if (!strcmp(name, "audio_stream_samples")) {
     if (argc >= 1 && parse_int(argv[0], &v) && v >= 100 && v <= 2048) {
       c->cfg.audio_samples = (int)v;
@@ -536,29 +550,29 @@ static void handle(int slot, char *cmd) {
               : c->cfg.audio_rate == 12000 ? 512
               : c->cfg.audio_rate == 24000 ? 1024
                                            : 2048;
-    send_to(slot, "audio_stream_samples:%d;", shown);
+    tci_send_to(slot, "audio_stream_samples:%d;", shown);
   } else if (!strcmp(name, "tx_stream_audio_buffering")) {
     if (argc >= 1 && parse_int(argv[0], &v) && v >= 50 && v <= 500)
       c->buffering_ms = (int)v;
-    send_to(slot, "tx_stream_audio_buffering:%d;", c->buffering_ms);
+    tci_send_to(slot, "tx_stream_audio_buffering:%d;", c->buffering_ms);
   } else if (!strcmp(name, "agc_mode") && trx0) {
-    send_to(slot, "agc_mode:0,normal;");
+    tci_send_to(slot, "agc_mode:0,normal;");
   } else if (!strcmp(name, "sql_level") && trx0) {
-    send_to(slot, "sql_level:0,-140;");
+    tci_send_to(slot, "sql_level:0,-140;");
   } else if ((!strcmp(name, "digl_offset") || !strcmp(name, "digu_offset"))) {
-    send_to(slot, "%s:0;", name);
+    tci_send_to(slot, "%s:0;", name);
   } else {
     for (size_t k = 0; k < sizeof(fixed_off) / sizeof(fixed_off[0]); k++) {
       if (!strcmp(name, fixed_off[k]) && trx0) {
         if (argc >= 2)
-          broadcast("%s:0,false;", name);
+          tci_broadcast("%s:0,false;", name);
         else
-          send_to(slot, "%s:0,false;", name);
+          tci_send_to(slot, "%s:0,false;", name);
         return;
       }
     }
-    // Anything else - CW macros, spots, commands for other receivers - is
-    // ignored, as the spec says of a command a server doesn't know.
+    // Anything else - spots, commands for other receivers - is ignored, as
+    // the spec says of a command a server doesn't know.
   }
 }
 
@@ -567,39 +581,39 @@ static void handle(int slot, char *cmd) {
 static void send_init(int slot) {
   struct state s;
   snapshot(&s);
-  send_to(slot, "protocol:ExpertSDR3,2.0;");
-  send_to(slot, "device:maxibitx;");
-  send_to(slot, "receive_only:false;");
-  send_to(slot, "trx_count:1;");
-  send_to(slot, "channel_count:1;");
-  send_to(slot, "vfo_limits:%d,%d;", TCI_VFO_MIN, TCI_VFO_MAX);
-  send_to(slot, "if_limits:-48000,48000;");
-  send_to(slot, "modulations_list:USB,LSB,CW,CWR,DIGU;");
-  send_to(slot, "iq_samplerate:%d;", clients[slot].cfg.iq_rate);
-  send_to(slot, "audio_samplerate:%d;", clients[slot].cfg.audio_rate);
-  send_to(slot, "dds:0,%d;", s.freq);
-  send_to(slot, "if:0,0,0;");
-  send_to(slot, "vfo:0,0,%d;", s.freq);
-  send_to(slot, "vfo:0,1,%d;", s.freq);
-  send_to(slot, "modulation:0,%s;", mode_name(s.mode));
-  send_to(slot, "rx_enable:0,true;");
-  send_to(slot, "tx_enable:0,%s;", tf(s.tx_enable));
-  send_to(slot, "trx:0,%s;", tf(s.tx));
-  send_to(slot, "tune:0,false;");
-  send_to(slot, "drive:0,%d;", s.drive);
-  send_to(slot, "tune_drive:0,%d;", s.drive);
-  send_to(slot, "split_enable:0,false;");
-  send_to(slot, "rit_enable:0,%s;", tf(s.rit_on));
-  send_to(slot, "rit_offset:0,%d;", s.rit);
-  send_to(slot, "xit_enable:0,false;");
-  send_to(slot, "xit_offset:0,0;");
-  send_to(slot, "volume:%d;", s.volume_db);
-  send_to(slot, "mute:%s;", tf(s.mute));
-  send_to(slot, "rx_mute:0,%s;", tf(s.mute));
-  send_to(slot, "cw_macros_speed:%d;", s.wpm);
-  send_to(slot, "cw_keyer_speed:%d;", s.wpm);
-  send_to(slot, "start;");
-  send_to(slot, "ready;");
+  tci_send_to(slot, "protocol:ExpertSDR3,2.0;");
+  tci_send_to(slot, "device:maxibitx;");
+  tci_send_to(slot, "receive_only:false;");
+  tci_send_to(slot, "trx_count:1;");
+  tci_send_to(slot, "channel_count:1;");
+  tci_send_to(slot, "vfo_limits:%d,%d;", TCI_VFO_MIN, TCI_VFO_MAX);
+  tci_send_to(slot, "if_limits:-48000,48000;");
+  tci_send_to(slot, "modulations_list:USB,LSB,CW,CWR,DIGU;");
+  tci_send_to(slot, "iq_samplerate:%d;", clients[slot].cfg.iq_rate);
+  tci_send_to(slot, "audio_samplerate:%d;", clients[slot].cfg.audio_rate);
+  tci_send_to(slot, "dds:0,%d;", s.freq);
+  tci_send_to(slot, "if:0,0,0;");
+  tci_send_to(slot, "vfo:0,0,%d;", s.freq);
+  tci_send_to(slot, "vfo:0,1,%d;", s.freq);
+  tci_send_to(slot, "modulation:0,%s;", mode_name(s.mode));
+  tci_send_to(slot, "rx_enable:0,true;");
+  tci_send_to(slot, "tx_enable:0,%s;", tf(s.tx_enable));
+  tci_send_to(slot, "trx:0,%s;", tf(s.tx));
+  tci_send_to(slot, "tune:0,false;");
+  tci_send_to(slot, "drive:0,%d;", s.drive);
+  tci_send_to(slot, "tune_drive:0,%d;", s.drive);
+  tci_send_to(slot, "split_enable:0,false;");
+  tci_send_to(slot, "rit_enable:0,%s;", tf(s.rit_on));
+  tci_send_to(slot, "rit_offset:0,%d;", s.rit);
+  tci_send_to(slot, "xit_enable:0,false;");
+  tci_send_to(slot, "xit_offset:0,0;");
+  tci_send_to(slot, "volume:%d;", s.volume_db);
+  tci_send_to(slot, "mute:%s;", tf(s.mute));
+  tci_send_to(slot, "rx_mute:0,%s;", tf(s.mute));
+  tci_send_to(slot, "cw_macros_speed:%d;", s.wpm);
+  tci_send_to(slot, "cw_keyer_speed:%d;", s.wpm);
+  tci_send_to(slot, "start;");
+  tci_send_to(slot, "ready;");
 }
 
 static void on_open(int id, const char *peer) {
@@ -655,6 +669,7 @@ static void on_close(int id) {
       printf("tci: client %d disconnected while holding TX - TX released\n", slot);
     }
     tci_stream_close(slot);
+    tci_cw_client_closed(slot);
     clients[slot].in_use = 0;
     printf("tci: client %d disconnected\n", slot);
   }
@@ -670,8 +685,8 @@ static void rx_sensors(void) {
     if (!c->in_use || !c->rx_sensors || now < c->rx_sensors_due)
       continue;
     double dbm = -73.0 + rx_audio_get_strength_db(); // S9 = -73 dBm; uncalibrated
-    send_to(s, "rx_sensors:0,%.1f;", dbm);
-    send_to(s, "rx_channel_sensors:0,0,%.1f;", dbm);
+    tci_send_to(s, "rx_sensors:0,%.1f;", dbm);
+    tci_send_to(s, "rx_channel_sensors:0,0,%.1f;", dbm);
     c->rx_sensors_due = now + c->rx_sensors_ms;
   }
 }
@@ -689,6 +704,7 @@ static void *service_main(void *arg) {
     clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
     pthread_mutex_lock(&lock);
     tci_stream_service();
+    tci_cw_service();
     if (tick % TCI_STATE_TICKS == 0) {
       if (tx_owner >= 0 && !in_tx)
         tx_release_owner(); // TX dropped elsewhere
