@@ -1,6 +1,10 @@
 # TCI server: a design study
 
-Status: **study only - nothing is implemented.** Written before any code,
+Status: **first delivery implemented** - steps 1, 2, 3 and 5 of §13 (the
+WebSocket server, control, receive and transmit audio, I/Q), as decided in
+§14 and described as built in §15; bench-tested (§16), including against
+Hamlib's own TCI client, but **not yet on the air**. CW over TCI (step 4)
+and NCM (step 6) are not built. Written before any code,
 as the keyer's was ([`cw_keyer_design_study.md`](cw_keyer_design_study.md)),
 to find out whether a TCI server fits maxibitx, what it has to do to work
 with the programs that would actually connect to it, and in what order to
@@ -462,6 +466,8 @@ steps 2-5 checkable from a laptop, as `rigctl_panel.py` does for rigctld.
 
 ## 14. Decisions wanted before building
 
+Taken on 2026-09-30, after review; the answers follow the list.
+
 1. **Port**: 50001 (Hamlib, ExpertSDR3) - or 40001 (JTDX's fallback)?
    Proposed 50001; both clients let the user set it.
 2. **Advertised identity**: `protocol:ExpertSDR3,2.0` with
@@ -472,6 +478,140 @@ steps 2-5 checkable from a laptop, as `rigctl_panel.py` does for rigctld.
    replaces the gadget for JTDX/WSJT-X Improved), with CW and I/Q after?
 5. **NCM over USB**: in scope, or TCI over the network only for now?
 6. **TX sensors on boards without a bridge**: send zeros, or nothing?
+
+The answers:
+
+1. **Port 50001.** The decision was written as "5001" and is taken to
+   mean 50001, the port proposed and Hamlib's and ExpertSDR3's default;
+   `tci_port` in `hw_settings.ini` sets any other.
+2. **Agreed**: `protocol:ExpertSDR3,2.0` and `device:maxibitx`.
+3. **CW and CWR only**; CWU and CWL are not offered.
+4. **Steps 1, 2, 3 and 5**: I/Q comes in the first delivery; CW after.
+5. **No NCM for now**: TCI over the network only.
+6. **Nothing**: no `tx_sensors` are sent.
+
+## 15. As built
+
+Four files in `src/interfaces/`, as §9 laid out: `tci_ws.c` (701 lines),
+`tci.c` (728), `tci_stream.c` (496), and the header `tci.h` for
+`sound.c` and `maxibitx.c` - 1925 lines of C in the three, inside §1's
+prediction.
+[`04_remote_control_and_iq_output.md`](../04_remote_control_and_iq_output.md)
+describes the implementation and [`06_api.md`](../06_api.md) is the
+client-side reference. Where it differs from, or settles, what the study
+proposed:
+
+- **Threads.** One service thread, not two: every 5 ms it runs the
+  streams (`tci_stream_service()`), and every tenth time it samples the
+  published state (§6) and sends receive sensors. One mutex serializes
+  it with the clients' reader threads; the audio thread never takes it.
+- **Modes.** `modulations_list:USB,LSB,CW,CWR,DIGU;` (decision 3), so the
+  name echoed is always the one in that list, and no alias has to be
+  remembered per client as §6 proposed.
+- **Transmit audio source.** §6 said a PTT without a source in USB/LSB
+  takes "the mic, as rigctld T does". rigctld's `T` in fact transmits no
+  audio in USB/LSB - only the local mic PTT (`cw_tx_active()`) takes the
+  mic - and TCI's does the same. As built: source `tci` takes the keying
+  client's stream in USB, LSB or DIGITAL (the sideband follows the mode;
+  DIGITAL is USB); without it, DIGITAL takes the USB gadget's audio and
+  USB, LSB and CW transmit none; the local mic PTT, if held, keeps the
+  mic. CW with source `tci` transmits no audio: CW is keyed, not played.
+- **Stale transmit audio** (§7): rather than a flush on release, the
+  audio thread discards the TCI transmit ring on every block that isn't
+  reading it (`tci_tx_audio_idle()`), and the TCI side accepts transmit
+  audio only from the client holding TX with its own audio. A late
+  answer to a request can't reach the next transmission.
+- **TX_CHRONO pacing.** 1024 stereo frames per request; requests are
+  sent while what is queued plus what is requested falls below
+  `tx_stream_audio_buffering` plus one request (so four at the start at
+  the default 50 ms), at most eight per 5 ms tick. Requests left
+  unanswered for 300 ms are forgotten, since a client may skip them.
+- **I/Q orientation.** Sent conjugated, so a station above the dial is
+  at positive frequency - the conventional way up, where iq_stream and
+  HPSDR carry the raw inverted I/Q (the latter because SparkSDR expects
+  it). This is a prediction of what TCI clients expect, to be confirmed
+  on the air with a panadapter client. At 48 kHz the decimator is flat
+  to ±15 kHz (0.00 dB), 0.37 dB down at ±20 kHz, and attenuates what
+  would alias by more than 100 dB.
+- **Volume.** TCI dB = (percent - 100) / 2, since rx_audio's taper is
+  0.5 dB per percent, so -49 to 0 dB round-trip exactly, as an echo
+  compared as a string needs; -50 dB and below is 0%, a true mute, and
+  reads -60.
+- **RIT.** TCI sets the offset and the switch separately, where
+  `radio_set_rit()` turns RIT on with any nonzero offset; the server
+  restores the switch after setting the offset.
+- **PTT between clients.** §6 proposed "last writer wins" for PTT as for
+  everything else. A review found what that allows: client B keys over
+  client A's transmission, then A's `trx:0,false;` unkeys B mid-over. As
+  built, while one TCI client holds TX the others' `trx` is ignored (and
+  answered with the state in force), as the local key's TX is.
+- **A PTT safety net.** A client that disconnects while holding TX
+  releases it - something rigctld and CAT don't do.
+- **Review.** An independent review of the first version also found a
+  64-bit WebSocket length that could wrap the message-size check and
+  overflow the message buffer - any client could have crashed the
+  daemon. `tci_ws.c` bounds every frame's length before any arithmetic,
+  and `test-tci-ws` sends that frame.
+- **Lower-rate receive audio** goes through windowed-sinc decimators
+  (Blackman, cutoff at 0.45 of the output rate: 63 taps to 24 kHz, 127
+  to 12, 191 to 8), designed at start-up.
+- **Stopped state.** `stop;` is ignored: maxibitx is always running.
+- **Settings** (§9): `tci_port`, `tci_max_clients` (1-16) and `tci_bind`
+  as proposed; they are read from `hw_settings.ini`, which is left as it
+  is, so the defaults apply until a key is added.
+- **Not built:** CW over TCI (§8; `cw_macros`, `cw_msg` and
+  `cw_macros_stop` are ignored), NCM (§11), 192/384 kHz I/Q, a second
+  receiver, the line-out stream.
+
+## 16. Testing, as done
+
+On the bench, over loopback, with no radio:
+
+- **`make test-tci-ws`** (31 checks): the RFC 6455 accept vector; the
+  handshake and its refusals (no key, not a GET: 400); binary messages
+  of 5, 125, 126, 200, 65535, 65536 and 70000 bytes echoed with the right
+  length encoding; an unmasked client frame; a fragmented message with a
+  ping between fragments; a handshake with the first frame in the same
+  packet; close from either side; reserved opcode, RSV bit, stray
+  continuation (1002) and a 300 kB message (1009); a third client
+  refused (503) at a limit of two; a continuation whose 64-bit length
+  would wrap the size check (1009, and the server keeps serving); a
+  reused slot's new id, with a send to
+  the old id refused; and a client that stops reading (binary frames
+  dropped past 2 MB queued, text still accepted). Clean under
+  ThreadSanitizer and AddressSanitizer.
+- **`make test-tci`** (61 checks), the whole server with the radio
+  stubbed: the start-up burst as JTDX and Hamlib see it (33 messages,
+  under 5 ms, protocol then device first, `start;` before `ready;`);
+  every text message received in the run checked for one command and a
+  lowercase keyword; echoes to every client, reads to the asker alone,
+  Hamlib's uppercase commands, three commands in one message; each
+  setting; a change made elsewhere arriving within 50 ms; receive sensors
+  with a decimal point and no transmit sensors; receive audio at the
+  default (samples exact to 1e-8) and at 24, 12 and 8 kHz in int16,
+  int24 and int32, mono and stereo (in-band within 0.01 dB, aliasing tones
+  below -77 dB); I/Q at 96 kHz (exact, conjugated) and 48 kHz; transmit
+  audio answered the way JTDX answers it (channels junk, padded payload)
+  and delivered in order; the pacing; a late answer kept from the next
+  transmission; and the PTT rules - Hamlib's `Vac` source, TX released
+  elsewhere, refusal outside the bands, the local key, a second client's
+  trx ignored while the first holds TX, a disconnect while transmitting. No findings under AddressSanitizer; ThreadSanitizer
+  reports only the harness's own writes to its stub radio state.
+- **Hamlib's own TCI client.** Hamlib master (September 2026) built from
+  source, its `rigctl -m 43001` (TCI 2.0) run against `./test-tci
+  --serve`: `f`, `m`, `t`, `l RFPOWER`, `l AF`, `l STRENGTH`, `F`, `M
+  PKTUSB`, `T 1`/`T 0`, `J`, `L RFPOWER` all answered correctly, with no
+  waits.
+- **`tools/tci_client.py`** against the stubbed server: the burst checks
+  pass, receive audio arrives at 46.5 frames/s (1024 frames each at
+  48 kHz) at -18 dBFS for a tone at the AGC target, a 1500 Hz I/Q tone
+  reads +1500 Hz at 48 and 96 kHz, and a 0.3 transmit tone arrives at
+  -13.5 dBFS rms, as it should.
+
+Still to do on the radio (§13): JTDX and WSJT-X Improved receiving and
+making an FT8 contact over TCI; a logger following the frequency; a TCI
+panadapter client confirming the I/Q orientation; and the Pi Zero 2W's
+CPU and Wi-Fi with I/Q flowing.
 
 ## Sources
 
