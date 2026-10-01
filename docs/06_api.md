@@ -3,7 +3,7 @@
 This is the reference for building an application on top of maxibitx
 without changing the daemon: a full SDR app, a logger, a remote
 control, a digital-mode bridge. Everything an outside program can do
-goes through one of four interfaces, and this document describes all
+goes through one of five interfaces, and this document describes all
 of them from the client's side - how to connect, what to send, what
 comes back, and in what units.
 
@@ -19,11 +19,13 @@ around a feature.
 | iq_stream | UDP 4536 | Raw baseband I/Q, 96 kHz, simple format | Up to 4 |
 | HPSDR Protocol 1 | UDP 1024 | I/Q plus tuning and MOX, for existing SDR apps | 1 |
 | USB gadget | USB device port | Audio in and out (48 kHz), Kenwood CAT serial | 1 host; CAT port 1 owner |
+| TCI | TCP 50001, WebSocket | Control, receive and transmit audio (48 kHz), I/Q (96 or 48 kHz); for JTDX, WSJT-X Improved, loggers, Hamlib's TCI backend | Up to 4 (settable, 16 at most) |
 
 Each interface is optional. If one fails to come up (no USB device
 port, a port already in use), the daemon logs it and runs without it.
-rigctld, iq_stream and HPSDR listen on all network interfaces, with no
-authentication - run maxibitx on a trusted network only.
+rigctld, iq_stream, HPSDR and TCI listen on all network interfaces, with
+no authentication - run maxibitx on a trusted network only. (TCI can be
+held to one interface with `tci_bind`, below.)
 
 For a new application, rigctld for control plus iq_stream for I/Q is
 the simplest pairing: two small, documented protocols, both usable
@@ -315,6 +317,102 @@ DIGITAL. `MD1;` or `MD3;` still change the mode.
 **FLRig:** choose the **QMX** rig type, not Kenwood TS-480. It sends
 only the commands above, and its RIT control maps onto `RT`/`RU`/`RD`.
 
+## TCI (TCP 50001)
+
+Expert Electronics' Transceiver Control Interface, v2.0 (the
+specification is at [github.com/ExpertSDR3/TCI](https://github.com/ExpertSDR3/TCI)):
+one WebSocket connection carrying text commands and binary audio and I/Q
+frames. For programs that connect to a TCI radio - JTDX, WSJT-X Improved,
+MSHV, loggers, and anything using Hamlib's TCI backend (model 43001) -
+it replaces CAT and the USB gadget with one network connection. Several
+clients can be connected at once, and a change made by any of them, or
+anywhere else in maxibitx, is sent to all. What the implementation does
+and why is in [`04_remote_control_and_iq_output.md`](04_remote_control_and_iq_output.md)
+and [`dsp_design_notes/tci_design_study.md`](dsp_design_notes/tci_design_study.md).
+
+**Connecting.** `ws://<pi>:50001/` (any path). On connect the server sends
+`protocol:ExpertSDR3,2.0;` and `device:maxibitx;`, the initialization
+commands, the current state, then `start;` and `ready;` - 33 messages,
+one command each. maxibitx identifies as protocol ExpertSDR3 because
+that is what JTDX keys its TCI behaviour to (compare the Kenwood surface
+answering `ID020;`); `device` says what it really is.
+
+**Framing.** Commands are `name:arg,arg;`, read in either case, several to
+a message if a client likes. The server sends lowercase, one command per
+message. Every set is answered to every client with the value actually
+in force, even when it didn't change; a read (the command without its
+value) is answered to the asker alone. A command the server doesn't know
+is ignored. Receiver and transceiver numbers other than 0 are ignored.
+
+| Command | Notes |
+|---|---|
+| `vfo:0,0[,hz];` | The dial, whole Hz, 100 kHz-30 MHz. Channel B (`vfo:0,1`) reads as A; setting it does nothing. |
+| `dds:0[,hz];` | The same frequency: the I/Q is centred on the dial. `if:0,ch;` is always 0. |
+| `modulation:0[,mode];` | `usb`, `lsb`, `cw`, `cwr`, `digu` (DIGITAL). Another name is answered with the mode in force. |
+| `trx:0[,true\|false[,source]];` | PTT - see below. |
+| `drive:0[,0-100];` | Transmit power, percent of `max_power` (rigctld's `RFPOWER`). `tune_drive` reads the same. |
+| `volume[:dB];` | Speaker volume, -60 to 0 dB; 0.5 dB per percent of rigctld's `AF`, so -50 dB and below is silent (read as -60). |
+| `mute[:true\|false];`, `rx_mute:0[,…];` | Volume to 0, and back to where it was. |
+| `rit_enable:0[,…];`, `rit_offset:0[,hz];` | RIT, receive only, ±9999 Hz; the offset and the switch are set separately. |
+| `cw_macros_speed[:wpm];`, `cw_keyer_speed[:wpm];` | The keyer's one speed, 1-60 WPM. |
+| `rx_smeter:0,0;` | `rx_smeter:0,0,<dBm>;` - rigctld's `STRENGTH` with S9 = -73 dBm; uncalibrated. |
+| `rx_sensors_enable:true[,ms];` | `rx_sensors:0,<dBm>;` and `rx_channel_sensors:0,0,<dBm>;` every ms (30-1000, default 200), one decimal place. |
+| `tx_sensors_enable:…;` | Accepted; no `tx_sensors` are sent, since a DE board measures no power or SWR. |
+| `start;` | Answered `start;`. `stop;` is ignored: maxibitx has no stopped state. |
+| `split_enable`, `xit_enable`, `xit_offset`, `tune`, `rx_nb_enable`, `rx_nr_enable`, `rx_anf_enable`, `sql_enable`, `lock`, … | Not available: always read false or 0, and a set is answered that way. |
+
+Changes made elsewhere - rigctld, CAT, the panel, the key - reach TCI
+clients within 50 ms. `tx_enable:0,<true|false>;` is sent when the band
+changes between one maxibitx may transmit on and one it may not
+(`[tx_band]` in `hw_settings.ini`).
+
+**Streams**, per client. Each binary frame is a 64-byte header of sixteen
+little-endian `uint32` - receiver, sample_rate, format (0 int16, 1 int24,
+2 int32, 3 float32), codec, crc, length (samples, counting both channels),
+type (0 I/Q, 1 RX audio, 2 TX audio, 3 TX_CHRONO), channels, then eight
+reserved - followed by the samples.
+
+| Command | Notes |
+|---|---|
+| `audio_start:0;` / `audio_stop:0;` | Receive audio: the demodulated audio in the current mode, taken before the volume control, 15 dB of headroom (as the USB gadget's). Default 48 kHz, float32, 2 channels (the same sample on both), length 2048. |
+| `audio_samplerate:8000\|12000\|24000\|48000;` | Lower rates through a decimating lowpass at 0.45 of the new rate. |
+| `audio_stream_sample_type:int16\|int24\|int32\|float32;`, `audio_stream_channels:1\|2;`, `audio_stream_samples:100-2048;` | Format, channels, and length per frame (default 2048 at 48 kHz, 1024 at 24, 512 at 12, 256 at 8). |
+| `iq_start:0;` / `iq_stop:0;`, `iq_samplerate:48000\|96000;` | I/Q, float32 complex, centred on the dial. 96 kHz (the default) as captured; 48 kHz decimated, flat to about ±18 kHz. 192 and 384 kHz aren't available and are answered with the rate in force. Unlike iq_stream and HPSDR, TCI's I/Q is the conventional way up: a station above the dial is at positive frequency. |
+| `tx_stream_audio_buffering:50-500;` | Transmit audio kept requested ahead, ms (default 50). |
+
+**PTT and transmit audio.** `trx:0,true,tci;` keys the transmitter with
+this client supplying the audio, in USB, LSB or DIGITAL: the server sends
+it TX_CHRONO frames (48 kHz, float32, 2 channels, length 2048), and it
+answers each with a TX audio frame of that length. Stereo is assumed and
+the left channel is used; `channels` and any payload past `length` are
+ignored, as JTDX sends them. A client with nothing to send may send zeros
+or skip a request. Without the `tci` source (`trx:0,true;`, or Hamlib's
+`trx:0,true,Vac;`) PTT behaves as rigctld's `T`: DIGITAL transmits the
+USB gadget's audio, and USB, LSB and CW transmit nothing of their own.
+In every case: refused outside the `[tx_band]` table (answered
+`trx:0,false;`), ignored while the local key holds TX, ignored from other
+TCI clients while one holds TX (so one can't unkey another), and
+released if the client that set it disconnects.
+
+**Settings**, top-level keys in `data/hw_settings.ini`, above the first
+`[section]`:
+
+```
+tci_port=50001        # 0 turns TCI off
+tci_max_clients=4     # 1-16
+tci_bind=192.168.1.50 # listen on this interface only; all if absent
+```
+
+**With JTDX or WSJT-X Improved.** Settings → Radio: Rig "TCI Client
+RX1", with `<pi>:50001` where the serial port would go; PTT method CAT;
+and "Use TCI Audio" so the audio comes over TCI rather than from a sound
+card. With the mode setting on "Data/Pkt" the program selects DIGITAL
+(`digu`) itself. Not yet tried on the air.
+
+`tools/tci_client.py` is a small standard-library client that connects,
+checks the initialization burst, and can send commands, record receive
+audio, report I/Q, or transmit a test tone.
+
 ## Using it with WSJT-X
 
 On-air confirmed on Windows 11: WSJT-X decodes FT8 on par with SparkSDR
@@ -348,21 +446,18 @@ Transmit power in DIGITAL hasn't been calibrated on a wattmeter - see
 
 What an application can't do today without changes to the daemon:
 
-- **Network transmit audio.** There's no way to send voice or data
-  audio for transmission over the network. HPSDR's transmit samples
-  are ignored, and USB audio is used only in DIGITAL. A network SSB or
-  AFSK transmitter needs a new audio input.
-- **Network receive audio.** Demodulated audio leaves the Pi only
-  through its speaker and USB. A networked app demodulates the I/Q
-  itself.
+- **Network audio other than TCI's.** HPSDR's transmit samples are
+  ignored; receive and transmit audio over the network go through TCI.
 - **Remote element keying.** CW from a computer goes as text (`b`,
   `KY`), sent by the keyer; there's no way to key individual elements
   remotely, and remote PTT in CW on its own sends no carrier.
 - **Transmit metering.** Forward/reflected power, SWR, and the INA260's
   supply voltage and current aren't exposed.
-- **Change notifications.** State is poll-only. Kenwood `AI` is
-  answered but not honored.
-- **A PTT safety timeout.** A client that sets TX and disappears
+- **Change notifications**, except over TCI, which pushes every change.
+  rigctld and CAT are poll-only; Kenwood `AI` is answered but not
+  honored.
+- **A PTT safety timeout.** A TCI client that disconnects while holding
+  TX releases it, but any other client that sets TX and disappears
   leaves the radio transmitting. (Transmit *is* refused outside the
   calibrated bands - that check is on the frequency, not on time.)
 - **Split and a second VFO**, a variable receive passband, AGC
@@ -370,8 +465,8 @@ What an application can't do today without changes to the daemon:
 - **HPSDR sample rates other than 96 kHz**, and more than one HPSDR
   client.
 
-A TCI server, which would provide network receive and transmit audio,
-CW text and change notifications over one WebSocket connection, is
-studied in
-[`dsp_design_notes/tci_design_study.md`](dsp_design_notes/tci_design_study.md);
-nothing of it is built.
+- **CW over TCI.** `cw_macros`, `cw_msg` and `cw_macros_stop` are
+  ignored for now; the design is
+  [`dsp_design_notes/tci_design_study.md`](dsp_design_notes/tci_design_study.md)
+  §8. CW text goes through rigctld's `b` or CAT's `KY`.
+- **TCI's 192 and 384 kHz I/Q**, second receiver, and line-out stream.
