@@ -6,8 +6,9 @@ I/Q produced in
 [`02_rx_processing_pipeline.md`](02_rx_processing_pipeline.md) gets to
 the SDR application actually using it. The two are documented together
 because one file — `hpsdr_p1.c` — does both jobs. Every file this
-document covers (`hpsdr_p1.c`, `usb_gadget.c`, `iq_stream.c`, `hamlib.c`)
-lives under `src/interfaces/` - kept separate from the DSP/radio-control
+document covers (`hpsdr_p1.c`, `usb_gadget.c`, `iq_stream.c`, `hamlib.c`,
+and the TCI server's `tci.c`, `tci_stream.c` and `tci_ws.c`) lives under
+`src/interfaces/` - kept separate from the DSP/radio-control
 core (`sound.c`, `rx_audio.c`, `radio.c`, `cw.c`, `vfo.c`, ...) in plain
 `src/`, since none of these four decide anything about the signal path
 themselves - they only carry state in and out of it for whichever
@@ -24,7 +25,7 @@ functions that touch hardware to change frequency or key the
 transmitter. Every control surface calls into these two functions rather
 than poking GPIO or the si5351 directly — so adding a new control
 surface never means a second place that can put the hardware in an
-inconsistent state. Today there are two callers:
+inconsistent state. The callers:
 
 - **Hamlib/rigctld** (`hamlib.c`) — a live frequency control surface
   (`F`), primarily for WSJT-X and similar apps.
@@ -34,6 +35,9 @@ inconsistent state. Today there are two callers:
   see below.
 - **HPSDR's inbound command parser** (`hpsdr_p1.c`) — calls
   `radio_set_tx()` only, for MOX/PTT (below).
+- **The TCI server** (`tci.c`) — frequency, mode and PTT for TCI clients
+  (JTDX, WSJT-X Improved, loggers, Hamlib's TCI backend); see the last
+  section.
 
 ## Hamlib / rigctld server
 
@@ -343,3 +347,76 @@ sending TX audio yet), and none of `uac_init()`, `cat_init()`, or
 running on whatever subset of control/streaming surfaces came up
 successfully; see
 [`05_process_and_threading_model.md`](05_process_and_threading_model.md).
+
+## TCI server (`tci.c`, `tci_stream.c`, `tci_ws.c`)
+
+A server for Expert Electronics' Transceiver Control Interface (TCI v2.0):
+control, 48 kHz receive and transmit audio, and I/Q, over one WebSocket
+connection per client, TCP 50001 by default. It serves the programs that
+connect to a TCI radio - JTDX, WSJT-X Improved, MSHV, loggers, and
+Hamlib's TCI backend - so they need neither the USB gadget nor CAT. It
+complements HPSDR rather than replacing it: the panadapter programs
+maxibitx serves over HPSDR are TCI servers themselves. The client-side
+reference is [`06_api.md`](06_api.md), "TCI"; the design, and what the
+clients were found to need, is
+[`dsp_design_notes/tci_design_study.md`](dsp_design_notes/tci_design_study.md).
+
+Three files, in layers:
+
+- **`tci_ws.c`** — a WebSocket server (RFC 6455, server side), knowing
+  nothing of TCI. An accept thread, and per client a reader thread
+  (handshake, then frames: unmasking, 7/16/64-bit lengths, fragmented
+  messages, ping, close) and a writer thread that sends a queue of frames,
+  so no caller waits on a client's network. A client not keeping up has
+  binary frames (streams) dropped past 2 MB queued, and is disconnected
+  past 8 MB. Client ids stay unique across reconnects, so a send meant
+  for a client that has gone is never delivered to the next one in its
+  slot.
+- **`tci.c`** — the protocol: the initialization burst, the commands, and
+  keeping every client in step. Frequency, mode and PTT go through
+  `radio_tune_to()`, `radio_set_mode()` and `radio_set_tx()`, like every
+  other surface. Changes made elsewhere have no notification, so a service
+  thread samples the state TCI publishes every 50 ms and sends what
+  changed; the same thread, every 5 ms, runs `tci_stream.c`.
+- **`tci_stream.c`** — three lock-free single-producer, single-consumer
+  rings between the audio thread and TCI (receive audio, I/Q, transmit
+  audio), and the conversion of each to what every client asked for:
+  rate (receive audio at 48, 24, 12 or 8 kHz; I/Q at 96 or 48 kHz, through
+  windowed-sinc decimators), sample type, channels and frame size.
+
+**The audio thread's contract is unchanged.** `sound.c` gains
+`tci_push_iq()` beside `iq_stream_send()`, `tci_push_audio_rx()` beside
+the gadget's `uac_push_audio_rx()`, and in its DIGITAL transmit branch a
+choice between `uac_pull_audio_tx()` and `tci_pull_audio_tx()`. None
+blocks, locks or allocates, and each push returns at once when no TCI
+client has started that stream.
+
+**Transmit audio.** A client that keys with `trx:0,true,tci;` supplies
+the transmit audio, in USB, LSB or DIGITAL; the TCI server sends it
+TX_CHRONO frames, each asking for 1024 stereo frames, keeping its
+`tx_stream_audio_buffering` (50 ms by default) requested ahead of what
+the audio thread still has to play. While TCI isn't supplying audio the
+audio thread discards anything in that ring every block, so a
+transmission never starts with audio left from the last. Without the
+`tci` source, PTT behaves as rigctld's `T` does: DIGITAL takes the USB
+gadget's audio, and USB, LSB and CW transmit no audio of their own.
+
+**PTT rules** are rigctld's and CAT's - refused outside the `[tx_band]`
+table, ignored while the local key holds TX - plus two: while one TCI
+client holds TX the others' `trx` is ignored, so one client can't unkey
+another's transmission; and a TCI client that disconnects while holding
+TX releases it.
+
+**Settings**, top-level keys in `data/hw_settings.ini`: `tci_port`
+(default 50001; 0 turns TCI off), `tci_max_clients` (1-16, default 4),
+and `tci_bind` (a dotted IPv4 address to listen on one interface only).
+Like rigctld and HPSDR it has no authentication, and a TCI client can
+transmit.
+
+**Bench tests.** `make test-tci-ws` checks the WebSocket layer over
+loopback (the RFC's accept vector, framing, close, protocol errors, the
+client limit, the drop policy); `make test-tci` runs the whole server with
+the radio stubbed, against scripted JTDX- and Hamlib-style sessions and
+every stream format. `./test-tci --serve` runs that stubbed server with a
+test tone for trying a client without a radio, and `tools/tci_client.py`
+is a small client for checking a real maxibitx from a laptop.
