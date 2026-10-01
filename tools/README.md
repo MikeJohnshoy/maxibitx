@@ -82,6 +82,8 @@ commands and print the replies (`-c "vfo:0,0,7074000;"`), record receive
 audio and report its format and level (`--audio 5 --wav rx.wav`), report
 the I/Q's rate and strongest frequency (`--iq 3 --iq-rate 48000`), or
 transmit a test tone through the TCI audio path (`--tx-tone 1000`; this
-keys the transmitter - use a dummy load). `./test-tci --serve` on any
+keys the transmitter - use a dummy load). CW text goes as commands, in CW
+mode: `-c "cw_macros:0,cq test |ar|;"` or `-c "cw_msg:0,tu,kb2ml,5nn;"`
+(these key the transmitter too). `./test-tci --serve` on any
 computer runs a stubbed server to try it against without a radio. See
 [`../docs/06_api.md`](../docs/06_api.md), "TCI".
