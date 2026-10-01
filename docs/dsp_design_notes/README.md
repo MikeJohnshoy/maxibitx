@@ -281,7 +281,10 @@ already used in `antialias_filter_design.md`.
   server as built - `tci_ws.c`, `tci.c`, `tci_stream.c`, 1925 lines, with
   the study's claim about rigctld `T` taking the mic corrected - and §16
   the testing: two loopback harnesses (`test-tci-ws`, `test-tci`), and
-  Hamlib's own TCI client driving a stubbed server. Status: **first
-  delivery implemented** (WebSocket, control, receive and transmit audio,
-  I/Q) and bench-tested; **not yet on the air**; CW over TCI and NCM not
-  built.
+  Hamlib's own TCI client driving a stubbed server. §17 then adds CW over
+  TCI (`tci_cw.c`): `cw_macros` with prosigns and in-text speed changes,
+  `cw_msg` with its callsign fed a character at a time so it can be
+  corrected as it goes out, `callsign_send`, `cw_macros_stop`, terminal
+  mode - checked by running the real keyer and reading back what it keys.
+  Status: **implemented** (WebSocket, control, receive and transmit audio,
+  I/Q, CW text) and bench-tested; **not yet on the air**; NCM not built.
