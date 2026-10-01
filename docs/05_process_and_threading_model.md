@@ -43,8 +43,9 @@ reading `sound.c`.
   - the TCI server's threads (`tci.c`, `tci_ws.c`): an accept thread,
     a reader and a writer thread per connected client, and a service
     thread that wakes every 5 ms to turn the audio thread's receive-audio
-    and I/Q rings into frames and pace TX_CHRONO requests, and every
-    50 ms to send clients the state changes made elsewhere. One mutex
+    and I/Q rings into frames, pace TX_CHRONO requests and feed a CW
+    message's callsign to the keyer, and every 50 ms to send clients the
+    state changes made elsewhere. One mutex
     serializes the TCI threads; the audio thread never takes it, meeting
     TCI only through lock-free rings and atomic flags;
   - the USB gadget's UAC writer thread, and its reader thread when the
