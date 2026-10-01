@@ -70,3 +70,18 @@ full ±48kHz native-96kHz baseband range around dial center (see
 `iq_stream_design.md` for what actually limits how much of that is real,
 undistorted signal vs. crystal-filter skirt), and updates at roughly
 15fps regardless of how much faster the underlying FFT itself runs.
+
+## `tci_client.py`
+
+A small command-line TCI client, standard library only, for checking
+maxibitx's TCI server (`src/interfaces/tci.c`, TCP 50001) from a laptop.
+With no options it connects, prints the initialization burst, and checks
+it against what JTDX and Hamlib depend on: lowercase keywords, one
+command per message, `start;` before `ready;`, within 1.5 s. Options send
+commands and print the replies (`-c "vfo:0,0,7074000;"`), record receive
+audio and report its format and level (`--audio 5 --wav rx.wav`), report
+the I/Q's rate and strongest frequency (`--iq 3 --iq-rate 48000`), or
+transmit a test tone through the TCI audio path (`--tx-tone 1000`; this
+keys the transmitter - use a dummy load). `./test-tci --serve` on any
+computer runs a stubbed server to try it against without a radio. See
+[`../docs/06_api.md`](../docs/06_api.md), "TCI".
