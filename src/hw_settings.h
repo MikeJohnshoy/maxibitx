@@ -117,4 +117,17 @@ extern int tx_ext_ptt_delay_ms;
 
 extern int key_debounce_ms;
 
+// ---- TCI server -------------------------------------------------------------
+//
+// Top-level keys for where tci.c listens: tci_port (TCI_DEFAULT_PORT, 50001,
+// if absent; 0 turns the TCI server off), tci_max_clients (1-16, default 4)
+// and tci_bind (a dotted IPv4 address, to listen on one interface only;
+// every interface if absent). TCI has no authentication and a client can
+// transmit. docs/dsp_design_notes/tci_design_study.md §9.
+#define HW_MAX_TCI_CLIENTS 16 // tci_ws.h's WS_MAX_CLIENTS
+
+extern int tci_port;
+extern int tci_max_clients;
+extern char tci_bind[64];
+
 #endif /* HW_SETTINGS_H */
