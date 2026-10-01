@@ -10,6 +10,7 @@
 #include "hw_settings.h"
 #include "si5351.h" // si5351_set_calibration() - the "cal" key below
 #include "radio.h"
+#include "tci.h" // TCI_DEFAULT_PORT, TCI_DEFAULT_MAX_CLIENTS
 #include <ctype.h>
 #include <math.h>
 #include <stdio.h>
@@ -24,6 +25,9 @@ double tx_full_scale_power = HW_DEFAULT_FULL_SCALE_POWER;
 double tx_max_power = HW_DEFAULT_MAX_POWER;
 int tx_ext_ptt_delay_ms = HW_DEFAULT_EXT_PTT_DELAY_MS;
 int key_debounce_ms = HW_DEFAULT_KEY_DEBOUNCE_MS;
+int tci_port = TCI_DEFAULT_PORT;
+int tci_max_clients = TCI_DEFAULT_MAX_CLIENTS;
+char tci_bind[64] = "";
 
 // Section state while scanning the file - only [tx_band] sections are
 // acted on today; [tcxo] and any others are recognized (so their key=value
@@ -35,7 +39,8 @@ enum hw_section { HW_SECTION_TOP, HW_SECTION_TCXO, HW_SECTION_TX_BAND, HW_SECTIO
 // the last [tx_band] - would otherwise be skipped without a word.
 static int is_top_level_key(const char *key) {
   static const char *const keys[] = { "bfo_freq", "xtal_filter_center", "full_scale_power",
-                                      "max_power", "ext_ptt_delay_ms", "key_debounce_ms" };
+                                      "max_power", "ext_ptt_delay_ms", "key_debounce_ms",
+                                      "tci_port", "tci_max_clients", "tci_bind" };
   for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
     if (!strcmp(key, keys[i]))
       return 1;
@@ -95,6 +100,18 @@ void hw_settings_load(void) {
 
     char key[64];
     long value;
+    char text[64];
+    // tci_bind is the one key whose value isn't a number
+    if (sscanf(p, " %63[^= \t] = %63s", key, text) == 2 && !strcmp(key, "tci_bind")) {
+      if (section == HW_SECTION_TOP) {
+        memcpy(tci_bind, text, sizeof(tci_bind));
+        printf("init: tci_bind loaded from %s: %s\n", HW_SETTINGS_PATH, tci_bind);
+      } else {
+        printf("init: tci_bind in %s is inside a [section], so it is ignored - move it above "
+               "the first [section]\n", HW_SETTINGS_PATH);
+      }
+      continue;
+    }
     if (sscanf(p, "%63[^=]=%ld", key, &value) != 2)
       continue;
     // "key = value" as well as "key=value": the scan above stops at '=', so
@@ -150,6 +167,23 @@ void hw_settings_load(void) {
                  HW_SETTINGS_PATH, HW_MAX_KEY_DEBOUNCE_MS, ms);
         else
           printf("init: key_debounce_ms loaded from %s: %ld ms\n", HW_SETTINGS_PATH, ms);
+      } else if (!strcmp(key, "tci_port")) {
+        if (value >= 0 && value <= 65535) {
+          tci_port = (int)value;
+          printf("init: tci_port loaded from %s: %d%s\n", HW_SETTINGS_PATH, tci_port,
+                 tci_port ? "" : " - TCI server off");
+        } else {
+          printf("init: tci_port=%ld in %s isn't a TCP port - using %d\n", value, HW_SETTINGS_PATH,
+                 tci_port);
+        }
+      } else if (!strcmp(key, "tci_max_clients")) {
+        long n = value < 1 ? 1 : value > HW_MAX_TCI_CLIENTS ? HW_MAX_TCI_CLIENTS : value;
+        tci_max_clients = (int)n;
+        if (n != value)
+          printf("init: tci_max_clients=%ld in %s is outside 1-%d - using %ld\n", value,
+                 HW_SETTINGS_PATH, HW_MAX_TCI_CLIENTS, n);
+        else
+          printf("init: tci_max_clients loaded from %s: %ld\n", HW_SETTINGS_PATH, n);
       } else if (!strcmp(key, "full_scale_power") || !strcmp(key, "max_power")) {
         // Watts, and fractional on a real board (5.5) - re-parse as a
         // double, the %ld above only captured the integer truncation.
