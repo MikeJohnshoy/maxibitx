@@ -58,6 +58,12 @@ int keyer_text_busy(void) { return 0; }
 
 int keyer_text_room(void) { return 0; }
 
+int keyer_text_queued(void) { return 0; }
+
+int keyer_text_letters_queued(void) { return 0; }
+
+unsigned keyer_text_interrupts(void) { return 0; }
+
 const char *keyer_mode_name(enum keyer_mode m) {
   static const char *const names[KEYER_MODES] = {"straight", "bug", "ultimatic", "iambic A",
                                                  "iambic B"};
