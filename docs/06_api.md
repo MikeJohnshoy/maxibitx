@@ -19,7 +19,7 @@ around a feature.
 | iq_stream | UDP 4536 | Raw baseband I/Q, 96 kHz, simple format | Up to 4 |
 | HPSDR Protocol 1 | UDP 1024 | I/Q plus tuning and MOX, for existing SDR apps | 1 |
 | USB gadget | USB device port | Audio in and out (48 kHz), Kenwood CAT serial | 1 host; CAT port 1 owner |
-| TCI | TCP 50001, WebSocket | Control, receive and transmit audio (48 kHz), I/Q (96 or 48 kHz); for JTDX, WSJT-X Improved, loggers, Hamlib's TCI backend | Up to 4 (settable, 16 at most) |
+| TCI | TCP 50001, WebSocket | Control, receive and transmit audio (48 kHz), I/Q (96 or 48 kHz), CW text; for JTDX, WSJT-X Improved, loggers, Hamlib's TCI backend | Up to 4 (settable, 16 at most) |
 
 Each interface is optional. If one fails to come up (no USB device
 port, a port already in use), the daemon logs it and runs without it.
@@ -394,6 +394,22 @@ In every case: refused outside the `[tx_band]` table (answered
 TCI clients while one holds TX (so one can't unkey another), and
 released if the client that set it disconnects.
 
+**CW text**, in CW and CWR only (ignored, with a console line, in other
+modes), sent by the keyer as rigctld's `b` is - at the keyer's speed,
+with `3T` and `7T` spacing, and stopped by any touch of the key or
+paddle:
+
+| Command | Notes |
+|---|---|
+| `cw_macros:0,<text>;` | Queued in order. Prosigns between bars, `\|AR\|` `\|SK\|` `\|BT\|` `\|KN\|` `\|AS\|` `\|BK\|` `\|HH\|` `\|SN\|`; other letters between bars are sent as letters. `<` and `>` send what follows 5 WPM slower or faster, and the next macro starts at the keyer's speed again. `^`, `~`, `*` stand for `:`, `,`, `;`. Spaces are kept as sent, so successive macros need their own. |
+| `cw_msg:0,<prefix>,<callsign>,<suffix>;` | A message, a word space between the parts; `_` is an empty part, as is a missing suffix; `<callsign>$2` sends the callsign twice (up to 5). Stops any text being sent; a `cw_macros` arriving during it waits until it is out. |
+| `cw_msg:<callsign>;` | Corrects the callsign of the message being sent, for every character not yet started except the next. Ignored once the callsign is out. |
+| `callsign_send:<callsign>;` | Server to every client: the callsign, as corrected, has been sent. |
+| `cw_macros_stop;` | The element being sent completes; the rest is dropped. |
+| `cw_terminal:true\|false;` | Terminal mode: TX stays on after the text ends, until set false (or `cw_macros_stop`, a touch of the key, or the client disconnecting); `cw_macros_empty;` is sent to every client as the last character queued starts. Answered to every client. |
+| `cw_macros_speed_up:N;`, `cw_macros_speed_down:N;` | The keyer's speed by N WPM; the speeds are echoed. |
+| `cw_macros_delay;` | Answered `cw_macros_delay:0;` - TX starts as soon as the T/R sequence allows. |
+
 **Settings**, top-level keys in `data/hw_settings.ini`, above the first
 `[section]`:
 
@@ -449,7 +465,8 @@ What an application can't do today without changes to the daemon:
 - **Network audio other than TCI's.** HPSDR's transmit samples are
   ignored; receive and transmit audio over the network go through TCI.
 - **Remote element keying.** CW from a computer goes as text (`b`,
-  `KY`), sent by the keyer; there's no way to key individual elements
+  `KY`, TCI's `cw_macros` and `cw_msg`), sent by the keyer; TCI's `keyer`
+  command is ignored; there's no way to key individual elements
   remotely, and remote PTT in CW on its own sends no carrier.
 - **Transmit metering.** Forward/reflected power, SWR, and the INA260's
   supply voltage and current aren't exposed.
@@ -464,9 +481,4 @@ What an application can't do today without changes to the daemon:
   settings, and a calibrated S-meter.
 - **HPSDR sample rates other than 96 kHz**, and more than one HPSDR
   client.
-
-- **CW over TCI.** `cw_macros`, `cw_msg` and `cw_macros_stop` are
-  ignored for now; the design is
-  [`dsp_design_notes/tci_design_study.md`](dsp_design_notes/tci_design_study.md)
-  §8. CW text goes through rigctld's `b` or CAT's `KY`.
 - **TCI's 192 and 384 kHz I/Q**, second receiver, and line-out stream.
