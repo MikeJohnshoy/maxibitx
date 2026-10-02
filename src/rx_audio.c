@@ -12,10 +12,10 @@
 //      rx_audio_process().
 //   2. Demod: CW and CWR mix up to the selected CW pitch; USB/LSB take
 //      the real part directly, so audio Hz == |RF - dial|.
-//   3. Optional narrow selectivity, centered on that same pitch: an
-//      elliptic IIR from a pre-designed bank (default) or rx_filter.c's
-//      FFT filter. Both always run, so switching or un-bypassing never
-//      clicks.
+//   3. Optional narrow selectivity, centered on that same pitch:
+//      rx_filter.c's FFT filter (default) or an elliptic IIR from a
+//      pre-designed bank. Both always run, so switching or un-bypassing
+//      never clicks.
 //
 // Pitch and width are both selectable at runtime - 500-1000Hz in 100Hz
 // steps, by 150/300/450/600Hz - see rx_audio_set_narrow_pitch()/_width() in
