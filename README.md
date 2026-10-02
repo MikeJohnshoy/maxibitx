@@ -53,10 +53,9 @@ server (`test-tci-ws`, `test-tci`, over loopback), without any hardware attached
 ## What works
 
 - **Receive:** baseband I/Q to SDR apps over HPSDR Protocol 1 (e.g.
-  SDRConsole or SparkSDR). An onboard CW/USB/LSB demodulator feeds the radio's own
-  speaker and a USB sound card for WSJT-X or FLDigi. FT8 decodes over USB audio
-  to WSJTX match SparkSDR on the same I/Q.
-- **Transmit:** CW from a straight key, on frequency, ~5 W on all nine
+  SDRConsole or SparkSDR) or Transceiver Control Interface - TCI (sdrOxide). An onboard CW/USB/LSB demodulator feeds the radio's own
+  speaker and a USB sound card for WSJT-X or FLDigi. 
+- **Transmit:** CW from a straight key or paddle, on frequency, ~5 W on all nine
   bands. USB/LSB from the mic have been on the air, and DIGITAL is
   confirmed by a two-way FT8 contact made with WSJT-X through the USB
   gadget. Current limitations are listed in
