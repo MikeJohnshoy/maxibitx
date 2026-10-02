@@ -79,32 +79,32 @@ Around it sit ordinary threads that do everything slow:
   any transmit request that was refused.
 
 ```mermaid
-flowchart LR
-    subgraph HW["sBitx hardware"]
-        RF["Antenna, LPFs, mixers,<br/>crystal filter, PA"]
-        CODEC["WM8731 codec<br/>96 kHz stereo"]
-        CLK["si5351<br/>clk1, clk2"]
-        GPIO["GPIO: LPF relays,<br/>TX_LINE, EXT_PTT, key jack"]
-    end
+flowchart TD
+    APPS["SDR apps, WSJT-X, JTDX,<br/>loggers, FLRig, control panel"]
+    APPS <-->|"network, USB"| IFS
     subgraph MX["maxibitx process"]
+        IFS["Interface threads<br/>rigctld, HPSDR, iq_stream,<br/>USB gadget + CAT, TCI"]
+        RADIO["radio.c state<br/>+ TX worker thread"]
         AUDIO["Audio thread, SCHED_FIFO<br/>RX chain + TX chain"]
         KEY["Key input thread"]
-        RADIO["radio.c state +<br/>TX worker thread"]
-        IFS["Interface threads:<br/>rigctld, HPSDR, iq_stream,<br/>USB gadget + CAT, TCI"]
     end
-    APPS["SDR apps, WSJT-X, JTDX,<br/>loggers, FLRig, control panel"]
-    RF <--> CODEC
-    CODEC <-->|"PCM blocks"| AUDIO
-    GPIO -->|"key edges"| KEY
-    KEY -->|"edge ring"| AUDIO
+    IFS -->|"tune, mode, PTT"| RADIO
     AUDIO -->|"I/Q and audio rings"| IFS
     IFS -->|"TX audio rings"| AUDIO
-    IFS -->|"tune, mode, PTT"| RADIO
     AUDIO -->|"key PTT"| RADIO
+    KEY -->|"edge ring"| AUDIO
+    subgraph HW["sBitx hardware"]
+        CLK["si5351<br/>clk1, clk2"]
+        GPIO["GPIO: LPF relays,<br/>TX_LINE, EXT_PTT, key jack"]
+        CODEC["WM8731 codec<br/>96 kHz stereo"]
+        RF["Antenna, LPFs, mixers,<br/>crystal filter, PA"]
+    end
     RADIO -->|"I2C"| CLK
     RADIO -->|"relays, PTT"| GPIO
+    GPIO -->|"key edges"| KEY
+    AUDIO <-->|"PCM blocks"| CODEC
     CLK --> RF
-    IFS <-->|"network, USB"| APPS
+    CODEC <--> RF
 ```
 
 ### The radio model
