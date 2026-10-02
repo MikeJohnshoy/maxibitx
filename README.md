@@ -67,7 +67,8 @@ server (`test-tci-ws`, `test-tci`, over loopback), without any hardware attached
   50001) carries control, receive and transmit audio and I/Q over one
   network connection for JTDX, WSJT-X Improved, loggers and Hamlib's TCI
   backend; it is bench-tested, including against Hamlib's own TCI client,
-  but not yet on the air.
+  and its I/Q is confirmed on the air with sdrOxide; the audio paths and
+  CW text are not yet tried on the air.
 
 ## Building and running
 
