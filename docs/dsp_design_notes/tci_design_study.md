@@ -3,8 +3,9 @@
 Status: **implemented** - steps 1, 2, 3 and 5 of §13 (the WebSocket
 server, control, receive and transmit audio, I/Q), as decided in §14 and
 described as built in §15, then step 4, CW over TCI (§17); bench-tested
-(§16), including against Hamlib's own TCI client, but **not yet on the
-air**. NCM (step 6) is not built. Written before any code,
+(§16), including against Hamlib's own TCI client. **On the air so far:**
+I/Q to a TCI panadapter client (sdrOxide, October 2026), the right way
+up; the audio paths and CW text not yet. NCM (step 6) is not built. Written before any code,
 as the keyer's was ([`cw_keyer_design_study.md`](cw_keyer_design_study.md)),
 to find out whether a TCI server fits maxibitx, what it has to do to work
 with the programs that would actually connect to it, and in what order to
@@ -529,8 +530,9 @@ proposed:
 - **I/Q orientation.** Sent conjugated, so a station above the dial is
   at positive frequency - the conventional way up, where iq_stream and
   HPSDR carry the raw inverted I/Q (the latter because SparkSDR expects
-  it). This is a prediction of what TCI clients expect, to be confirmed
-  on the air with a panadapter client. At 48 kHz the decimator is flat
+  it). Confirmed on the air in October 2026 with sdrOxide as a TCI
+  panadapter client: signals appear on the side of the dial they are
+  really on, not mirrored. At 48 kHz the decimator is flat
   to ±15 kHz (0.00 dB), 0.37 dB down at ±20 kHz, and attenuates what
   would alias by more than 100 dB.
 - **Volume.** TCI dB = (percent - 100) / 2, since rx_audio's taper is
@@ -611,8 +613,9 @@ On the bench, over loopback, with no radio:
 
 Still to do on the radio (§13): JTDX and WSJT-X Improved receiving and
 making an FT8 contact over TCI; a logger following the frequency; a
-contest logger's CW macros; a TCI panadapter client confirming the I/Q
-orientation; and the Pi Zero 2W's CPU and Wi-Fi with I/Q flowing.
+contest logger's CW macros; and the Pi Zero 2W's CPU and Wi-Fi with I/Q
+flowing. Done: a TCI panadapter client (sdrOxide) shows the I/Q the right
+way up, as §15 predicted.
 
 ## 17. CW over TCI, as built
 
