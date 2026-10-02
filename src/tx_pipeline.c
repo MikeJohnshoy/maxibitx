@@ -168,10 +168,9 @@ void tx_pipeline_process_block(struct tx_pipeline *p, enum tx_pipeline_signal si
 	// output starts L samples later in global time every block, which adds
 	// a per-block phase of e^(-j*2*pi*k*b*L/N). With L/N exactly 1/2
 	// (1024/2048) that factor is e^(-j*pi*k*b): +1 unless both k and b are
-	// odd, then -1. Both rotations here are odd (467, 497), so without this
-	// the carrier flips sign every other block (measured: the wanted tone
-	// at -97.75dB, ARCHITECTURE.md §10 step 4; CW's 467 bins are odd,
-	// SSB's 482 even). If the block/impulse sizes
+	// odd, then -1. CW's 467 bins are odd, so without this its carrier
+	// flips sign every other block (measured: the wanted tone at -97.75dB,
+	// ARCHITECTURE.md §10 step 4); SSB's 482 are even. If the block/impulse sizes
 	// ever change so that N != 2L, this needs a general phase correction,
 	// not a sign.
 	long b = p->block_count++;
