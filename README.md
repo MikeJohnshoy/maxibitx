@@ -30,7 +30,7 @@ and no UI runs in the process. Anything an external display or controller needs
 goes through a narrow, documented interface
 ([`docs/06_api.md`](docs/06_api.md)).
 
-The whole daemon is about 6,300 lines of C in 21 files; a big part of that is 
+The whole daemon is about 11,500 lines of C in 30 files; a big part of that is 
 in a collection of external interfaces. These provide a variety of ways to connect
 applications to maxibitx.
 
@@ -47,7 +47,8 @@ applications to maxibitx.
 
 The DSP is bench-tested on its own (`make test-fft-filter`,
 `test-tx-pipeline`, `test-rx-filter`, `test-rx-audio`,
-`test-upsample48k`, `test-cw`, `test-key-input`, `test-keyer`), and so is the TCI
+`test-rx-audio-impulse`, `test-upsample48k`, `test-cw`, `test-key-input`,
+`test-keyer`, `test-keyer-straight`), and so is the TCI
 server (`test-tci-ws`, `test-tci`, over loopback), without any hardware attached.
 
 ## What works
@@ -86,7 +87,7 @@ device-mode USB port and a few kernel options - see
 
 | Doc | Content |
 |---|---|
-| [`docs/00_intro.md`](docs/00_intro.md) | Scope, status, and a map of the rest of the docs |
+| [`docs/00_intro.md`](docs/00_intro.md) | Introduction to maxibitx: the whole system in one stand-alone document, including the RX and TX pipelines in detail |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Design rationale and build order, step by step, with measurements |
 | [`docs/01_hardware_init_and_control.md`](docs/01_hardware_init_and_control.md) | GPIO, si5351/I2C, WM8731 codec bring-up |
 | [`docs/02_rx_processing_pipeline.md`](docs/02_rx_processing_pipeline.md) | Antenna to I/Q and audio, stage by stage |
@@ -104,8 +105,17 @@ device-mode USB port and a few kernel options - see
 ## Credits
 
 - Ashhar Farhan (VU2ESE) - the sBitx radio and its original software
-- JJ's 64-bit sbitx repository, https://github.com/drexjj/sbitx, which
-  the code was based on
+- Jesse Kujawa (W9JES) - the 64-bit sbitx repository,
+  https://github.com/drexjj/sbitx, which the code was based on
 - `hpsdrsim.c` protocol details from the piHPSDR project
 - [minibitx](https://github.com/MikeJohnshoy/minibitx), maxibitx's direct
   predecessor
+- Evan (AC9TU), Robert Benedict and Juan Agrinsoni (WP3DN) - encouragement
+  throughout
+
+## License
+
+GNU General Public License v3.0, to the extent that it does not violate
+the rights of the authors whose open-source code this was drawn from -
+see [`LICENSE`](LICENSE) and
+[`docs/00_intro.md`](docs/00_intro.md#10-licensing-and-acknowledgements).
