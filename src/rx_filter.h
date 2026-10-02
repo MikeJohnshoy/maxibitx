@@ -22,9 +22,8 @@
 // This is live, not a bench experiment: rx_audio.c creates one instance in
 // rx_audio_init(), runs it on every block whether or not it is the selected
 // implementation (so switching never thumps), and retunes it whenever the
-// pitch or width changes. The elliptic bank is still the default, pending
-// an on-air comparison rather than any bench result - see
-// ARCHITECTURE.md §10 step 7. rx_filter_test.c remains the standalone
+// pitch or width changes. It is the default implementation, run at
+// minimum phase (rx_audio.c). rx_filter_test.c remains the standalone
 // harness for this module's own DSP.
 //
 // Why this needs its own module, not just a call into tx_pipeline.c:
