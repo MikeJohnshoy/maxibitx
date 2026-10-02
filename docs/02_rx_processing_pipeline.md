@@ -181,8 +181,10 @@ one at 7030500 lands at −500 Hz. `sound.c` deliberately leaves the I/Q
 this way: SparkSDR over `hpsdr_p1.c` displays and decodes it correctly
 as-is, and changing it at the source would flip every I/Q consumer at
 once. Consumers that need the other orientation correct for it
-themselves: `rx_audio.c` (`RX_IQ_SPECTRUM_INVERTED`, below) and
-`tools/rigctl_panel.py`'s spectrum display (which conjugates the I/Q).
+themselves: `rx_audio.c` (`RX_IQ_SPECTRUM_INVERTED`, below),
+`tools/rigctl_panel.py`'s spectrum display (which conjugates the I/Q), and
+the TCI server (`tci_stream.c`, which sends it conjugated - confirmed with
+sdrOxide as a TCI panadapter client).
 This was confirmed on air, and was the root cause of weak FT8 decoding
 over the USB audio gadget - see
 [`dsp_design_notes/rx_uac_out_digital_mode_bandwidth.md`](dsp_design_notes/rx_uac_out_digital_mode_bandwidth.md)
