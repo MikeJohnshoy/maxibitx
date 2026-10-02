@@ -33,8 +33,8 @@ back an all-mode transmitter and an onboard demodulator — without
 bringing the coupling back. Every job lives in its own small file, no UI
 runs in the process, and anything a display or controller needs goes
 through a narrow documented interface
-([`06_api.md`](06_api.md)). The whole daemon is about 6,300 lines of C
-across 21 files, and a large part of that is the external interfaces.
+([`06_api.md`](06_api.md)). The whole daemon is about 11,500 lines of C
+across 30 files, and a large part of that is the external interfaces.
 
 ### Can lessons from maxibitx be used to improve sbitx?
 
