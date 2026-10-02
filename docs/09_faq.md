@@ -641,7 +641,8 @@ design notes: two-tone power and IMD measurements to establish this
 board's honest rated output; voice power never checked on a wattmeter;
 `POWER` and `ALC` bench-tested but not yet exercised against a running
 daemon; remote element keying absent (CW text works, over TCI too);
-TCI not yet tried on the air; carrier placement a
+TCI's audio and CW text not yet tried on the air (its I/Q is, with
+sdrOxide); carrier placement a
 few Hz low from whole-bin rotation (6.25 Hz on SSB, 9.4 Hz on CW); and
 the pipeline carrying about a block of the previous transmission in its
 overlap-save history, with nothing resetting it between bursts.
