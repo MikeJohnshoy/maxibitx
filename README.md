@@ -62,7 +62,7 @@ server (`test-tci-ws`, `test-tci`, over loopback), without any hardware attached
   [`docs/03_tx_processing_pipeline.md`](docs/03_tx_processing_pipeline.md).
 - **Control:** rigctld-compatible TCP (port 4532), Kenwood TS-480 CAT
   over USB serial, HPSDR, and `tools/rigctl_panel.py` (tuning, mode,
-  volume, filters, mic gain and a live spectrum). A TCI server (port
+  volume, filters, mic gain and a live spectrum and waterfall). A TCI server (port
   50001) carries control, receive and transmit audio and I/Q over one
   network connection for JTDX, WSJT-X Improved, loggers and Hamlib's TCI
   backend; it is bench-tested, including against Hamlib's own TCI client,
