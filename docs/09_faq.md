@@ -525,7 +525,7 @@ A small standalone Tk control panel, about a thousand lines of Python,
 that runs on the Pi or any machine on the network. It shows frequency,
 mode, RIT, volume, the narrow-filter switches and its pitch/width
 selectors, mic gain, TX power, an S-meter, an ALC meter, a TX test section
-and a live spectrum with a selectable ±2.5/±5/±15 kHz span. The window
+and a live spectrum and waterfall with a selectable ±2.5/±5/±15 kHz span. The window
 scrolls, so it fits a display shorter than its own content.
 
 Two things make it more interesting than a utility. First, it is a
