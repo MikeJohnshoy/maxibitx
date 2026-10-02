@@ -16,7 +16,8 @@ each source file's header names the file itself. Run it with
 ## `rigctl_panel.py`
 
 A small desktop GUI: a frequency readout/entry (with quick +/- step
-buttons), a volume slider, and a live spectrum display. Talks the same
+buttons), a volume slider, and a live spectrum display with a waterfall
+(about 8 s of history) under it. Talks the same
 plain-text rigctld protocol WSJT-X/Thetis/etc. already use against
 minibitx's built-in server (`hamlib.c`, default TCP 4532) - see
 [`../docs/04_remote_control_and_iq_output.md`](../docs/04_remote_control_and_iq_output.md)
