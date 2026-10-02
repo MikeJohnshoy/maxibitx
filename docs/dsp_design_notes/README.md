@@ -287,4 +287,5 @@ already used in `antialias_filter_design.md`.
   corrected as it goes out, `callsign_send`, `cw_macros_stop`, terminal
   mode - checked by running the real keyer and reading back what it keys.
   Status: **implemented** (WebSocket, control, receive and transmit audio,
-  I/Q, CW text) and bench-tested; **not yet on the air**; NCM not built.
+  I/Q, CW text) and bench-tested; **on the air, I/Q only so far**, the
+  right way up in sdrOxide as a TCI panadapter client; NCM not built.
