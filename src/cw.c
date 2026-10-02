@@ -49,7 +49,7 @@
 // Semi break-in: audio blocks to hold TX after the key goes up, so the
 // relay doesn't chatter between elements. 28 x ~10.7ms = ~300ms. A paddle
 // keyer or text holds it at least a word space, 7 dits, which is longer
-// below ~25 WPM (hang_polls()).
+// below ~28 WPM (hang_polls()).
 #define CW_HANG_POLLS 28
 
 static const double cw_envelope[CW_ENVELOPE_LEN] = {
