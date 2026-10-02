@@ -73,9 +73,10 @@ docs/dsp_design_notes/antialias_filter_design.md's crystal-filter
 analysis and rx_audio_demod_design.md's AGC-placement work were both
 reasoning about. The display draws a selectable slice of it (±2.5, ±5 or
 ±15kHz), which is a crop of the same bins rather than a finer FFT - see
-SPECTRUM_SPAN_CHOICES_HZ.
+SPECTRUM_SPAN_CHOICES_HZ - with a waterfall of the same slice under it
+(about 8 s of history, WATERFALL_ROWS).
 
-The window scrolls, so it can be made shorter than its ~1180px of
+The window scrolls, so it can be made shorter than its ~1300px of
 content and still reach every control - a short laptop screen or the
 Pi's own small touchscreen. The mouse wheel scrolls it, and does so even
 over a slider or a dropdown, so scrolling past a control can never
@@ -179,6 +180,15 @@ SPECTRUM_DB_CEILING = -37.5
 SPECTRUM_SPAN_CHOICES_HZ = (2500, 5000, 15000)
 SPECTRUM_DISPLAY_HALF_SPAN_HZ = 15000  # the default; the operator picks from the tuple above
 
+# --- Waterfall, under the spectrum ---
+# One row per spectrum redraw (SPECTRUM_REDRAW_MS), newest at the top, so
+# 120 rows is about 8 s of history. Same span and same dB window as the
+# trace above it; colours run through these stops from SPECTRUM_DB_FLOOR
+# (black) to SPECTRUM_DB_CEILING (white).
+WATERFALL_ROWS = 120
+WATERFALL_STOPS = ((0.00, (0, 0, 0)), (0.30, (0, 0, 150)), (0.50, (0, 170, 230)),
+                   (0.70, (240, 230, 0)), (0.85, (250, 60, 0)), (1.00, (255, 255, 255)))
+
 # --- Signal strength ("l STRENGTH") ---
 # Mirrors rx_audio.c's RX_STRENGTH_MIN_DB/MAX_DB exactly, so the bar
 # always spans the full range the server can ever report - no clipping
@@ -203,6 +213,14 @@ def s_unit_label(db):
         s = max(0, min(9, s))
         return f"S{s}"
     return f"S9+{db}"
+
+
+def waterfall_palette():
+    """WATERFALL_STOPS as a 256-entry RGB lookup table."""
+    x = np.linspace(0.0, 1.0, 256)
+    pos = [stop for stop, _ in WATERFALL_STOPS]
+    return np.stack([np.interp(x, pos, [rgb[i] for _, rgb in WATERFALL_STOPS])
+                     for i in range(3)], axis=1).astype(np.uint8)
 
 
 def span_khz_label(hz):
@@ -464,7 +482,7 @@ class Panel(tk.Tk):
 
         # --- scroll container ---
         # Everything below lives in self.body, a frame inside a Canvas, so the
-        # whole panel scrolls vertically. Without it the window is ~1180px of
+        # whole panel scrolls vertically. Without it the window is ~1300px of
         # content, which does not fit a 1080p screen once the title bar and
         # taskbar are counted, and on a smaller display (a Pi's own 7"
         # touchscreen, a laptop at 768px) the TX Power group at the bottom was
@@ -788,6 +806,23 @@ class Panel(tk.Tk):
                              command=self.on_spectrum_span_changed
                              ).pack(side="left", padx=(0 if i == 0 else 10, 0))
         self.spectrum_canvas.pack()
+        # The waterfall: a photo image rewritten whole each redraw from
+        # waterfall_rows (rows x width x RGB), which Tk loads as a PPM - about
+        # a millisecond for the whole image, where per-pixel puts would take
+        # far longer.
+        self.waterfall_rows = np.zeros((WATERFALL_ROWS, self.spectrum_canvas_w, 3), np.uint8)
+        self.waterfall_palette = waterfall_palette()
+        self.waterfall_image = tk.PhotoImage(width=self.spectrum_canvas_w, height=WATERFALL_ROWS)
+        self.waterfall_canvas = tk.Canvas(spec, width=self.spectrum_canvas_w,
+                                           height=WATERFALL_ROWS, background="#000",
+                                           highlightthickness=0)
+        self.waterfall_canvas.create_image(0, 0, image=self.waterfall_image, anchor="nw")
+        # The dial centre, as on the trace; sparse dashes so a signal sitting
+        # on it still shows.
+        self.waterfall_canvas.create_line(self.spectrum_canvas_w / 2, 0,
+                                           self.spectrum_canvas_w / 2, WATERFALL_ROWS,
+                                           fill="#fb3", dash=(2, 6))
+        self.waterfall_canvas.pack(pady=(2, 0))
         self.spectrum_status_var = tk.StringVar(value="no spectrum data yet")
         # wraplength pinned to the canvas width: this label's text is the only
         # thing in the window whose length varies at runtime, and the window's
@@ -970,6 +1005,7 @@ class Panel(tk.Tk):
         self.current_freq_hz = None
         self.spectrum_status_var.set("no spectrum data yet")
         self.spectrum_canvas.delete("all")
+        self.clear_waterfall()
         self.smeter_label_var.set("—")
         self.draw_smeter(None)
         self.rit_display_var.set("—")
@@ -1534,7 +1570,30 @@ class Panel(tk.Tk):
         # one and permanently double the frame rate. Kept as a named handler
         # rather than dropping the radio buttons' command= so that reason is
         # written down where someone would otherwise add the call.
-        pass
+        #
+        # The waterfall's history is at the old span, so it starts again.
+        self.clear_waterfall()
+
+    def clear_waterfall(self):
+        self.waterfall_rows[:] = 0
+        self.show_waterfall()
+
+    def show_waterfall(self):
+        rows = self.waterfall_rows
+        header = b"P6 %d %d 255\n" % (rows.shape[1], rows.shape[0])
+        self.waterfall_image.configure(data=header + rows.tobytes(), format="PPM")
+
+    def add_waterfall_row(self, frac):
+        """frac: the displayed bins, 0 (SPECTRUM_DB_FLOOR) to 1 (ceiling)."""
+        w = self.waterfall_rows.shape[1]
+        # Each pixel shows the strongest bin under it: at +-15kHz there are
+        # more bins than pixels, and averaging would fade a narrow CW signal.
+        # At the narrow spans a bin covers several pixels and is repeated.
+        edges = (np.arange(w) * len(frac)) // w
+        row = np.maximum.reduceat(frac, edges)
+        self.waterfall_rows[1:] = self.waterfall_rows[:-1]  # numpy copes with the overlap
+        self.waterfall_rows[0] = self.waterfall_palette[(row * 255.0).astype(np.intp)]
+        self.show_waterfall()
 
     # ---- spectrum ----
     #
@@ -1578,6 +1637,7 @@ class Panel(tk.Tk):
             peak_db, floor_db = float(np.max(db)), float(np.min(db))
             clipped = np.clip(db, SPECTRUM_DB_FLOOR, SPECTRUM_DB_CEILING)
             frac = (clipped - SPECTRUM_DB_FLOOR) / (SPECTRUM_DB_CEILING - SPECTRUM_DB_FLOOR)
+            self.add_waterfall_row(frac)
             ys = h - frac * h
             coords = np.empty(n * 2)
             coords[0::2] = xs
