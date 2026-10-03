@@ -36,21 +36,33 @@ void radio_tune_to(uint32_t f);
 // real-time audio thread.
 //
 // Returns 0 when the state was accepted and -1 when a request to
-// transmit was refused because the dial is outside every calibrated
-// [tx_band] range (hw_settings_tx_allowed()). Doing the check here
-// covers every PTT source at once - the key, rigctld's T, Kenwood TX;
-// and HPSDR MOX. Refusal leaves the radio in receive.
+// transmit was refused, either because this board may not transmit
+// (radio_hw_tx_permitted()) or because the dial is outside every
+// calibrated [tx_band] range (hw_settings_tx_allowed()). Doing the check
+// here covers every PTT source at once - the key, rigctld's T, Kenwood TX,
+// HPSDR MOX and TCI. Refusal leaves the radio in receive.
 //
 // tx_on = 0 is never refused: stopping transmitting must always work.
 int radio_set_tx(int tx_on);
 
-// The dial frequency of the most recent refusal, or 0 if there hasn't
-// been one since the last call. Reading it clears it.
+// 1 if radio_set_tx(1) would be accepted with the dial at freq_hz: the
+// same two checks, for an interface that reports whether TX is possible.
+int radio_tx_allowed(int freq_hz);
+
+enum radio_tx_refusal {
+  RADIO_TX_NOT_REFUSED = 0,
+  RADIO_TX_REFUSED_BOARD, // this board may not transmit
+  RADIO_TX_REFUSED_BAND,  // outside every calibrated [tx_band]
+};
+
+// Why the most recent transmit request was refused, with the dial
+// frequency then in *freq_hz, or RADIO_TX_NOT_REFUSED if none has been
+// since the last call. Reading it clears it.
 //
 // Refusals are reported this way rather than logged where they happen
 // because cw_poll_key() calls radio_set_tx() from the real-time audio
 // thread, which may not do I/O. maxibitx.c's idle loop drains this.
-int radio_tx_refused_hz(void);
+enum radio_tx_refusal radio_tx_refused(int *freq_hz);
 
 // Sets the RX-only tuning offset (Hz). It's added to RX's clk2 only, so it
 // never moves the transmit frequency. Also sets the enabled state: on for
