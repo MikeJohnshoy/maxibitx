@@ -74,7 +74,7 @@ The derivations and bench numbers behind the current design are
   PA (fixed gain)
      |
      v
-  LPF bank (radio_hw.c: set_lpf_40mhz, same relays RX uses)
+  LPF bank (radio_hw.c: on the sBitx, radio_hw_tune()'s, same relays RX uses)
      |
      v
   Antenna
@@ -132,7 +132,9 @@ for why). Who calls it:
   requests to change it are ignored - the local key wins.
 
 **Band limits.** `radio_set_tx()` refuses to transmit when the dial
-sits outside every `[tx_band]` range in `data/hw_settings.ini`, which
+sits outside every `[tx_band]` range in `data/hw_settings.ini`, or when
+the board may not transmit at all (`radio_hw_tx_permitted()`, 0 on the
+zBitx for now) - the two checks together are `radio_tx_allowed()`. That
 covers all of those sources at once rather than each having to check
 for itself. Returning to receive is never refused. rigctld's `T`
 answers `RPRT -1`; the other surfaces have no error reply, so the
@@ -140,10 +142,14 @@ refusal is reported on the console instead — by `maxibitx.c`'s idle
 loop rather than at the point of refusal, because the straight key's
 path runs on the real-time audio thread and may not do I/O. A key held
 down out of band therefore logs once a second, not once per poll.
+`radio_tx_refused()` gives the idle loop the reason with the dial
+frequency: `tx: PTT refused - <freq> Hz is outside every calibrated
+[tx_band] range`, or `tx: PTT refused - transmit is not enabled on the
+zBitx`.
 
-If no `[tx_band]` entries were loaded at all — no `hw_settings.ini`, or
-one without them — nothing is refused. An empty table means nothing is
-calibrated, not that nothing is allowed; refusing everything would
+If no `[tx_band]` entries were loaded at all — a `hw_settings.ini`
+without them — nothing is refused on that account. An empty table means
+nothing is calibrated, not that nothing is allowed; refusing everything would
 leave an uncalibrated board unable to transmit at all, which is the
 worse failure.
 
@@ -157,14 +163,25 @@ produce a carrier.
 
 `radio_tx_apply(1)` then runs, in order: mute RX capture
 (`sound_set_rx_capture(0)`, before any TX RF exists), set clk1 to
-`bfo_freq` and clk2 to `freq_hdr + xtal_filter_center`, raise PTT
-(`EXT_PTT`), wait `ext_ptt_delay_ms` from `hw_settings.ini` (20 ms by
-default, for an external amplifier's relay; 0 for a station with nothing on
-`EXT_PTT`), switch the T/R relay (`TX_LINE`), and open the
-exciter feed (`sound_set_tx_drive(TX_MASTER_VOL)`). Returning to RX is
-the reverse: exciter feed to 0, PTT off, 5 ms, relay off, clk1 back to
+`bfo_freq` and clk2 to `freq_hdr + xtal_filter_center`, run the board's
+relay half of the sequence (`radio_hw_relays_tx(1, freq_hdr)`,
+`radio_hw.c`), and open the exciter feed
+(`sound_set_tx_drive(TX_MASTER_VOL)`). Returning to RX is the reverse:
+exciter feed to 0, `radio_hw_relays_tx(0, freq_hdr)`, clk1 back to
 `xtal_filter_center + RX_IF_FREQ_HZ`, clk2 back to its RX value (with
 RIT), and RX capture unmuted last, once the relay has settled.
+
+On the sBitx the relay half raises PTT (`EXT_PTT`), waits
+`ext_ptt_delay_ms` from `hw_settings.ini` (20 ms by default, for an
+external amplifier's relay; 0 for a station with nothing on
+`EXT_PTT`), then switches the T/R relay (`TX_LINE`); back to receive it
+drops `EXT_PTT`, waits 5 ms and drops `TX_LINE`. On the zBitx, which
+has no `EXT_PTT` and ignores `ext_ptt_delay_ms`, the transmit half
+refuses and switches nothing - a second guard behind `radio_set_tx()`'s
+check - so `radio_tx_apply()` restores the RX clocks and capture and
+stays in receive; the receive half drops `TX_LINE`, turns every LPF
+off, waits 5 ms and raises `RX_LINE`. The zBitx transmit sequence:
+[`zbitx_port_study.md`](dsp_design_notes/zbitx_port_study.md) §3.3.
 
 ## Stage by stage
 
