@@ -1,6 +1,7 @@
 # Porting maxibitx to the zBitx and Pi Zero 2W: a study
 
 Status: **proposed** - written before any code, on the `zmax` branch.
+§9 records the decisions taken on it so far.
 
 The request: run maxibitx's headless radio and its external interfaces
 on the zBitx hardware with a Raspberry Pi Zero 2W, in place of the
@@ -36,9 +37,9 @@ What does change is small and specific:
   panel;
 - a fresh calibration (crystal filter centre, BFO, per-band TX scale).
 
-That is a few hundred lines, in `radio_hw.c`, `radio.c`,
-`hw_settings.c` and `si5351v2.c`, behind a board selection read from
-`hw_settings.ini`.
+That is a few hundred lines. Every difference between the boards is
+kept in one place, `radio_hw.c`, behind a board named explicitly in
+`hw_settings.ini` (§5, §9).
 
 **The real unknown is the Pi Zero 2W's CPU** (§4.1). maxibitx uses
 3.1 ms of each 10.67 ms block on a Pi 4. A prediction for the Zero 2W
@@ -58,8 +59,9 @@ is missing the code assumes a zBitx. The ATtiny85 power/SWR bridge at
 I2C 0x8 that maxibitx probes to tell the sBitx DE from the v2 is not
 fitted to the zBitx, so maxibitx's probe would report "sBitx DE".
 
-maxibitx reads the same `hw_settings.ini` format, so the same `hw=4`
-key can select the board here (§5).
+maxibitx reads the same `hw_settings.ini` format, but does not use
+`hw=`, and does not default to either board. A line naming the board
+is required, and maxibitx will not start without one (§9).
 
 ## 3. The hardware, signal by signal
 
@@ -252,8 +254,8 @@ The zBitx needs its own values, measured on the board:
 **zbitx's own `[tx_band]` scales must not be reused.** They scale
 zbitx's transmit path, not maxibitx's: zbitx's 80 m value is 0.00326
 against maxibitx's 0.00085 on the sBitx, nearly four times the
-amplitude. Copying a zbitx `hw_settings.ini` keeps its `cal`, `hw` and
-`bfo_freq`, but its `[tx_band]` entries have to be replaced, starting
+amplitude. Copying a zbitx `hw_settings.ini` keeps its `cal` and `bfo_freq`
+(it also needs the `sbitx_version` line, §9), but its `[tx_band]` entries have to be replaced, starting
 well below full power.
 
 ## 4. The Pi Zero 2W
@@ -353,14 +355,25 @@ it has been developed on.
 
 ## 5. Design in maxibitx
 
-**One codebase, one binary, a board profile.** `hw_settings.c` reads
-`hw` (absent or 0 to 3: sBitx; 4: zBitx) and a new `i2c_bus` key.
-`radio_hw.c` holds a small profile for each board:
+**One codebase, one binary, the board named in `hw_settings.ini`.**
+
+```
+sbitx_version = SBITX_V3    # sBitx DE, v2 or v3
+sbitx_version = SBITX_V4    # zBitx
+```
+
+`hw_settings.c` reads the line. If the file has no such line, or the
+value is anything else, maxibitx prints what to add and exits before it
+touches a GPIO line or a clock (§9).
+
+**Every board difference in one place.** `radio_hw.c` holds a profile
+for each board, data only:
 
 ```c
 struct board {
   const char *name;
-  int i2c_bus;            // default, overridden by hw_settings.ini
+  int tx_enabled;         // 0: every transmit request refused
+  int i2c_bus;            // the si5351's bus; i2c_bus= in the ini overrides
   int ext_ptt_pin;        // -1: none (zBitx)
   int rx_line_pin;        // -1: none (sBitx)
   int lpf_in_rx_path;     // sBitx 1, zBitx 0
@@ -369,19 +382,38 @@ struct board {
 };
 ```
 
-Files and changes:
+and is the only code that reads it. Everything else calls operations
+that mean the same on every board, and never asks which board it is on:
+
+| `radio_hw.c` operation | sBitx (SBITX_V3) | zBitx (SBITX_V4) |
+|---|---|---|
+| `radio_hw_init()` | claim TX_LINE, TX_POWER, EXT_PTT, LPF A-D | claim TX_LINE, TX_POWER, RX_LINE (high), LPF A-E |
+| `radio_hw_i2c_bus()` | 22 | 3, to be confirmed (§3.4) |
+| `radio_hw_tune(freq)` | select the band's LPF | nothing: the LPFs are not in the receive path |
+| `radio_hw_tx_permitted()` | 1 | 0 until step 2 |
+| `radio_hw_relays_tx(on)` | EXT_PTT; wait `ext_ptt_delay_ms`; TX_LINE | refuses until step 2; then §3.3's sequence |
+| `radio_hw_tx_settle_ms()` | `ext_ptt_delay_ms` | the LPF settle, 10 ms |
+| `radio_hw_board_name()` | "sBitx (DE, v2, v3)" | "zBitx" |
+
+The callers then lose their own hardware knowledge:
 
 | File | Change |
 |---|---|
-| `hw_settings.c/.h` | read `hw` and `i2c_bus` |
-| `radio_hw.c/.h` | the profiles; claim the profile's pins; band plan from the profile; RX_LINE and LPF helpers |
-| `radio.c` | `radio_tx_apply()` runs the profile's sequence (§3.3); `radio_tune_to()` selects an LPF only where it is in the receive path |
-| `si5351v2.c` | the bus number from settings |
-| `maxibitx.c` | report the board; skip the 0x8 probe on the zBitx |
+| `hw_settings.c/.h` | read `sbitx_version` (required) and `i2c_bus` (optional) |
+| `radio_hw.c/.h` | the profiles and the operations above; the 0x8 probe removed |
+| `radio.c` | `radio_tune_to()` calls `radio_hw_tune()`; `radio_tx_apply()` calls `radio_hw_relays_tx()` between its clock and codec steps; `radio_set_tx()` refuses when `radio_hw_tx_permitted()` is 0 |
+| `si5351v2.c` | the bus from `radio_hw_i2c_bus()` |
+| `sound.c` | the start-up T/R timing warning uses `radio_hw_tx_settle_ms()` |
+| `maxibitx.c` | report the board |
 | docs | `00_intro.md`, `01`, `03`, `07`, `08`, and this study |
 
+The 0x8 probe goes because it no longer decides anything: on the sBitx
+it only told the DE from the v2 in a log line, and on the zBitx it
+would answer wrongly. The INA260 probe stays.
+
 Nothing in the DSP, the keyer or the interfaces changes, and the sBitx
-behaves exactly as now. That is what lets `zmax` merge back to `main`.
+behaves exactly as now, once its `hw_settings.ini` names it. That is
+what lets `zmax` merge back to `main`.
 
 ## 6. The `zmax` branch
 
@@ -409,12 +441,14 @@ si5351's bus; build `main` unchanged to confirm the toolchain. Do not
 run it yet: it would drive BCM 12 as EXT_PTT and leave RX_LINE
 unclaimed.
 
-**Step 1: receive only.** The board profile, with `hw=4`:
+**Step 1: receive only.** The board profiles (§5), with
+`sbitx_version = SBITX_V4`:
 
 - claim the zBitx pins, with RX_LINE high, TX_LINE low and all LPFs off;
 - the si5351 on the configured bus;
 - **transmit refused** on the zBitx, from every source, with a log line
-  saying why.
+  saying why (§9);
+- the sBitx unchanged, apart from the required `sbitx_version` line.
 
 Then measure:
 
@@ -427,7 +461,8 @@ Then measure:
 
 If the process time is too high, apply §4.1's fixes before going on.
 
-**Step 2: transmit.** Only after the LPF band plan is confirmed (§3.2):
+**Step 2: transmit.** Only after the LPF band plan is confirmed (§3.2),
+and by changing the zBitx profile's `tx_enabled`:
 
 - the zBitx T/R sequence (§3.3) and the confirmed LPF table;
 - into a dummy load, with `max_power` set low and `[tx_band]` scales
@@ -450,3 +485,26 @@ them through rigctld and TCI.
 4. **The front panel**: does it control power or shutdown, and is it
    fine left idle?
 5. **Fixes for the Zero 2W's CPU**: decided after step 1's measurement.
+
+## 9. Decisions
+
+Taken after the study was first written:
+
+- **One codebase.** The sBitx and the zBitx run the same maxibitx, and
+  the `zmax` work merges back to `main`.
+- **The board is named in `hw_settings.ini`**, with
+  `sbitx_version = SBITX_V4` for a zBitx and
+  `sbitx_version = SBITX_V3` for an sBitx DE, v2 or v3.
+- **No default.** If `hw_settings.ini` is missing, has no
+  `sbitx_version` line, or names anything else, maxibitx refuses to
+  start, saying which line to add. An existing sBitx installation needs
+  `sbitx_version = SBITX_V3` added to its `hw_settings.ini` before
+  this version will run. zbitx's own `hw=4` is not read.
+- **Board differences in one place**: `radio_hw.c`'s profiles and
+  operations (§5), with no board checks elsewhere.
+- **No transmit on the zBitx until step 2 is complete.** Two guards,
+  both in `radio_hw.c`: `radio_hw_tx_permitted()` makes `radio_set_tx()`
+  refuse every transmit request, from every interface and the key, with
+  a log line saying transmit is not enabled on the zBitx yet; and the
+  zBitx's relay sequence does not exist until step 2, so even a request
+  that got past the first guard could not raise TX_LINE.
