@@ -225,12 +225,10 @@ void si5351bx_setfreq(uint8_t clk, uint32_t frequency){
   else
     pll = SI_SYNTH_PLL_A;
 
-  int pll_div = 650000000l / frequency;
-
-  //round to the next even integer
-  if (pll_div * 650000000l != frequency)
-    pll_div++;
- 
+  // The smallest even divider above 650 MHz / frequency, so the PLL runs
+  // above 650 MHz. Unsigned 32-bit arithmetic: 650,000,000 fits, and a
+  // long is only 32 bits on a 32-bit OS.
+  uint32_t pll_div = 650000000u / frequency + 1;
   if (pll_div & 1)
     pll_div++;
 
