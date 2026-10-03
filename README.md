@@ -118,7 +118,7 @@ device-mode USB port and a few kernel options - see
 - `hpsdrsim.c` protocol details from the piHPSDR project
 - [minibitx](https://github.com/MikeJohnshoy/minibitx), maxibitx's direct
   predecessor
-- Evan (AC9TU), Robert Benedict and Juan Agrinsoni (WP3DN) - encouragement
+- Evan Hand (AC9TU), Robert Benedict (KD8CGH) and Juan Agrinsoni (WP3DN) - encouragement
   throughout
 
 ## License
