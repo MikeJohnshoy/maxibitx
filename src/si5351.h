@@ -6,7 +6,9 @@
 #include <stdint.h>
 
 void si5351_set_calibration(int32_t cal);
-void si5351bx_init(); 
+// Brings up the I2C bus the si5351 is on, resets it and stops all three
+// clocks.
+void si5351bx_init(int i2c_bus);
 void si5351bx_setfreq(uint8_t clknum, uint32_t fout);
 void si5351_reset();
 void si5351a_clkoff(uint8_t clk);
