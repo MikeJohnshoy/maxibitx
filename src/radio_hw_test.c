@@ -154,7 +154,7 @@ int main(void) {
   check(radio_hw_gpio_init() == 0, "GPIO lines claimed");
   check(claimed_pins() ==
             (BIT(23) | BIT(16) | BIT(15) | BIT(24) | BIT(25) | BIT(8) | BIT(7) | BIT(12)),
-        "claims TX_LINE 23, TX_POWER 16, RX_LINE 15 and LPFs 24, 25, 8, 7, 12");
+        "claims TX_LINE 23, TX_POWER 16, RX_LINE 15, LPFs 24, 25, 8, 7 and BCM 12 (held low)");
   check(high_pins() == BIT(15), "only RX_LINE is high: receiver connected, all else off");
   n_writes = 0;
   radio_hw_tune(21200000);
