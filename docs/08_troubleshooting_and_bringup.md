@@ -8,15 +8,50 @@ candidate to fold back into
 
 Hardware bring-up gotchas that don't belong in the design docs proper:
 
-- The si5351's I2C bus number is Linux-assigned (currently 22 via the
-  `i2c-rtc-gpio` overlay), not a fixed hardware address — re-check with
-  `i2cdetect -l` if the si5351 ever stops responding after an OS/kernel
-  update, per the note in
+- The si5351's I2C bus number is Linux-assigned (22 on the sBitx via
+  the `i2c-rtc-gpio` overlay, 3 on the zBitx), not a fixed hardware
+  address — re-check with `i2cdetect -l` if the si5351 ever stops
+  responding after an OS/kernel update, and set `i2c_bus` in
+  `hw_settings.ini` if it has moved, per the note in
   [`01_hardware_init_and_control.md`](01_hardware_init_and_control.md).
-- Board-revision detection (`radio_hw_detect_version()`) and what to
-  check if it misidentifies DE vs. v2 hardware.
+- maxibitx refusing to start because `hw_settings.ini` doesn't name the
+  board, and the zBitx's `RX_LINE` needing the UART off
+  ([below](#the-radio-board-at-startup)).
 - Anything else discovered during bring-up on real hardware that would
   otherwise get rediscovered the hard way a second time.
+
+## The radio board at startup
+
+**maxibitx exits straight after reading `hw_settings.ini`.** It prints:
+
+```
+init: hw_settings.ini must name the radio board with one of:
+init:     sbitx_version = SBITX_V3    (sBitx (DE, v2 or v3))
+init:     sbitx_version = SBITX_V4    (zBitx)
+init: add the sbitx_version line for this radio above the first [section] of data/hw_settings.ini - maxibitx will not start without it
+```
+
+and exits with status 1, having touched no GPIO line or clock. The file
+has no `sbitx_version` line, names something else (the value is matched
+exactly, case included; the log adds `it names "...", which is none of
+these`), or wasn't found at all - `data/hw_settings.ini` is read
+relative to the working directory, so run maxibitx from the repository
+root. The lines before it say which: `init: data/hw_settings.ini not
+found`; `... has a key "..." that maxibitx doesn't read - a misspelling
+of sbitx_version?`; `... has zbitx's hw= key, which maxibitx doesn't
+read`; or `sbitx_version in ... is inside a [section], so it is
+ignored`. Add the right line above the first `[section]`. There is no
+default; on a zBitx the startup log then says `init: radio board: zBitx
+- receive only, transmit is not enabled on this board`.
+
+**On a zBitx, GPIO setup fails on BCM 15.** `gpio: cannot request BCM15
+('maxibitx-rx_line'): ...` (typically `Device or resource busy`), then
+`init: GPIO setup failed`. BCM 15 is `RX_LINE`, which connects the receiver, and it is
+also the UART's RXD pin, so the serial console or the UART driver holds
+it. Turn off the serial console and the UART (for example with
+`raspi-config`, Interface Options → Serial Port, both off; or remove
+`console=serial0,...` from `cmdline.txt` and `enable_uart=1` from
+`config.txt`) and reboot.
 
 ## Audio thread xruns (hw:0,0 capture/playback)
 
