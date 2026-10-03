@@ -1,123 +1,251 @@
 // radio_hw.c
+//
+// The radio board, and every difference between the boards maxibitx runs
+// on: one profile per board (boards[] below), selected by hw_settings.ini's
+// sbitx_version line, and the operations radio_hw.h offers on top of it.
+// Pins are BCM numbers, as gpio.c takes them.
+// docs/dsp_design_notes/zbitx_port_study.md §3 and §5.
 
 #include "gpio.h"
+#include "hw_settings.h" // tx_ext_ptt_delay_ms, hw_i2c_bus
 #include "i2c.h"
 #include "radio_hw.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
+#include <unistd.h>
 
 /* ---- INA260 power monitor (I2C address 0x40) -------------------------- */
-
 #define INA260_ADDRESS 0x40
 #define CONFIG_REGISTER 0x00
 #define VOLTAGE_REGISTER 0x02
 #define CURRENT_REGISTER 0x01
 #define CONFIG_DEFAULT 0x6127 // Continuous mode, default averaging
 
-/* ---- Boot-time GPIO setup ---------------------------------------------- */
+/* ---- Board profiles ----------------------------------------------------- */
 
-// Each pin gets its own line-request handle from gpio.c, held for the
-// life of the process (there's no radio_hw_gpio_shutdown() - same
-// "opened once, never explicitly torn down" convention i2c.c already
-// uses for its own fd). Every later function in this file writes/reads
-//  through these handles rather than a raw pin number - unlike wiringPi,
-// the character-device API has no "just pass the pin number again"
-// shortcut once a line has been requested.
-static int line_tx_line = -1;
-static int line_tx_power = -1;
-static int line_ext_ptt = -1;
-static int line_lpf_a = -1;
-static int line_lpf_b = -1;
-static int line_lpf_c = -1;
-static int line_lpf_d = -1;
+#define MAX_LPF 5
+
+struct lpf_band {
+  int below_hz; // this filter serves frequencies below this; 0 ends the plan
+  int pin;
+};
+
+struct board {
+  const char *version; // hw_settings.ini's sbitx_version value
+  const char *name;
+  int tx_permitted;    // 0: radio_set_tx() refuses every transmit request
+  int i2c_bus;         // the si5351's bus, unless hw_settings.ini says otherwise
+  int tx_line_pin;     // T/R relay; on the zBitx it also powers the PA
+  int tx_power_pin;    // held low; purpose unconfirmed in sbitx
+  int ext_ptt_pin;     // PTT out to an external amplifier, -1 if none
+  int rx_line_pin;     // connects the receiver when high, -1 if none
+  int lpf_pins[MAX_LPF + 1]; // every LPF relay line, -1 ends the list
+  struct lpf_band lpf[MAX_LPF + 1];
+  int lpf_in_rx_path;  // 1: the band's LPF is selected on every retune
+  int (*relays_tx)(int on, int freq_hz);
+};
+
+static int sbitx_relays_tx(int on, int freq_hz);
+static int zbitx_relays_tx(int on, int freq_hz);
+
+// LPF_A..E are sbitx's names: A 24, B 25, C 8 and D 7 on both boards (C
+// and D share pins with SPI0's chip selects, unused as SPI here), E 12 on
+// the zBitx, where the sBitx has EXT_PTT.
+static const struct board boards[] = {
+    {
+        .version = "SBITX_V3",
+        .name = "sBitx (DE, v2 or v3)",
+        .tx_permitted = 1,
+        // The si5351 shares the RTC's bus (GPIO13/GPIO6), which the
+        // i2c-rtc-gpio overlay makes bus 22 (`i2cdetect -l`, then
+        // `i2cdetect -y 22` shows it at 0x60). The kernel can renumber it.
+        .i2c_bus = 22,
+        .tx_line_pin = 23,
+        .tx_power_pin = 16,
+        .ext_ptt_pin = 12,
+        .rx_line_pin = -1,
+        .lpf_pins = {24, 25, 8, 7, -1},
+        .lpf = {{5500000, 7}, {10500000, 8}, {18500000, 25}, {30000000, 24}, {0, 0}},
+        .lpf_in_rx_path = 1,
+        .relays_tx = sbitx_relays_tx,
+    },
+    {
+        // zbitx (drexjj/zbitx, branches dev and devcwmod): LPF_B reaches
+        // 21.5 MHz, LPF_E is held off and never selected, and the LPFs are
+        // switched for transmit only. Transmit is refused until its
+        // sequence is written and the board calibrated (study §7, step 2).
+        .version = "SBITX_V4",
+        .name = "zBitx",
+        .tx_permitted = 0,
+        .i2c_bus = 3, // zbitx opens /dev/i2c-3; the RP2040 panel is at 0x0a there
+        .tx_line_pin = 23,
+        .tx_power_pin = 16,
+        .ext_ptt_pin = -1,
+        .rx_line_pin = 15, // the UART's RXD pin: the UART must be off
+        .lpf_pins = {24, 25, 8, 7, 12, -1},
+        .lpf = {{5500000, 7}, {10500000, 8}, {21500000, 25}, {30000000, 24}, {0, 0}},
+        .lpf_in_rx_path = 0,
+        .relays_tx = zbitx_relays_tx,
+    },
+};
+
+#define BOARD_COUNT ((int)(sizeof(boards) / sizeof(boards[0])))
+
+static const struct board *board = NULL;
+
+// The LPF relay's settling time before TX_LINE on a board whose LPFs are
+// switched at transmit, as zbitx waits.
+#define LPF_SETTLE_MS 10
+// Relay settling between the PTT/LPF lines and the T/R line going back to
+// receive.
+#define RX_RELAY_SETTLE_MS 5
+
+int radio_hw_select_board(const char *sbitx_version) {
+  for (int i = 0; sbitx_version && i < BOARD_COUNT; i++) {
+    if (!strcmp(sbitx_version, boards[i].version)) {
+      board = &boards[i];
+      return 0;
+    }
+  }
+  fprintf(stderr, "init: hw_settings.ini must name the radio board with one of:\n");
+  for (int i = 0; i < BOARD_COUNT; i++)
+    fprintf(stderr, "init:     sbitx_version = %s    (%s)\n", boards[i].version, boards[i].name);
+  if (sbitx_version && sbitx_version[0])
+    fprintf(stderr, "init: it names \"%s\", which is none of these\n", sbitx_version);
+  return -1;
+}
+
+const char *radio_hw_board_name(void) { return board ? board->name : "none"; }
+
+int radio_hw_i2c_bus(void) { return hw_i2c_bus >= 0 ? hw_i2c_bus : board->i2c_bus; }
+
+int radio_hw_tx_permitted(void) { return board && board->tx_permitted; }
+
+int radio_hw_tx_settle_ms(void) {
+  if (board->ext_ptt_pin >= 0)
+    return tx_ext_ptt_delay_ms;
+  return board->rx_line_pin >= 0 ? LPF_SETTLE_MS : 0;
+}
+
+/* ---- GPIO lines --------------------------------------------------------- */
+//
+// One line-request handle per claimed pin, held for the life of the
+// process, indexed by BCM pin number. -1: not claimed on this board, and
+// drive() on it does nothing.
+
+#define MAX_BCM_PIN 28
+static int line[MAX_BCM_PIN];
+
+static int claim(int pin, int value, const char *label) {
+  if (pin < 0)
+    return 0;
+  line[pin] = gpio_request_output((unsigned)pin, value, label);
+  return line[pin] < 0 ? -1 : 0;
+}
+
+static void drive(int pin, int value) {
+  if (pin >= 0 && line[pin] >= 0)
+    gpio_write(line[pin], value);
+}
+
+static int prev_lpf = -1; // pin last selected; 0: none; -1: none since start-up
 
 int radio_hw_gpio_init(void) {
-  // Outputs are driven to their idle/RX-safe value (LOW/0) as part of
-  // the request itself - gpio.c's character-device requests set the
-  // initial output value atomically with claiming the line, so there's
-  // no separate "configure, then write LOW" step (and no window where
-  // the pin briefly holds whatever the kernel's own power-on/pinctrl
-  // default was) the way the old pinMode()-then-digitalWrite() sequence
-  // had.
-  line_tx_line = gpio_request_output(TX_LINE, 0, "maxibitx-tx_line");
-  line_tx_power = gpio_request_output(TX_POWER, 0, "maxibitx-tx_power");
-  line_ext_ptt = gpio_request_output(EXT_PTT, 0, "maxibitx-ext_ptt");
-  line_lpf_a = gpio_request_output(LPF_A, 0, "maxibitx-lpf_a");
-  line_lpf_b = gpio_request_output(LPF_B, 0, "maxibitx-lpf_b");
-  line_lpf_c = gpio_request_output(LPF_C, 0, "maxibitx-lpf_c");
-  line_lpf_d = gpio_request_output(LPF_D, 0, "maxibitx-lpf_d");
+  for (int i = 0; i < MAX_BCM_PIN; i++)
+    line[i] = -1;
+  prev_lpf = -1;
 
-  if (line_tx_line < 0 || line_tx_power < 0 || line_ext_ptt < 0 || line_lpf_a < 0 ||
-      line_lpf_b < 0 || line_lpf_c < 0 || line_lpf_d < 0) {
-    // gpio_request_output() already logged which pin and why.
-    return -1;
-  }
+  // Each line is driven to its receive state as part of its request, so it
+  // never holds whatever the pin's power-on default was.
+  int err = 0;
+  err |= claim(board->tx_line_pin, 0, "maxibitx-tx_line");
+  err |= claim(board->tx_power_pin, 0, "maxibitx-tx_power");
+  err |= claim(board->ext_ptt_pin, 0, "maxibitx-ext_ptt");
+  err |= claim(board->rx_line_pin, 1, "maxibitx-rx_line");
+  for (int i = 0; board->lpf_pins[i] >= 0; i++)
+    err |= claim(board->lpf_pins[i], 0, "maxibitx-lpf");
+  if (err)
+    return -1; // gpio_request_output() already logged which pin and why
 
+  printf("init: GPIO configured for the %s: T/R relay%s held low, LPFs off%s\n", board->name,
+         board->ext_ptt_pin >= 0 ? " and EXT_PTT" : "",
+         board->rx_line_pin >= 0 ? ", receiver connected (RX_LINE high)" : "");
   return 0;
 }
 
-/* ---- Board hardware revision -------------------------------------------- */
-
-int radio_hw_detect_version(void) {
-  uint8_t response[4];
-  if (i2c_read_i2c_block_data(0x8, 0, 4, response) == -1)
-    return SBITX_DE;
-  else
-    return SBITX_V2;
-}
-
 /* ---- Low-pass filter band switching -------------------------------------- */
-//
-// prev_lpf now tracks the selected BCM pin number (0 meaning "none", for
-// a frequency at or above 30MHz that no band below covers) rather than a
-// wiringPi pin number - same sentinel convention as before, just in the
-// new numbering. Unlike the old digitalWrite(lpf, HIGH) - which could be
-// (and, for out-of-range frequencies, was) called with pin 0 as a
-// harmless no-op against wiringPi's own numbering - there's no line
-// handle behind BCM pin 0 here, so the out-of-range case is now handled
-// explicitly instead of relying on that incidental behavior.
 
-static int prev_lpf = -1;
-void set_lpf_40mhz(int frequency) {
-  int lpf = 0;   // BCM pin number, for the log line - 0 = none selected
-  int line = -1; // matching line handle to drive high, if any
-
-  if (frequency < 5500000) {
-    lpf = LPF_D;
-    line = line_lpf_d;
-  } else if (frequency < 10500000) {
-    lpf = LPF_C;
-    line = line_lpf_c;
-  } else if (frequency < 18500000) {
-    lpf = LPF_B;
-    line = line_lpf_b;
-  } else if (frequency < 30000000) {
-    lpf = LPF_A;
-    line = line_lpf_a;
-  }
-
-  if (lpf == prev_lpf) {
-    return;
-  }
-
-  gpio_write(line_lpf_a, 0);
-  gpio_write(line_lpf_b, 0);
-  gpio_write(line_lpf_c, 0);
-  gpio_write(line_lpf_d, 0);
-
-  if (line >= 0)
-    gpio_write(line, 1);
-
-  prev_lpf = lpf;
-  printf("LPF: selected pin %d for %d Hz\n", lpf, frequency);
+static void lpfs_off(void) {
+  for (int i = 0; board->lpf_pins[i] >= 0; i++)
+    drive(board->lpf_pins[i], 0);
 }
 
-/* ---- T/R relay and external PTT ------------------------------------------ */
+// Selects the LPF for freq_hz, all others off. 30 MHz and above: none.
+static void select_lpf(int freq_hz) {
+  int pin = 0;
+  for (int i = 0; board->lpf[i].below_hz; i++) {
+    if (freq_hz < board->lpf[i].below_hz) {
+      pin = board->lpf[i].pin;
+      break;
+    }
+  }
+  if (pin == prev_lpf)
+    return;
+  lpfs_off();
+  if (pin)
+    drive(pin, 1);
+  prev_lpf = pin;
+  printf("LPF: selected pin %d for %d Hz\n", pin, freq_hz);
+}
 
-void radio_hw_set_ptt(int on) { gpio_write(line_ext_ptt, on ? 1 : 0); }
+void radio_hw_tune(int freq_hz) {
+  if (board->lpf_in_rx_path)
+    select_lpf(freq_hz);
+}
 
-void radio_hw_set_tx_relay(int on) { gpio_write(line_tx_line, on ? 1 : 0); }
+/* ---- Relay half of the T/R sequence -------------------------------------- */
 
+int radio_hw_relays_tx(int on, int freq_hz) {
+  if (on && !board->tx_permitted)
+    return -1;
+  return board->relays_tx(on, freq_hz);
+}
+
+// sBitx: the LPF is already selected for the band (it is in the receive
+// path too). EXT_PTT first and TX_LINE after hw_settings.ini's
+// ext_ptt_delay_ms, so an external amplifier's relay has closed before RF
+// arrives (hw_settings.h); 0 skips the wait.
+static int sbitx_relays_tx(int on, int freq_hz) {
+  (void)freq_hz;
+  if (on) {
+    drive(board->ext_ptt_pin, 1);
+    if (tx_ext_ptt_delay_ms > 0)
+      usleep((useconds_t)tx_ext_ptt_delay_ms * 1000);
+    drive(board->tx_line_pin, 1);
+  } else {
+    drive(board->ext_ptt_pin, 0);
+    usleep(RX_RELAY_SETTLE_MS * 1000);
+    drive(board->tx_line_pin, 0);
+  }
+  return 0;
+}
+
+// zBitx: TX_LINE powers the PA, RX_LINE connects the receiver, and the LPF
+// relays carry only the transmitter. The transmit half is not written
+// until the zBitx transmit step (study §3.3, §7), so it refuses whatever
+// the profile says; the receive half leaves the radio receiving.
+static int zbitx_relays_tx(int on, int freq_hz) {
+  (void)freq_hz;
+  if (on)
+    return -1;
+  drive(board->tx_line_pin, 0);
+  lpfs_off();
+  prev_lpf = 0;
+  usleep(RX_RELAY_SETTLE_MS * 1000);
+  drive(board->rx_line_pin, 1);
+  return 0;
+}
 
 /* ---- INA260 power monitor ------------------------------------------------ */
 
