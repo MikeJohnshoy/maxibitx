@@ -295,9 +295,11 @@ already used in `antialias_filter_design.md`.
   zBitx adds RX_LINE (BCM 15, the UART's receive pin) and LPF_E (BCM 12,
   maxibitx's EXT_PTT on the sBitx), uses its LPF relays only while
   transmitting, and keeps its si5351 on a different I2C bus beside an
-  RP2040 front panel. Proposes a board profile chosen by
-  `hw_settings.ini`'s `hw` key, a zBitx T/R sequence, and the `zmax`
-  branch merged back to `main`; flags the Zero 2W's CPU (stage 1's
-  327-tap FIR dominates the receive cost) and the 15 m LPF assignment
-  as the things to settle, and plans a receive-only first step.
-  Status: proposed.
+  RP2040 front panel. Proposes one codebase with every board difference
+  in `radio_hw.c`, the board named by a required `sbitx_version` line in
+  `hw_settings.ini` (§9: no line, no start; no zBitx transmit until it
+  is calibrated), a zBitx T/R sequence, and the `zmax` branch merged
+  back to `main`; flags the Zero 2W's CPU (stage 1's 327-tap FIR
+  dominates the receive cost) and the 15 m LPF assignment as the things
+  to settle, and plans a receive-only first step. Status: proposed,
+  with decisions recorded.
