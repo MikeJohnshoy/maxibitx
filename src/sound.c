@@ -567,7 +567,7 @@ static int xrun_recover(snd_pcm_t *pcm, int err) {
 // ordinary-priority audio thread can't keep up with real time. See
 // docs/08_troubleshooting_and_bringup.md "Audio thread xruns" for the
 // full failure mode and the SCHED_FIFO fix.
-#define XRUN_FLOOD_WINDOW_NS 1000000000L /* 1 second */
+#define XRUN_FLOOD_WINDOW_NS 1000000000LL /* 1 second */
 #define XRUN_FLOOD_THRESHOLD 10          /* xruns within the window = "flooding" */
 
 struct xrun_tracker {
@@ -576,12 +576,17 @@ struct xrun_tracker {
   int hint_shown;
 };
 
+// Nanoseconds from a to b. 64-bit, since a long is 32 bits on a 32-bit OS
+// and overflows past about 2.1 s.
+static int64_t ns_between(const struct timespec *a, const struct timespec *b) {
+  return (int64_t)(b->tv_sec - a->tv_sec) * 1000000000LL + (b->tv_nsec - a->tv_nsec);
+}
+
 static void xrun_note(struct xrun_tracker *t, const char *label) {
   struct timespec now;
   clock_gettime(CLOCK_MONOTONIC, &now);
 
-  long elapsed_ns = (now.tv_sec - t->window_start.tv_sec) * 1000000000L +
-                    (now.tv_nsec - t->window_start.tv_nsec);
+  int64_t elapsed_ns = ns_between(&t->window_start, &now);
   if (t->count == 0 || elapsed_ns > XRUN_FLOOD_WINDOW_NS || elapsed_ns < 0) {
     t->window_start = now;
     t->count = 0;
@@ -712,16 +717,16 @@ static void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output
 // 5s. Always measured (it's cheap); printed only when MAXIBITX_LOOP_TIMING
 // is set. Used to trace the startup xrun flood (ARCHITECTURE.md §10 step
 // 7 follow-ups).
-#define BLOCK_TIMING_WINDOW_NS 5000000000L /* 5 seconds */
+#define BLOCK_TIMING_WINDOW_NS 5000000000LL /* 5 seconds */
 #define BLOCK_PERIOD_BUDGET_MS (1000.0 * PERIOD_FRAMES / SAMPLE_RATE) /* 10.667ms */
 
 struct phase_stats {
-  long sum_ns;
-  long max_ns;
+  int64_t sum_ns;
+  int64_t max_ns;
   int count;
 };
 
-static void phase_note(struct phase_stats *p, long elapsed_ns) {
+static void phase_note(struct phase_stats *p, int64_t elapsed_ns) {
   p->sum_ns += elapsed_ns;
   if (elapsed_ns > p->max_ns)
     p->max_ns = elapsed_ns;
@@ -852,8 +857,8 @@ static int loop_timing_should_print(void) {
 // previous iteration's read/process/write durations (-1 = not applicable,
 // e.g. write with no pcm_playback) and this iteration's period, then
 // prints and resets once per BLOCK_TIMING_WINDOW_NS.
-static void loop_timing_note(struct loop_timing_tracker *t, long read_ns, long process_ns,
-                              long write_ns) {
+static void loop_timing_note(struct loop_timing_tracker *t, int64_t read_ns,
+                              int64_t process_ns, int64_t write_ns) {
   struct timespec now;
   clock_gettime(CLOCK_MONOTONIC, &now);
 
@@ -864,8 +869,7 @@ static void loop_timing_note(struct loop_timing_tracker *t, long read_ns, long p
     return; // no previous top-of-loop timestamp yet to measure a period against
   }
 
-  long period_ns = (now.tv_sec - t->last_loop_top.tv_sec) * 1000000000L +
-                    (now.tv_nsec - t->last_loop_top.tv_nsec);
+  int64_t period_ns = ns_between(&t->last_loop_top, &now);
   t->last_loop_top = now;
 
   if (read_ns >= 0)
@@ -876,13 +880,12 @@ static void loop_timing_note(struct loop_timing_tracker *t, long read_ns, long p
     phase_note(&t->write, write_ns);
   phase_note(&t->period, period_ns);
 
-  long elapsed_window_ns = (now.tv_sec - t->window_start.tv_sec) * 1000000000L +
-                            (now.tv_nsec - t->window_start.tv_nsec);
+  int64_t elapsed_window_ns = ns_between(&t->window_start, &now);
   if (elapsed_window_ns >= BLOCK_TIMING_WINDOW_NS && t->period.count > 0) {
     if (loop_timing_should_print()) {
       fprintf(stderr,
               "sound: loop timing over last %ds (budget %.3fms/block period):\n",
-              (int)(BLOCK_TIMING_WINDOW_NS / 1000000000L), BLOCK_PERIOD_BUDGET_MS);
+              (int)(BLOCK_TIMING_WINDOW_NS / 1000000000LL), BLOCK_PERIOD_BUDGET_MS);
       phase_print(&t->read, "read");
       phase_print(&t->process, "process");
       phase_print(&t->write, "write");
@@ -918,8 +921,7 @@ static void *audio_loop(void *arg) {
     clock_gettime(CLOCK_MONOTONIC, &t_read0);
     snd_pcm_sframes_t frames = snd_pcm_readi(pcm_capture, cap_buf, PERIOD_FRAMES);
     clock_gettime(CLOCK_MONOTONIC, &t_read1);
-    long read_ns = (t_read1.tv_sec - t_read0.tv_sec) * 1000000000L +
-                   (t_read1.tv_nsec - t_read0.tv_nsec);
+    int64_t read_ns = ns_between(&t_read0, &t_read1);
     if (frames < 0) {
       xrun_note(&capture_xrun, "capture");
       if (xrun_recover(pcm_capture, (int)frames) < 0) {
@@ -942,7 +944,7 @@ static void *audio_loop(void *arg) {
     clock_gettime(CLOCK_MONOTONIC, &t0);
     sound_process(rx_buf, mic_buf, spk_buf, tx_buf, n);
     clock_gettime(CLOCK_MONOTONIC, &t1);
-    long process_ns = (t1.tv_sec - t0.tv_sec) * 1000000000L + (t1.tv_nsec - t0.tv_nsec);
+    int64_t process_ns = ns_between(&t0, &t1);
 
     // Once per audio block - takes the key's edges since the last capture,
     // manages the CW keying burst's hang timer, and asserts/releases PTT via
@@ -955,7 +957,7 @@ static void *audio_loop(void *arg) {
     // burst - see docs/08_troubleshooting_and_bringup.md for why
     // (ALSA underrun detection is tied to the hardware clock, not to
     // whether writei() is called).
-    long write_ns = -1; // stays -1 (not counted) if pcm_playback is NULL
+    int64_t write_ns = -1; // stays -1 (not counted) if pcm_playback is NULL
     struct timespec t_write0, t_write1;
     if (pcm_playback) {
       clock_gettime(CLOCK_MONOTONIC, &t_write0);
@@ -1139,8 +1141,7 @@ static void *audio_loop(void *arg) {
         }
       }
       clock_gettime(CLOCK_MONOTONIC, &t_write1);
-      write_ns = (t_write1.tv_sec - t_write0.tv_sec) * 1000000000L +
-                 (t_write1.tv_nsec - t_write0.tv_nsec);
+      write_ns = ns_between(&t_write0, &t_write1);
     }
 
     loop_timing_note(&loop_timing, read_ns, process_ns, write_ns);
