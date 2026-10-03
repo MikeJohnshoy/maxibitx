@@ -58,7 +58,14 @@
 // hr[N-1-i], same for ssb_hi) so ssb_filter_apply()'s loop computes
 // y[n] = sum h[k]*x[n-k]. Derivation and verification:
 // rx_audio_demod_design.md §7.
-static const double ssb_hr[SSB_FIR_TAPS] = {
+//
+// Single precision, coefficients and history both, so the loop runs four
+// taps at a time on NEON (see ssb_filter_apply()). Against the same filter
+// in double precision: the response differs by under 0.001 dB anywhere in
+// +-12kHz, and rounding adds noise 160dB below a full-scale input, ~70dB
+// under the WM8731's own. The coefficients are given to 8 decimal places,
+// which a float holds. docs/dsp_design_notes/zbitx_port_study.md §10.
+static const float ssb_hr[SSB_FIR_TAPS] = {
      0.00472215, -0.00002114, -0.00003969, -0.00006961, -0.00011114,
     -0.00016150, -0.00021969, -0.00028154, -0.00034457, -0.00040409,
     -0.00045675, -0.00049749, -0.00052287, -0.00052815, -0.00051054,
@@ -127,7 +134,7 @@ static const double ssb_hr[SSB_FIR_TAPS] = {
     -0.00002114,  0.00472215,
 };
 
-static const double ssb_hi[SSB_FIR_TAPS] = {
+static const float ssb_hi[SSB_FIR_TAPS] = {
      0.00143245, -0.00000420, -0.00000391,  0.00000000,  0.00001095,
      0.00003213,  0.00006664,  0.00011662,  0.00018418,  0.00027000,
      0.00037485,  0.00049749,  0.00063712,  0.00079043,  0.00095516,
@@ -197,8 +204,8 @@ static const double ssb_hi[SSB_FIR_TAPS] = {
 };
 
 struct ssb_filter_state {
-    double hist_i[2 * SSB_FIR_TAPS];
-    double hist_q[2 * SSB_FIR_TAPS];
+    float hist_i[2 * SSB_FIR_TAPS];
+    float hist_q[2 * SSB_FIR_TAPS];
     int pos;   // write cursor, always in [0, SSB_FIR_TAPS)
 };
 
@@ -208,24 +215,33 @@ static struct ssb_filter_state ssb_state;
 //   i_out = sum(hr*hist_i) - sum(hi*hist_q)
 //   q_out = sum(hr*hist_q) + sum(hi*hist_i)
 // Each sample is written twice (pos and pos+TAPS) so a TAPS-long read
-// never wraps and the loop stays branch-free for -O3 autovectorization,
-// same trick as antialias.c. Deliberately not folded to exploit hr/hi's
-// symmetry: mirrored indexing vectorizes worse, and ~125M MAC/s is no
-// load for a Pi 4.
+// never wraps and the loop stays branch-free, same trick as antialias.c.
+// Deliberately not folded to exploit hr/hi's symmetry: mirrored indexing
+// vectorizes worse.
+//
+// This loop is nearly all of the receive chain's CPU time (~125M
+// multiply-adds a second), so it is written to be vectorized: the compiler
+// may sum the taps in any order ("unsafe-math-optimizations", this
+// function only), which is what lets it keep several partial sums in one
+// vector register. On 32-bit ARM it is also the permission GCC needs to
+// use NEON for floating point at all, since NEON flushes values below
+// ~1e-38 to zero - far below anything this filter sees. The Makefile
+// enables NEON on 32-bit ARM. The call is not inlined (different options),
+// which costs one call per sample.
+__attribute__((optimize("unsafe-math-optimizations")))
 static void ssb_filter_apply(struct ssb_filter_state *f, double i_in, double q_in,
                               double *i_out, double *q_out) {
-    f->hist_i[f->pos] = i_in;
-    f->hist_i[f->pos + SSB_FIR_TAPS] = i_in;
-    f->hist_q[f->pos] = q_in;
-    f->hist_q[f->pos + SSB_FIR_TAPS] = q_in;
+    f->hist_i[f->pos] = (float)i_in;
+    f->hist_i[f->pos + SSB_FIR_TAPS] = (float)i_in;
+    f->hist_q[f->pos] = (float)q_in;
+    f->hist_q[f->pos + SSB_FIR_TAPS] = (float)q_in;
 
-    int base = f->pos + 1;
-    double acc_re = 0.0, acc_im = 0.0;
+    const float *hist_i = f->hist_i + f->pos + 1;
+    const float *hist_q = f->hist_q + f->pos + 1;
+    float acc_re = 0.0f, acc_im = 0.0f;
     for (int i = 0; i < SSB_FIR_TAPS; i++) {
-        double hi_val = f->hist_i[base + i];
-        double hq_val = f->hist_q[base + i];
-        acc_re += ssb_hr[i] * hi_val - ssb_hi[i] * hq_val;
-        acc_im += ssb_hr[i] * hq_val + ssb_hi[i] * hi_val;
+        acc_re += ssb_hr[i] * hist_i[i] - ssb_hi[i] * hist_q[i];
+        acc_im += ssb_hr[i] * hist_q[i] + ssb_hi[i] * hist_i[i];
     }
 
     f->pos++;
@@ -473,8 +489,8 @@ void rx_audio_init(void) {
     vfo_start(&bfo, narrow_bank_pitch_hz[narrow_pitch_idx], 0);
 
     for (int i = 0; i < 2 * SSB_FIR_TAPS; i++) {
-        ssb_state.hist_i[i] = 0.0;
-        ssb_state.hist_q[i] = 0.0;
+        ssb_state.hist_i[i] = 0.0f;
+        ssb_state.hist_q[i] = 0.0f;
     }
     ssb_state.pos = 0;
 
