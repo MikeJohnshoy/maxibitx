@@ -1,7 +1,8 @@
 # Porting maxibitx to the zBitx and Pi Zero 2W: a study
 
-Status: **proposed** - written before any code, on the `zmax` branch.
-§9 records the decisions taken on it so far.
+Status: **step 1 built** (receive only, §7) on the `zmax` branch, not yet
+run on a zBitx; step 2 (transmit) not started. Written before any code;
+§9 records the decisions taken on it, and §10 step 1 as built.
 
 The request: run maxibitx's headless radio and its external interfaces
 on the zBitx hardware with a Raspberry Pi Zero 2W, in place of the
@@ -508,3 +509,41 @@ Taken after the study was first written:
   a log line saying transmit is not enabled on the zBitx yet; and the
   zBitx's relay sequence does not exist until step 2, so even a request
   that got past the first guard could not raise TX_LINE.
+
+## 10. Step 1 as built
+
+- **`radio_hw.c`** holds both board profiles (`boards[]`) and every
+  board-dependent operation: `radio_hw_select_board()`,
+  `radio_hw_gpio_init()`, `radio_hw_tune()`, `radio_hw_tx_permitted()`,
+  `radio_hw_relays_tx()`, `radio_hw_tx_settle_ms()`, `radio_hw_i2c_bus()`.
+  The sBitx's relay sequence is the one `radio.c` used to run, unchanged.
+  The zBitx's relay half to transmit refuses; its half to receive drops
+  TX_LINE and the LPFs, waits 5 ms and raises RX_LINE.
+- **`hw_settings.c`** reads `sbitx_version` and `i2c_bus`, and points out
+  zbitx's `hw=` key or a key that looks like a misspelt `sbitx_version`.
+  `maxibitx.c` exits with status 1 if `radio_hw_select_board()` refuses
+  the name, before any GPIO line or clock is touched.
+- **`radio.c`** calls the board operations: `radio_tune_to()` calls
+  `radio_hw_tune()`; `radio_set_tx()` refuses when `radio_tx_allowed()`
+  (board and band) says no, and `radio_tx_refused()` gives the reason for
+  the log; `radio_tx_apply()` puts the clocks and capture back if the
+  relays refuse.
+- **Elsewhere**: `si5351bx_init()` takes the bus; rigctld's `dump_state`
+  lists no TX ranges and TCI's `tx_enable` is false on a board that may not
+  transmit; `sound.c`'s start-up T/R warning uses the board's relay wait.
+  The I2C 0x8 probe is gone.
+- **Tested** on the bench with `make test-radio-hw`: the settings keys,
+  and each board's claimed pins and levels, LPF selection, relay order,
+  and that the zBitx can neither be permitted to transmit nor raise
+  TX_LINE. All the other harnesses pass unchanged. Not yet run on a
+  zBitx.
+
+**First contact with the zBitx's Pi.** `i2cdetect -l` lists `i2c-1`
+(the BCM2835 controller) and `i2c-3`, so the zBitx profile's default bus
+3 exists. The build there warned about two places where code assumed a
+64-bit `long`, which a 32-bit OS doesn't have: `sound.c`'s loop-timing
+window (5 s in nanoseconds does not fit, so `MAXIBITX_LOOP_TIMING` never
+printed) and the si5351 divider calculation. Both now use explicit
+widths, and the sources compile without warnings as 32-bit. The 32-bit
+build also showed `test-cw`'s simulated read jitter depended on the size
+of a `long`; it no longer does.
