@@ -301,5 +301,5 @@ already used in `antialias_filter_design.md`.
   is calibrated), a zBitx T/R sequence, and the `zmax` branch merged
   back to `main`; flags the Zero 2W's CPU (stage 1's 327-tap FIR
   dominates the receive cost) and the 15 m LPF assignment as the things
-  to settle, and plans a receive-only first step. Status: proposed,
-  with decisions recorded.
+  to settle, and plans a receive-only first step. Status: step 1
+  (receive only) built and bench-tested, not yet run on a zBitx.
