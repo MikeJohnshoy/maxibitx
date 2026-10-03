@@ -7,15 +7,8 @@
 #include "i2c.h"
 #include "si5351.h"
 
-// The si5351 is wired to the same physical bus as this
-// board's RTC (GPIO13/GPIO6), not GPIO23/22 as originally assumed -
-// confirmed via `i2cdetect -y 22` showing a device answering at
-// SI5351_ADDR (0x60). i2c-22 is the Linux I2C bus number the kernel
-// assigned to this board's `dtoverlay=i2c-rtc-gpio` entry (see
-// `i2cdetect -l`) - not guaranteed to stay 22 forever (kernel/config
-// changes can renumber it), so re-check with `i2cdetect -l` if the
-// si5351 ever stops responding after an OS update.
-#define SI5351_I2C_BUS 22
+// The I2C bus is the board's (radio_hw_i2c_bus()), passed to
+// si5351bx_init().
 
 #define SI_CLK0_CONTROL  16      // Register definitions
 #define SI_CLK1_CONTROL 17
@@ -252,8 +245,8 @@ void si5351_set_calibration(int32_t cal){
     xtal_freq_calibrated = cal;
 }
 
-void si5351bx_init(){
-  i2c_init(SI5351_I2C_BUS);
+void si5351bx_init(int i2c_bus){
+  i2c_init(i2c_bus);
 	usleep(10000);
   si5351_reset();
 	usleep(10000);
