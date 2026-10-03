@@ -69,9 +69,10 @@ down, and keep the history in documents instead of in comments.
 
 The one you'd name first is that `maxibitx.c` brings up each piece of
 the radio in turn, in dependency order, and each step reports its own
-result on the console. GPIO first (relays held in an RX-safe state),
-then the si5351 over I2C, then board revision detection which needs that
-bus, then the VFO phase table, CW, the demodulator, each external
+result on the console. The settings file and the board it names first,
+then GPIO (relays held in an RX-safe state), then the si5351 over I2C,
+then the INA260 power monitor which needs that bus, then the VFO phase
+table, CW, the demodulator, each external
 interface, the codec, and finally the audio thread. Every step prints an
 `init:` line, and most degrade rather than abort — if rigctld can't bind
 its port the daemon says so and carries on. That ordering made it
@@ -238,8 +239,9 @@ this isn't a workaround chosen to shed a dependency.
 
 The catch worth knowing about: every offset in `gpio.h` is a **BCM GPIO
 number**, the kernel's numbering, not the wiringPi pin numbers the old
-code used. The BCM numbers in `radio_hw.h` were derived from a
-`gpio readall` capture on real sBitx v2 hardware. Porting to a different
+code used. The sBitx's BCM numbers, in its board profile in
+`radio_hw.c`, were derived from a `gpio readall` capture on real sBitx
+v2 hardware. Porting to a different
 board means re-deriving that mapping the same way, not assuming it.
 
 ### How did we eliminate bit-banging on the I2C bus?
@@ -597,9 +599,10 @@ would be good at.
 
 Run the bench tests — `make test-fft-filter`, `test-tx-pipeline`,
 `test-rx-filter`, `test-rx-audio`, `test-upsample48k`, `test-cw`,
-`test-key-input`, `test-keyer`, and for the TCI server `test-tci-ws` and
-`test-tci`. They link the DSP
-files without any hardware code, so they run anywhere, and they print
+`test-key-input`, `test-keyer`, for the TCI server `test-tci-ws` and
+`test-tci`, and for the board layer `test-radio-hw`. They link the DSP
+files without any hardware code (`test-radio-hw` links `radio_hw.c`
+with GPIO and I2C stubbed), so they run anywhere, and they print
 measured numbers against expected ones rather than just passing or
 failing. `make check-comments` flags comments that have drifted into
 narrating history, and errors outright if a source file's header names a
@@ -626,12 +629,17 @@ behavior.
 
 ### What happens if `data/hw_settings.ini` is missing?
 
-The daemon says so and runs on compiled-in defaults. That is the general
-pattern: most initialization steps degrade rather than abort. The
-settings file carries physical measurements of one specific board —
-reference frequency, BFO, crystal filter centre, per-band power scales,
-rated power — so running without it gives a working radio with
-uncalibrated numbers rather than no radio.
+maxibitx won't start. The file names the radio board
+(`sbitx_version = SBITX_V3` for an sBitx DE, v2 or v3, `SBITX_V4` for
+a zBitx), and without that line maxibitx prints the valid lines and
+exits before touching any GPIO line or clock: driving one board's pins
+as another's could key a transmitter, so there is no default. This is
+the exception to the general pattern, in which most initialization
+steps degrade rather than abort. Every other key is optional. The file
+carries physical measurements of one specific board — reference
+frequency, BFO, crystal filter centre, per-band power scales, rated
+power — and a key left out takes its compiled-in default, giving a
+working radio with uncalibrated numbers rather than no radio.
 
 ### What's not done?
 
