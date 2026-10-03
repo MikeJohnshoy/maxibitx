@@ -123,7 +123,9 @@ off and drops PTT after 30 s in transmit.
 - **Transmit is refused outside the calibrated bands.** PTT only takes
   effect when the dial is inside one of the `[tx_band]` ranges
   `dump_state` advertises; outside them rigctld answers `RPRT -1` and
-  the radio stays in receive. Returning to receive is never refused.
+  the radio stays in receive. On a board that may not transmit (the
+  zBitx, for now) every PTT is refused the same way. Returning to
+  receive is never refused.
 
 **No notifications.** Nothing is pushed to clients. To stay in sync with
 changes made elsewhere (the key, another app), poll - `rigctl_panel.py`
@@ -151,7 +153,7 @@ connected.
 | `m` | `PKTUSB` then `2400` | Mode, then passband (two lines). DIGITAL reads as `PKTUSB`. |
 | `M <mode> <passband>` | `RPRT 0` | Mode: `CW`, `CWR`, `USB`, `LSB`, `PKTUSB` or `DIGITAL`. Passband is stored and echoed by `m` but not applied. Unknown mode: `RPRT -1`. |
 | `t` | `0` or `1` | PTT |
-| `T <0\|1>` | `RPRT 0` | Any nonzero value means TX. Also `RPRT 0` when ignored because the local key holds TX. `RPRT -1` when the dial is outside every `[tx_band]` range - those ranges are enforced, not just advertised. |
+| `T <0\|1>` | `RPRT 0` | Any nonzero value means TX. Also `RPRT 0` when ignored because the local key holds TX. `RPRT -1` when the dial is outside every `[tx_band]` range - those ranges are enforced, not just advertised - or on a board that may not transmit. |
 | `j` | `-150` | RIT offset, Hz. The stored value: CAT `RT0;` can switch RIT off without zeroing it. |
 | `J <Hz>` | `RPRT 0` | −9999 to 9999; `J 0` turns RIT off. Out of range: `RPRT -1`. |
 | `l AF` | `0.670000` | Volume, 0.0-1.0 |
@@ -175,7 +177,7 @@ connected.
 | `u TONE` / `U TONE <0\|1\|2>` | `0` / `RPRT 0` | TX test-tone generator: 0 off, 1 single 1 kHz, 2 two-tone 700 + 1900 Hz. Doesn't key the radio; any PTT does. Off after 30 s in TX. Out of range: `RPRT -1` (extension) |
 | `v` / `V <vfo>` | `VFOA` / `RPRT 0` | Single VFO; any `V` is accepted. |
 | `chk_vfo` | `0` | Not in VFO mode - send commands without a VFO argument. |
-| `dump_state` | capability block | Protocol 0. TX ranges come from `data/hw_settings.ini`'s `[tx_band]` entries at 5 W; modes CW/USB/LSB/PKTUSB; max RIT 9999. `has_get_level` is `AF\|CWPITCH\|RFPOWER\|KEYSPD\|STRENGTH` (`0x40005808`), `has_set_level` is `AF\|CWPITCH\|RFPOWER\|KEYSPD` (`0x5808`). |
+| `dump_state` | capability block | Protocol 0. TX ranges come from `data/hw_settings.ini`'s `[tx_band]` entries at 5 W (1.8-30 MHz if it has none), and there are none on a board that may not transmit; modes CW/USB/LSB/PKTUSB; max RIT 9999. `has_get_level` is `AF\|CWPITCH\|RFPOWER\|KEYSPD\|STRENGTH` (`0x40005808`), `has_set_level` is `AF\|CWPITCH\|RFPOWER\|KEYSPD` (`0x5808`). |
 | `q`, `Q`, `quit` | (connection closes) | |
 
 Anything else replies `RPRT -1`. The extensions (`MICGAIN`, `ALC`,
@@ -364,7 +366,8 @@ is ignored. Receiver and transceiver numbers other than 0 are ignored.
 Changes made elsewhere - rigctld, CAT, the panel, the key - reach TCI
 clients within 50 ms. `tx_enable:0,<true|false>;` is sent when the band
 changes between one maxibitx may transmit on and one it may not
-(`[tx_band]` in `hw_settings.ini`).
+(`[tx_band]` in `hw_settings.ini`). It is always false on a board that
+may not transmit.
 
 **Streams**, per client. Each binary frame is a 64-byte header of sixteen
 little-endian `uint32` - receiver, sample_rate, format (0 int16, 1 int24,
