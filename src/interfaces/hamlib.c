@@ -19,6 +19,7 @@
 #include "sound.h"    // mic gain, TX power and the ALC reading - l/L below
 #include "tone_gen.h" // u/U TONE below
 #include "hw_settings.h" // tx_band_scales[] - dump_state TX ranges
+#include "radio_hw.h"    // radio_hw_tx_permitted() - dump_state TX ranges
 #include "key_input.h"   // u/U PADREV below
 #include "keyer.h"       // l/L KEYSPD, u/U KEYER, b and \stop_morse below
 #include "morse.h"       // b's text
@@ -540,7 +541,8 @@ static int handle_line(int fd, char *line)
         // is advertised as a flat 5W
         // (docs/dsp_design_notes/tx_power_calibration.md). When a
         // [tx_band] table is loaded these are also enforced: radio.c
-        // refuses PTT outside them (hw_settings_tx_allowed()).
+        // refuses PTT outside them (hw_settings_tx_allowed()). On a board
+        // that may not transmit (radio_hw_tx_permitted()) there are none.
         send_line(fd, "0\n");                        // protocol version
         send_line(fd, "1\n");                        // rig model (1 = RIG_MODEL_DUMMY)
         send_line(fd, "2\n");                         // ITU region (best-effort default)
@@ -548,7 +550,9 @@ static int handle_line(int fd, char *line)
         send_line(fd, "0 0 0 0 0 0 0\n");             // RX range list terminator
         {
             char buf[80];
-            if (tx_band_scale_count > 0) {
+            if (!radio_hw_tx_permitted()) {
+                // no TX ranges: radio.c refuses every transmit request
+            } else if (tx_band_scale_count > 0) {
                 for (int i = 0; i < tx_band_scale_count; i++) {
                     snprintf(buf, sizeof(buf), "%d %d 0x88e 5000 5000 0x1 0x0\n",
                              tx_band_scales[i].f_start, tx_band_scales[i].f_stop);
