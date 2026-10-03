@@ -7,9 +7,10 @@ reading `sound.c`.
 ## Scope
 
 - `main()`'s startup sequence in `maxibitx.c`: board calibration
-  (`hw_settings_load()`, `data/hw_settings.ini`) → GPIO → si5351 (clk1
-  at its RX value) → board revision/INA260 → software VFO and initial
-  tune → CW tone (`cw_init()`) → key jack and its input thread
+  (`hw_settings_load()`, `data/hw_settings.ini`) → board selection
+  (`radio_hw_select_board()`, from the file's `sbitx_version` line) →
+  GPIO → si5351 on the board's I2C bus (clk1 at its RX value) → INA260 →
+  software VFO and initial tune → CW tone (`cw_init()`) → key jack and its input thread
   (`key_input_start()`) → RX demodulator (`rx_audio_init()`) →
   Hamlib/rigctld → TCI server (`tci_init()`) → HPSDR → I/Q telemetry stream (`iq_stream.c`) → USB
   gadget (`uac_init()`) → Kenwood CAT on the gadget's serial port
@@ -106,13 +107,17 @@ reading `sound.c`.
   [`04_remote_control_and_iq_output.md`](04_remote_control_and_iq_output.md),
   which report a freq/PTT change at the moment it happens rather than a
   point-in-time snapshot.
-- Failure handling at startup: GPIO (the outputs and the key jack), the
-  HPSDR socket bind and audio capture are fatal - `main()` exits if any fails. Everything else is
+- Failure handling at startup: board selection, GPIO (the outputs and
+  the key jack), the HPSDR socket bind and audio capture are fatal -
+  `main()` exits if any fails. Everything else is
   best-effort and logs that it's continuing without it: Hamlib/rigctld,
   the TCI server, the I/Q telemetry stream, the USB gadget (and its TX audio direction
   separately), Kenwood CAT, the INA260 power monitor, and audio
-  playback (without it there's no local audio and no TX). A missing
-  `hw_settings.ini` falls back to compiled-in defaults.
+  playback (without it there's no local audio and no TX). A key
+  `hw_settings.ini` leaves out takes its compiled-in default, except
+  `sbitx_version`: with it missing, misspelt or unknown, or the file
+  itself missing, board selection fails, maxibitx prints the valid lines
+  and exits (status 1) before it touches a GPIO line or clock.
 
 ## Reading sound.c
 
