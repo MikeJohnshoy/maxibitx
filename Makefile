@@ -43,6 +43,12 @@ CC      := gcc
 # switching.
 KEYER   ?= keyer
 CFLAGS  := -O3 -march=native -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces
+# A 32-bit ARM OS (armv7l: a Pi 2, 3, 4 or Zero 2W running 32-bit) leaves
+# NEON off by default. Every such Pi has NEON-VFPv4, which rx_audio.c's
+# stage-1 filter needs to vectorize (docs/dsp_design_notes/zbitx_port_study.md §10).
+ifeq ($(shell uname -m),armv7l)
+CFLAGS += -mfpu=neon-vfpv4
+endif
 LDFLAGS := -lm -lasound -lpthread -ldl -lfftw3f
 SRC := src/maxibitx.c src/radio.c src/radio_hw.c src/interfaces/hpsdr_p1.c src/interfaces/usb_gadget.c src/i2c.c \
      src/si5351v2.c src/sound.c src/vfo.c src/interfaces/hamlib.c src/hw_settings.c src/antialias.c src/decim48k.c src/cw.c \
