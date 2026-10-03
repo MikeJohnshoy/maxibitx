@@ -578,3 +578,22 @@ with several accumulators so it vectorizes - is worth doing before the
 transmit step. It belongs on `main`, since it lightens the Pi 4 too, and
 needs `test-rx-audio` and `test-rx-audio-impulse` to show the same
 filter response afterwards.
+
+**Stage 1 in single precision, vectorized.** Done, in `rx_audio.c`:
+coefficients and history are `float`, and `ssb_filter_apply()` is
+compiled with `unsafe-math-optimizations` (that function only), which
+lets the compiler reorder the 327-tap sums into vector lanes. On 32-bit
+ARM that permission is also what GCC needs before it will use NEON for
+floating point, and NEON itself has to be enabled: the Makefile adds
+`-mfpu=neon-vfpv4` when `uname -m` is `armv7l`. A cross-compile for the
+Zero 2W's Cortex-A53 confirms the loop now uses 4-lane NEON
+instructions.
+
+Measured against the double-precision filter: the response differs by
+at most 0.0008 dB from -12 to +12 kHz; the opposite-sideband rejection
+at -400, -800, -1500 and -3000 Hz is the same to 0.0003 dB; rounding adds
+noise 160 dB below a full-scale input, about 70 dB under the WM8731's
+own. `test-rx-audio`'s levels move in the seventh significant figure;
+`test-rx-audio-impulse`'s output is unchanged. On an x86 machine
+`rx_audio_process()` went from 478 to 117 µs a block. The Zero 2W figure
+is to be measured with `MAXIBITX_LOOP_TIMING`.
