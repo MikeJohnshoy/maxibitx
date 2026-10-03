@@ -79,7 +79,7 @@ check-filters:
 	python3 tools/gen_narrow_filters.py --check
 
 clean:
-	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw test-key-input test-keyer test-keyer-straight test-tci-ws test-tci \
+	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw test-key-input test-keyer test-keyer-straight test-tci-ws test-tci test-radio-hw \
 		src/fft_filter.o src/fft_filter_test.o src/tx_pipeline.o src/tx_pipeline_test.o \
 		src/rx_filter.o src/rx_filter_test.o src/rx_audio_test.o src/rx_audio_impulse_test.o src/upsample48k_test.o
 
@@ -190,6 +190,14 @@ test-keyer-straight: src/keyer_straight.c src/keyer.h src/morse.c src/morse.h sr
 # the keyer keys). `./test-tci --serve [port]` runs that stubbed server
 # with a test tone, for trying a client without a radio. See
 # docs/dsp_design_notes/tci_design_study.md §13.
+# The board layer: hw_settings.c's sbitx_version and i2c_bus keys, and
+# radio_hw.c's board profiles - which pins each board claims and at what
+# level, LPF selection, the relay half of the T/R sequence, and that the
+# zBitx cannot transmit - with gpio.c and i2c.c stubbed. See
+# docs/dsp_design_notes/zbitx_port_study.md §5.
+test-radio-hw: src/radio_hw.c src/radio_hw.h src/hw_settings.c src/hw_settings.h src/radio_hw_test.c
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces src/radio_hw.c src/hw_settings.c src/radio_hw_test.c -o $@ -lm
+
 TCI_TEST_HDRS := src/interfaces/tci.h src/interfaces/tci_ws.h src/interfaces/tci_stream.h src/interfaces/ws_test_client.h
 
 test-tci-ws: src/interfaces/tci_ws.c src/interfaces/tci_ws_test.c $(TCI_TEST_HDRS)
