@@ -289,3 +289,15 @@ already used in `antialias_filter_design.md`.
   Status: **implemented** (WebSocket, control, receive and transmit audio,
   I/Q, CW text) and bench-tested; **on the air, I/Q only so far**, the
   right way up in sdrOxide as a TCI panadapter client; NCM not built.
+- [`zbitx_port_study.md`](zbitx_port_study.md) — whether maxibitx can
+  run headless on the zBitx with a Pi Zero 2W, read against the zbitx
+  `devcwmod` code. The boards share every common signal's pin; the
+  zBitx adds RX_LINE (BCM 15, the UART's receive pin) and LPF_E (BCM 12,
+  maxibitx's EXT_PTT on the sBitx), uses its LPF relays only while
+  transmitting, and keeps its si5351 on a different I2C bus beside an
+  RP2040 front panel. Proposes a board profile chosen by
+  `hw_settings.ini`'s `hw` key, a zBitx T/R sequence, and the `zmax`
+  branch merged back to `main`; flags the Zero 2W's CPU (stage 1's
+  327-tap FIR dominates the receive cost) and the 15 m LPF assignment
+  as the things to settle, and plans a receive-only first step.
+  Status: proposed.
