@@ -1,80 +1,75 @@
 // radio_hw.h
 //
-// radio hardware control for minibitx: boot-time GPIO setup,
-// LPF band switching, board-revision detection, and the INA260 power
-// monitor.
+// The radio board: which one this is, its GPIO lines, LPF band switching,
+// the relay half of the T/R sequence, and the INA260 power monitor.
+//
+// Every difference between the boards maxibitx runs on lives in
+// radio_hw.c, as one profile per board. Nothing outside it asks which
+// board it is on; it calls the operations below, which mean the same on
+// every board. docs/dsp_design_notes/zbitx_port_study.md §5 and §9.
 
 #ifndef RADIO_HW_H
 #define RADIO_HW_H
 
-/* ---- GPIO pin assignments (BCM GPIO numbering, sBitx v2 hardware) -----
- *
- * These used to be wiringPi's own pin numbers (a different numbering
- * from BCM's), back when radio_hw.c drove them through wiringPi. Now that
- * radio_hw.c talks to gpio.c's character-device API instead - which
- * takes BCM offsets, matching /dev/gpiochip0 - these constants are BCM
- * numbers. The old->new mapping (and the live `gpio readall` capture on
- * real hardware it was verified against) is recorded in
- * docs/01_hardware_init_and_control.md; don't reuse the old numeric
- * values here as if they still meant the same physical pins - wiringPi's
- * numbering and BCM's numbering are two unrelated schemes that happen to
- * both be small integers.
- */
+// The key jack, the same two pins on every board (BCM numbering): read by
+// key_input.c, not by this file. Inputs, pulled up, closed to ground =
+// down.
+#define KEY_RING_GPIO 4 // ring: dash, and the mic PTT line (sbitx's PTT)
+#define KEY_TIP_GPIO  5 // tip: dot, or a straight key's contact (sbitx's
+                        // DASH line - its name, not its role here)
 
-#define TX_LINE   23   // T/R relay control line
-#define TX_POWER  16   // set once at boot, LOW; purpose unconfirmed in sbitx
-#define EXT_PTT   12   // external PTT input/output line
-#define LPF_A     24   // low-pass filter select lines, one active at a time
-#define LPF_B     25
-#define LPF_C     8    // shares a physical pin with SPI0's CE0 - unused as
-                       // SPI on this board, so repurposing it as a plain
-                       // GPIO output is safe (confirmed via `gpio readall`:
-                       // it shows as OUT, not ALT0/SPI mode)
-#define LPF_D     7    // shares a physical pin with SPI0's CE1 - same as
-                       // LPF_C above
-#define KEY_RING_GPIO 4 // key jack ring: dash, and the mic PTT line (sbitx's
-                         // PTT). Inputs, pulled up, closed to ground = down;
-                         // both read by key_input.c, not by this file.
-#define KEY_TIP_GPIO  5 // key jack tip: dot, or a straight key's contact
-                        // (sbitx's DASH line - its name, not its role here)
+// Selects the board named by hw_settings.ini's sbitx_version line
+// (hw_settings.h): "SBITX_V3" for an sBitx DE, v2 or v3, "SBITX_V4" for a
+// zBitx. Returns 0, or -1 - after saying what the valid names are - for a
+// missing (empty) or unknown name. Touches no hardware. Call once, before
+// anything else here.
+int radio_hw_select_board(const char *sbitx_version);
 
-/* ---- Board hardware revision ------------------------------------------ */
+// The selected board, for the log: e.g. "zBitx".
+const char *radio_hw_board_name(void);
 
-#define SBITX_DE  (0)  // original sBitx, no power/SWR bridge board present
-#define SBITX_V2  (1)  // v2-and-later, power/SWR bridge board present
+// The I2C bus the si5351 is on: hw_settings.ini's i2c_bus if set,
+// otherwise the board's usual bus.
+int radio_hw_i2c_bus(void);
 
-/* Requests TX_LINE, TX_POWER, EXT_PTT, and the four LPF select lines as
- * GPIO outputs (via gpio.c), driving them to their idle (LOW) state as
- * part of the same request. The key jack's two inputs are key_input.c's.
- * Call once, before any other GPIO or radio_hw function. Returns 0 on success, -1 if any of those line requests fail
- * (e.g. /dev/gpiochip0 missing, or a pin already claimed by something
- * else). */
+// Claims the board's output lines through gpio.c and puts each in its
+// receive state as part of the request: T/R relay, PA and PTT lines low,
+// every LPF relay off, and the receiver connected where the board has a
+// line for it. Logs what it claimed. Returns 0, or -1 if a request
+// failed (gpio.c says which and why).
 int radio_hw_gpio_init(void);
 
-/* Probes I2C address 0x8 (the power/SWR bridge board) to distinguish
- * original sBitx ("DE") hardware from v2-and-later. Returns SBITX_DE or
- * SBITX_V2. */
-int radio_hw_detect_version(void);
+// Called on every retune with the new dial frequency. On a board whose LPF
+// relays are in the receive path (the sBitx), selects the band's filter;
+// on one where they are switched only for transmit (the zBitx), does
+// nothing.
+void radio_hw_tune(int freq_hz);
 
-/* Selects the low-pass filter appropriate for `frequency` (Hz) by driving
- * exactly one of the four LPF_x lines high and the rest low. No-op if the
- * frequency falls in the same filter's passband as the last call. */
-void set_lpf_40mhz(int frequency);
+// 1 if this board may transmit at all, 0 if every transmit request is to
+// be refused (the zBitx, until its transmit path is calibrated).
+int radio_hw_tx_permitted(void);
 
-/* Drives the external PTT line (EXT_PTT) high (on) or low (off). No
- * delay, no policy — see radio_set_tx() in radio.c for sequencing. */
-void radio_hw_set_ptt(int on);
+// The relay half of the T/R sequence, for radio.c's TX worker, which does
+// the clocks and the codec around it. on = 1: everything between the
+// clocks being set for TX and the exciter feed being raised, including any
+// settling wait. on = 0: everything between the exciter feed being dropped
+// and the clocks going back to RX, ending with the receiver connected.
+// freq_hz is the dial, for a board that picks its LPF at transmit. Returns
+// 0, or -1 if this board cannot transmit, in which case nothing is
+// switched; on = 0 always succeeds.
+int radio_hw_relays_tx(int on, int freq_hz);
 
-/* Drives the T/R relay control line (TX_LINE) high (on, transmit) or low
- * (off, receive). Same no-delay/no-policy contract as radio_hw_set_ptt(). */
-void radio_hw_set_tx_relay(int on);
+// Milliseconds the relay half of the TX-up sequence deliberately waits
+// before RF can appear (EXT_PTT's delay on the sBitx, the LPF relay's
+// settling time on the zBitx), for sound.c's start-up T/R timing check.
+int radio_hw_tx_settle_ms(void);
 
-/* Reads the INA260 power monitor's voltage (V) and current (A) registers
- * over I2C. On any I2C error, both outputs are set to 0.0. */
+// Reads the INA260 power monitor's voltage (V) and current (A) registers
+// over I2C. On any I2C error, both outputs are set to 0.0.
 void read_voltage_current(float *voltage, float *current);
 
-/* Writes the INA260's configuration register (continuous mode, default
- * averaging). Returns 0 on success, -1 on I2C failure. */
+// Writes the INA260's configuration register (continuous mode, default
+// averaging). Returns 0 on success, -1 on I2C failure.
 int radio_hw_ina260_configure(void);
 
 #endif /* RADIO_HW_H */
