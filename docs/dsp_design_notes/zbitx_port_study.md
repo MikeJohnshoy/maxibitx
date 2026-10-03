@@ -547,3 +547,34 @@ printed) and the si5351 divider calculation. Both now use explicit
 widths, and the sources compile without warnings as 32-bit. The 32-bit
 build also showed `test-cw`'s simulated read jitter depended on the size
 of a `long`; it no longer does.
+
+**CPU, measured.** `MAXIBITX_LOOP_TIMING=1` on the zBitx's Pi Zero 2W,
+receiving, with a TCI client connected, over 26 consecutive 5-second
+windows (469 blocks each), all alike:
+
+| | Average | Worst window's maximum |
+|---|---|---|
+| process | 7.49 to 7.52 ms | 8.76 ms |
+| read (waiting for the codec) | 3.09 to 3.17 ms | 3.42 ms |
+| write | 0.04 ms | 0.12 ms |
+| period | 10.666 ms | 11.83 ms |
+
+Against the 10.67 ms block, processing averages 70% and peaks at 82%.
+That is better than §4.1's prediction of about 9 ms, and steady: the
+period holds at 10.666 ms, and no overruns were reported. On the Pi 4
+the same work takes 3.1 ms, so the Zero 2W is about 2.4 times slower
+here.
+
+What it leaves is about 1.9 ms of margin in the worst block, and this
+was receive only. Transmitting adds `tx_pipeline.c` on top of the
+receive chain, which keeps running. On an x86 machine the pipeline
+costs about 8% of what the receive DSP does (38 µs against 490 µs a
+block); scaled to these figures, a prediction, that is about 0.6 ms
+more, leaving roughly 1.3 ms in the worst block.
+
+That is enough to run, but thin, so §4.1's first fix - stage 1, the
+327-tap FIR that is nearly all of the receive cost, in single precision
+with several accumulators so it vectorizes - is worth doing before the
+transmit step. It belongs on `main`, since it lightens the Pi 4 too, and
+needs `test-rx-audio` and `test-rx-audio-impulse` to show the same
+filter response afterwards.
