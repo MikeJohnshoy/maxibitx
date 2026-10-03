@@ -463,13 +463,13 @@ the band, and strip harmonics from the transmitter. `radio_hw_tune()`
 in `radio_hw.c` selects one from the board's plan each time the radio is
 tuned:
 
-| Tuned frequency | Filter |
-|---|---|
-| below 5.5 MHz | LPF_D |
-| 5.5 to 10.5 MHz | LPF_C |
-| 10.5 to 18.5 MHz | LPF_B |
-| 18.5 to 30 MHz | LPF_A |
-| 30 MHz and above | none |
+| Tuned frequency | Bands | Filter |
+|---|---|---|
+| below 5.5 MHz | 80, 60 m | LPF_D |
+| 5.5 to 10.5 MHz | 40, 30 m | LPF_C |
+| 10.5 to 18.5 MHz | 20, 17 m | LPF_B |
+| 18.5 to 30 MHz | 15, 12, 10 m | LPF_A |
+| 30 MHz and above | | none |
 
 ### The two mixers and the si5351
 
