@@ -8,7 +8,7 @@
 #include "sound.h"
 #include "cw.h"       // cw_set_pitch() - radio_set_cw_pitch() below
 #include "rx_audio.h" // rx_audio_set_demod() - radio_set_mode() below
-#include "hw_settings.h" // hw_settings_tx_allowed() - radio_set_tx() below
+#include "hw_settings.h" // hw_settings_tx_allowed() - radio_tx_allowed() below
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -64,7 +64,7 @@ void radio_tune_to(uint32_t f) {
   // at startup and changed only by radio_tx_apply().
   si5351bx_setfreq(2, f + xtal_filter_center);
   vfo_start(&lo, RX_IF_FREQ_HZ, lo.phase);
-  set_lpf_40mhz(f); // enable the correct LPF for this band
+  radio_hw_tune(f); // the band's LPF, on a board whose LPFs are in the RX path
 }
 
 void radio_set_rit(int hz) {
@@ -227,23 +227,27 @@ static void radio_tx_apply(int tx_on) {
     sound_set_rx_capture(0);
     si5351bx_setfreq(1, bfo_freq);
     si5351bx_setfreq(2, freq_hdr + xtal_filter_center);
-    // EXT_PTT first and TX_LINE after hw_settings.ini's ext_ptt_delay_ms, so
-    // an external amplifier's relay has closed before RF arrives
-    // (hw_settings.h). 0 skips the wait, for a station with nothing there.
-    radio_hw_set_ptt(1);
-    if (tx_ext_ptt_delay_ms > 0)
-      usleep((useconds_t)tx_ext_ptt_delay_ms * 1000);
-    radio_hw_set_tx_relay(1);
+    // The board's relays and their settling waits (radio_hw.c). A board
+    // that cannot transmit refuses here too, behind radio_set_tx()'s own
+    // check: nothing has been switched, so put the clocks and capture back
+    // and stay in receive.
+    if (radio_hw_relays_tx(1, freq_hdr) < 0) {
+      printf("radio: TX refused by the %s's T/R sequence - staying in receive\n",
+             radio_hw_board_name());
+      in_tx = 0;
+      si5351bx_setfreq(1, xtal_filter_center + RX_IF_FREQ_HZ);
+      si5351bx_setfreq(2, freq_hdr + rit_applied_hz() + xtal_filter_center);
+      sound_set_rx_capture(1);
+      return;
+    }
     // Only 'Master' RIGHT feeds the exciter; LEFT (the local speaker) is
     // never touched here.
     sound_set_tx_drive(TX_MASTER_VOL);
     if (sound_tr_timing_enabled())
       tr_timing_report(monotonic_ns());
   } else {
-    sound_set_tx_drive(0); // mute the exciter feed before dropping the relay
-    radio_hw_set_ptt(0);
-    usleep(5000); // let the relay settle before dropping PTT
-    radio_hw_set_tx_relay(0);
+    sound_set_tx_drive(0);     // mute the exciter feed before the relays move
+    radio_hw_relays_tx(0, freq_hdr); // the board's relays back to receive
     // Restore the RX clocks - needed for the straight-key path, which has
     // no radio_tune_to() of its own afterwards. RIT survives TX bursts (only
     // radio_tune_to() clears it), so clk2 re-adds it.
@@ -278,21 +282,29 @@ static void radio_tx_worker_start(void) {
   pthread_create(&worker, NULL, radio_tx_worker, NULL);
 }
 
-// Set by radio_set_tx() when it refuses, drained by
-// radio_tx_refused_hz() - see radio.h for why it isn't logged in place.
+// Set by radio_set_tx() when it refuses, drained by radio_tx_refused() -
+// see radio.h for why it isn't logged in place. The reason is written
+// last and read first, so a reader that sees one sees its frequency.
 static volatile int tx_refused_hz = 0;
+static _Atomic int tx_refused_why = RADIO_TX_NOT_REFUSED;
 
-int radio_tx_refused_hz(void) {
-  int hz = tx_refused_hz;
-  tx_refused_hz = 0;
-  return hz;
+enum radio_tx_refusal radio_tx_refused(int *freq_hz) {
+  enum radio_tx_refusal why = atomic_exchange(&tx_refused_why, RADIO_TX_NOT_REFUSED);
+  *freq_hz = tx_refused_hz;
+  return why;
+}
+
+int radio_tx_allowed(int freq_hz) {
+  return radio_hw_tx_permitted() && hw_settings_tx_allowed(freq_hz);
 }
 
 // switch between RX and TX
 int radio_set_tx(int tx_on) {
   // Only transmitting is gated; returning to receive always proceeds.
-  if (tx_on && !hw_settings_tx_allowed(freq_hdr)) {
+  if (tx_on && !radio_tx_allowed(freq_hdr)) {
     tx_refused_hz = freq_hdr;
+    atomic_store(&tx_refused_why, radio_hw_tx_permitted() ? RADIO_TX_REFUSED_BAND
+                                                          : RADIO_TX_REFUSED_BOARD);
     return -1;
   }
 
