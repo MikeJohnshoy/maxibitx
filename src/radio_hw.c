@@ -24,7 +24,7 @@
 
 /* ---- Board profiles ----------------------------------------------------- */
 
-#define MAX_LPF 5
+#define MAX_LPF 4
 
 struct lpf_band {
   int below_hz; // this filter serves frequencies below this; 0 ends the plan
@@ -40,6 +40,7 @@ struct board {
   int tx_power_pin;    // held low; purpose unconfirmed in sbitx
   int ext_ptt_pin;     // PTT out to an external amplifier, -1 if none
   int rx_line_pin;     // connects the receiver when high, -1 if none
+  int idle_low_pin;    // driven nothing on this board but held low, -1 if none
   int lpf_pins[MAX_LPF + 1]; // every LPF relay line, -1 ends the list
   struct lpf_band lpf[MAX_LPF + 1];
   int lpf_in_rx_path;  // 1: the band's LPF is selected on every retune
@@ -49,9 +50,10 @@ struct board {
 static int sbitx_relays_tx(int on, int freq_hz);
 static int zbitx_relays_tx(int on, int freq_hz);
 
-// LPF_A..E are sbitx's names: A 24, B 25, C 8 and D 7 on both boards (C
-// and D share pins with SPI0's chip selects, unused as SPI here), E 12 on
-// the zBitx, where the sBitx has EXT_PTT.
+// Both boards have four LPFs, under sbitx's names: D (BCM 7) 80 and 60 m,
+// C (8) 40 and 30 m, B (25) 20 and 17 m, and A (24) 12 and 10 m. 15 m is
+// on A on the sBitx and on B on the zBitx. C and D share pins with SPI0's
+// chip selects, unused as SPI here.
 static const struct board boards[] = {
     {
         .version = "SBITX_V3",
@@ -65,6 +67,7 @@ static const struct board boards[] = {
         .tx_power_pin = 16,
         .ext_ptt_pin = 12,
         .rx_line_pin = -1,
+        .idle_low_pin = -1,
         .lpf_pins = {24, 25, 8, 7, -1},
         .lpf = {{5500000, 7}, {10500000, 8}, {18500000, 25}, {30000000, 24}, {0, 0}},
         .lpf_in_rx_path = 1,
@@ -72,9 +75,9 @@ static const struct board boards[] = {
     },
     {
         // zbitx (drexjj/zbitx, branches dev and devcwmod): LPF_B reaches
-        // 21.5 MHz, LPF_E is held off and never selected, and the LPFs are
-        // switched for transmit only. Transmit is refused until its
-        // sequence is written and the board calibrated (study §7, step 2).
+        // 21.5 MHz, and the LPFs are switched for transmit only. Transmit
+        // is refused until its sequence is written and the board
+        // calibrated (study §7, step 2).
         .version = "SBITX_V4",
         .name = "zBitx",
         .tx_permitted = 0,
@@ -83,7 +86,8 @@ static const struct board boards[] = {
         .tx_power_pin = 16,
         .ext_ptt_pin = -1,
         .rx_line_pin = 15, // the UART's RXD pin: the UART must be off
-        .lpf_pins = {24, 25, 8, 7, 12, -1},
+        .idle_low_pin = 12, // zbitx's LPF_E: no filter behind it, held low as zbitx does
+        .lpf_pins = {24, 25, 8, 7, -1},
         .lpf = {{5500000, 7}, {10500000, 8}, {21500000, 25}, {30000000, 24}, {0, 0}},
         .lpf_in_rx_path = 0,
         .relays_tx = zbitx_relays_tx,
@@ -163,6 +167,7 @@ int radio_hw_gpio_init(void) {
   err |= claim(board->tx_power_pin, 0, "maxibitx-tx_power");
   err |= claim(board->ext_ptt_pin, 0, "maxibitx-ext_ptt");
   err |= claim(board->rx_line_pin, 1, "maxibitx-rx_line");
+  err |= claim(board->idle_low_pin, 0, "maxibitx-idle_low");
   for (int i = 0; board->lpf_pins[i] >= 0; i++)
     err |= claim(board->lpf_pins[i], 0, "maxibitx-lpf");
   if (err)
