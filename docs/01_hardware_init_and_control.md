@@ -65,10 +65,11 @@ for (int i = 0; board->lpf_pins[i] >= 0; i++)
 | `TX_POWER` | 16 | 16 | low |
 | `EXT_PTT` | 12 | — | low |
 | `RX_LINE` | — | 15 | high (receiver connected) |
-| LPF relays | 24, 25, 8, 7 | 24, 25, 8, 7, 12 | all off |
+| LPF relays | 24, 25, 8, 7 | 24, 25, 8, 7 | all off |
+| BCM 12, unused | — | 12 | low |
 
-On the zBitx, BCM 12 is a fifth LPF relay (`LPF_E`), held off and never
-selected, and `RX_LINE` is BCM 15, the UART's RXD pin, so the serial
+On the zBitx, BCM 12 is zbitx's `LPF_E`, a line with no filter behind
+it, held low as zbitx does, and `RX_LINE` is BCM 15, the UART's RXD pin, so the serial
 console and UART must be disabled for maxibitx to claim it. The log
 line `init: GPIO configured for the <board>: ...` says what was claimed.
 
@@ -207,14 +208,16 @@ sBitx, whose LPFs are in the receive path, it selects the band's relay
 from the board's plan, all others off; on the zBitx, whose LPFs carry
 only the transmitter, it does nothing. Each board's plan:
 
-| Frequency | sBitx | zBitx |
-|---|---|---|
-| below 5.5 MHz | `LPF_D` (BCM 7) | `LPF_D` (BCM 7) |
-| 5.5 to 10.5 MHz | `LPF_C` (BCM 8) | `LPF_C` (BCM 8) |
-| 10.5 to 18.5 MHz | `LPF_B` (BCM 25) | `LPF_B` (BCM 25) |
-| 18.5 to 21.5 MHz | `LPF_A` (BCM 24) | `LPF_B` (BCM 25) |
-| 21.5 to 30 MHz | `LPF_A` (BCM 24) | `LPF_A` (BCM 24) |
-| 30 MHz and above | none | none |
+| Frequency | Bands | sBitx | zBitx |
+|---|---|---|---|
+| below 5.5 MHz | 80, 60 m | `LPF_D` (BCM 7) | `LPF_D` (BCM 7) |
+| 5.5 to 10.5 MHz | 40, 30 m | `LPF_C` (BCM 8) | `LPF_C` (BCM 8) |
+| 10.5 to 18.5 MHz | 20, 17 m | `LPF_B` (BCM 25) | `LPF_B` (BCM 25) |
+| 18.5 to 21.5 MHz | 15 m | `LPF_A` (BCM 24) | `LPF_B` (BCM 25) |
+| 21.5 to 30 MHz | 12, 10 m | `LPF_A` (BCM 24) | `LPF_A` (BCM 24) |
+| 30 MHz and above | | none | none |
+
+Both boards have these four filters and no others.
 
 Selection is a no-op if the new relay matches the last one (tracked in a
 static `prev_lpf`), so retuning within a band doesn't chatter the relays.
