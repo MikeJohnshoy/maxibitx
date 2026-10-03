@@ -31,8 +31,9 @@ all five external interfaces need no change.
 What does change is small and specific:
 
 - a second T/R line (RX_LINE) with its own switching sequence;
-- a fifth LPF line, on the pin maxibitx uses for EXT_PTT;
-- a different LPF band plan, and LPF relays used only while
+- BCM 12, maxibitx's EXT_PTT pin, which the zBitx holds low as an
+  unused LPF line;
+- 15 m on LPF_B instead of LPF_A, and LPF relays used only while
   transmitting;
 - a different I2C bus number, shared with the zBitx's RP2040 front
   panel;
@@ -48,9 +49,9 @@ puts that uncomfortably close to the budget. It must be measured
 before anything else is built on it, and there are known, contained
 ways to cut the cost if it is too high.
 
-**Two hardware facts need confirming before transmit is enabled**:
-which LPF relay serves which band (§3.2), and whether anything about
-the RP2040 front panel matters when nothing talks to it (§3.7).
+**One hardware question remains before transmit is enabled**: whether
+anything about the RP2040 front panel matters when nothing talks to it
+(§3.7). The LPF band plan is confirmed (§3.2).
 
 ## 2. How the zBitx code tells the boards apart
 
@@ -79,15 +80,16 @@ maxibitx's `gpio.c` uses:
 | LPF_B | 6 → **25** | 25 |
 | LPF_C | 10 → **8** | 8 |
 | LPF_D | 11 → **7** | 7 |
-| LPF_E | 26 → **12** | 12 is EXT_PTT |
+| LPF_E, no filter (§3.2) | 26 → **12** | 12 is EXT_PTT |
 | RX_LINE, connects the receiver | 16 → **15** | not used |
 | Key ring (dash, mic PTT) | 7 → **4** | 4 |
 | Key tip (dot) | 21 → **5** | 5 |
 
 Two consequences:
 
-- **No EXT_PTT on the zBitx.** BCM 12 drives LPF_E there. The zBitx
-  board profile must not claim BCM 12 as EXT_PTT, and
+- **No EXT_PTT on the zBitx.** zbitx drives BCM 12 as `LPF_E`, a fifth
+  LPF line that no radio has a filter on (§3.2), and holds it low. The
+  zBitx board profile must not claim BCM 12 as EXT_PTT, and
   `ext_ptt_delay_ms` has no meaning on it.
 - **RX_LINE is on BCM 15, the UART's receive pin.** The serial console
   and the UART must be off on the zBitx's Pi
@@ -99,45 +101,22 @@ inputs for an sBitx front panel and play no part on the zBitx.
 
 ### 3.2 The low-pass filters
 
-**What the zbitx code does.** In `set_lpf_40mhz()`, on a zBitx:
+**Confirmed.** Both boards have four LPFs, and no radio has a fifth:
 
-| Frequency | Relay |
-|---|---|
-| below 5.5 MHz | LPF_D |
-| 5.5 to 10.5 MHz | LPF_C |
-| 10.5 to 21.5 MHz | LPF_B (on the sBitx, only to 18.5 MHz) |
-| 21.5 to 30 MHz | LPF_A |
+| Relay (BCM) | sBitx | zBitx |
+|---|---|---|
+| LPF_D (7) | 80 m, 60 m | 80 m, 60 m |
+| LPF_C (8) | 40 m, 30 m | 40 m, 30 m |
+| LPF_B (25) | 20 m, 17 m | 20 m, 17 m, 15 m |
+| LPF_A (24) | 15 m, 12 m, 10 m | 12 m, 10 m |
 
-LPF_E is claimed at startup and driven low, but **is never selected**.
-
-The zbitx `dev` branch (commit `43522ef`, 2026-09-29) does exactly the
-same, and so does the repository's first upload (`d8ecb71`,
-2025-03-31): the 21.5 MHz split for the zBitx, LPF_E never selected,
-and no LPF selected on a receive retune. The only LPF change since was
-the T/R sequence's relay handling (`3258ad5`, 2026-04-25). So this
-mapping has been on the air on zBitx radios since the code was first
-published.
-
-**What the found description says.** A description of the zBitx's LPF
-bank (source not identified) gives five filters: 80 m; 40/30 m;
-20/17 m; 15 m, "split off" from the 20/17 m filter; and 12/10 m.
-
-Those disagree about 15 m. If the description is right, LPF_E is the
-15 m filter and the code sends 15 m through the 20/17 m filter, whose
-cutoff would be below 21 MHz. That would cost output power on 15 m and
-load the PA. If the code is right, LPF_B on the zBitx covers 15 m and
-LPF_E is something else, or not fitted. The code's long use on the air
-favours it: a filter cutting off below 21 MHz would have shown up as
-low output on 15 m. The description's wording reads like a generated
-summary, so it should not be relied on alone.
-
-**How to settle it**, in order of preference:
-
-1. The zBitx schematic, or Jesse (W9JES), who maintains the zbitx code.
-2. On the bench, before transmitting into an antenna: a low-power
-   carrier into a dummy load on 21.2 MHz, once through LPF_B and once
-   through LPF_E. A filter whose cutoff is below 21 MHz shows as a
-   clear loss of output.
+The only difference is 15 m. zbitx's `set_lpf_40mhz()` does exactly
+this: below 5.5 MHz LPF_D, below 10.5 MHz LPF_C, below 18.5 MHz LPF_B
+(21.5 MHz on a zBitx), below 30 MHz LPF_A. Its `LPF_E` (BCM 12) is
+driven low and never selected; there is no filter behind it. The zbitx
+`dev` branch and the repository's first upload (2025-03-31) do the same.
+maxibitx's two board profiles already use these plans, and hold BCM 12
+low on the zBitx as zbitx does.
 
 **The LPFs are not in the receive path on the zBitx.** zbitx's
 `set_rx1()` selects an LPF on retune only when `sbitx_version < 4`.
@@ -388,7 +367,7 @@ that mean the same on every board, and never asks which board it is on:
 
 | `radio_hw.c` operation | sBitx (SBITX_V3) | zBitx (SBITX_V4) |
 |---|---|---|
-| `radio_hw_init()` | claim TX_LINE, TX_POWER, EXT_PTT, LPF A-D | claim TX_LINE, TX_POWER, RX_LINE (high), LPF A-E |
+| `radio_hw_init()` | claim TX_LINE, TX_POWER, EXT_PTT, LPF A-D | claim TX_LINE, TX_POWER, RX_LINE (high), LPF A-D, BCM 12 (low) |
 | `radio_hw_i2c_bus()` | 22 | 3, to be confirmed (§3.4) |
 | `radio_hw_tune(freq)` | select the band's LPF | nothing: the LPFs are not in the receive path |
 | `radio_hw_tx_permitted()` | 1 | 0 until step 2 |
@@ -462,10 +441,10 @@ Then measure:
 
 If the process time is too high, apply §4.1's fixes before going on.
 
-**Step 2: transmit.** Only after the LPF band plan is confirmed (§3.2),
+**Step 2: transmit.** With the LPF band plan confirmed (§3.2),
 and by changing the zBitx profile's `tx_enabled`:
 
-- the zBitx T/R sequence (§3.3) and the confirmed LPF table;
+- the zBitx T/R sequence (§3.3) and its LPF table, as in the profile;
 - into a dummy load, with `max_power` set low and `[tx_band]` scales
   starting well below zbitx's values;
 - the wattmeter calibration, band by band;
@@ -480,7 +459,7 @@ them through rigctld and TCI.
 
 ## 8. Decisions and questions
 
-1. **The LPF band plan**: from the schematic or Jesse, before step 2.
+1. **The LPF band plan**: confirmed (§3.2).
 2. **The I2C bus** on the zBitx's Pi: `i2cdetect -l`.
 3. **The USB data port**: is it brought out on the zBitx?
 4. **The front panel**: does it control power or shutdown, and is it
