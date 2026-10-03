@@ -161,7 +161,7 @@ static void snapshot(struct state *s) {
   s->mute = percent == 0;
   s->rit_on = radio_rit_enabled() != 0;
   s->rit = radio_get_rit();
-  s->tx_enable = hw_settings_tx_allowed(freq_hdr) != 0;
+  s->tx_enable = radio_tx_allowed(freq_hdr) != 0;
   s->wpm = keyer_get_wpm();
 }
 
