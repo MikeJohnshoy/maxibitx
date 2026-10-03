@@ -73,7 +73,7 @@ void radio_set_mode(enum radio_mode m) {
     printf("radio: mode %d\n", m);
 }
 enum radio_mode radio_get_mode(void) { return stub_mode; }
-int hw_settings_tx_allowed(int f) {
+int radio_tx_allowed(int f) {
   (void)f;
   return stub_tx_allowed;
 }
