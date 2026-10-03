@@ -1360,7 +1360,7 @@ is distributed under the GPL.
 - **Jesse Kujawa, W9JES**, whose 64-bit sBitx repository
   ([drexjj/sbitx](https://github.com/drexjj/sbitx)) refined and extended
   that software and was the base this code was drawn from.
-- **Evan, AC9TU**, **Robert Benedict** and **Juan Agrinsoni, WP3DN**,
+- **Evan Hand, AC9TU**, **Robert Benedict, KD8CGH** and **Juan Agrinsoni, WP3DN**,
   for their encouragement throughout, and Evan for the crystal filter
   measurements the receive design is built on.
 - The **piHPSDR** project, whose `hpsdrsim.c` showed the way for the
