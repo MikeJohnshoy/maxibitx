@@ -775,6 +775,12 @@ only a few dB right at 0 Hz, where +0 and −0 cannot be told apart,
 about 10 dB at −200 Hz, and 40 to 75 dB from about −400 Hz outward. Its
 delay is 163 samples, 1.7 ms.
 
+This filter is nearly all of the receive chain's processing time, so it
+runs in single precision, four taps at a time on the Pi's NEON vector
+unit. Against the same filter in double precision, its response differs
+by under 0.001 dB, and its rounding noise is 160 dB below full scale,
+about 70 dB under the codec's own noise.
+
 This filter sets both the SSB and digital receive bandwidth and the
 opposite-sideband rejection of every mode.
 
