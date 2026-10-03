@@ -595,5 +595,19 @@ at -400, -800, -1500 and -3000 Hz is the same to 0.0003 dB; rounding adds
 noise 160 dB below a full-scale input, about 70 dB under the WM8731's
 own. `test-rx-audio`'s levels move in the seventh significant figure;
 `test-rx-audio-impulse`'s output is unchanged. On an x86 machine
-`rx_audio_process()` went from 478 to 117 µs a block. The Zero 2W figure
-is to be measured with `MAXIBITX_LOOP_TIMING`.
+`rx_audio_process()` went from 478 to 117 µs a block.
+
+On the zBitx's Zero 2W, in the same test as before (receiving, one TCI
+I/Q stream to sdrOxide), over 13 five-second windows:
+
+| | Before | After |
+|---|---|---|
+| process, average | 7.49 to 7.52 ms | 4.25 to 4.32 ms |
+| process, worst window's maximum | 8.76 ms | 5.97 ms |
+| read (waiting for the codec), average | 3.1 ms | 6.3 ms |
+| period, average | 10.666 ms | 10.666 ms |
+
+Processing now averages 40% of the 10.67 ms block and peaks at 56%,
+leaving about 4.7 ms in the worst block, against 1.9 ms before. With
+the transmit pipeline's predicted 0.6 ms added, that still leaves about
+4 ms. The CPU is no longer a reason to hold back the transmit step.
