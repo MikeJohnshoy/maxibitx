@@ -94,8 +94,9 @@ int radio_rit_enabled(void) {
   return rit_enabled;
 }
 
-// Starts in CW (see radio.h).
-static enum radio_mode current_mode = RADIO_MODE_CW;
+// RADIO_STARTUP_MODE from the start; maxibitx.c's radio_set_mode() call
+// brings rx_audio.c into step with it (radio.h).
+static enum radio_mode current_mode = RADIO_STARTUP_MODE;
 
 void radio_set_mode(enum radio_mode m) {
   current_mode = m;
