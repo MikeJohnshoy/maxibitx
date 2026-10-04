@@ -125,6 +125,10 @@ channel filtering, and `rx_audio.c` does its own for the audio it
 produces. (Measured filter response and the anti-alias filter designed
 against it live in
 [`dsp_design_notes/antialias_filter_design.md`](dsp_design_notes/antialias_filter_design.md).)
+Where the filter actually sits differs from board to board;
+[`tools/xtal_sweep.py`](../tools/README.md) measures it by moving
+`xtal_filter_center` with the dial held still
+([`dsp_design_notes/zbitx_port_study.md`](dsp_design_notes/zbitx_port_study.md) §11).
 
 **Mixer 2 — clk1, fixed while receiving.** This mixer brings the
 crystal-filter output (centered at `xtal_filter_center`) down to a low
@@ -140,7 +144,8 @@ one fixed offset. It is, however, *not* fixed for the entire life of
 the process: while transmitting, `radio_tx_apply()` retunes it to
 `bfo_freq` instead - a deliberately different, off-center value used
 only for TX image suppression - and restores this RX value the moment
-TX ends. See
+TX ends. rigctld's `L XTALCENTER` moves it too, with clk2, for measuring
+the filter. See
 [`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md) for why
 TX needs its own value here rather than reusing this one.
 
