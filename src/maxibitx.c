@@ -33,6 +33,19 @@ static void handle_shutdown_signal(int sig) {
   (void)sig;
   shutdown_requested = 1;
 }
+
+// For the start-up log line only; rigctld, CAT and TCI have their own names.
+static const char *startup_mode_name(enum radio_mode m) {
+  switch (m) {
+  case RADIO_MODE_CW:      return "CW";
+  case RADIO_MODE_CWR:     return "CWR";
+  case RADIO_MODE_USB:     return "USB";
+  case RADIO_MODE_LSB:     return "LSB";
+  case RADIO_MODE_DIGITAL: return "DIGITAL (USB demodulation, narrow filter held out, "
+                                  "PTT from the computer only)";
+  }
+  return "?";
+}
  
 // initialize hardware, being careful of producer/consumer dependencies
 // Each step reports its own result with a console line like "init: ..."
@@ -128,6 +141,11 @@ int main(int argc, char **argv) {
   // report a pitch the radio isn't using if the bank's rungs ever change.
   printf("init: RX audio demod ready (CW pitch %d Hz, narrow filter %d Hz)\n",
          radio_get_cw_pitch(), rx_audio_get_narrow_width());
+
+  // The startup mode (radio.h), through radio_set_mode() so the
+  // demodulator and the narrow-filter hold follow it like any other change.
+  radio_set_mode(RADIO_STARTUP_MODE);
+  printf("init: mode %s\n", startup_mode_name(RADIO_STARTUP_MODE));
 
   // Bring up the rigctld-compatible control surface (src/interfaces/hamlib.c) first -
   // not a hard failure if the port's unavailable, same as HPSDR/UAC2.
