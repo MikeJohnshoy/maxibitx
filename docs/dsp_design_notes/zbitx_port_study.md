@@ -637,32 +637,83 @@ for `hw_settings.ini`.
   check covers an impossible pair in `hw_settings.ini` at start-up, which
   used to keep the compiled-in shift and transmit off frequency.
 - [`tools/xtal_sweep.py`](../../tools/README.md) runs the sweep from a
-  laptop: by default 40,000,000 to 40,045,000 Hz in 500 Hz steps, 0.5 s
-  of I/Q discarded after each step and 1 s measured, the power in a
-  300 Hz window at the dial from the I/Q stream. It prints the table, the
-  peak, the edges and centres at −3, −6 and −20 dB, and the −6 dB centre
-  rounded to 100 Hz as the value to use. It writes a CSV, and restores the
-  original setting at the end or on Ctrl-C. The settle and dwell are
-  counted in I/Q samples, after emptying the socket, so a laptop that
-  falls behind the stream can't measure the previous step.
+  laptop and records the whole I/Q spectrum at each step (below).
 
-**Bench check.** Against a simulated radio (a 4-pole filter, −3 dB
-width 2,700 Hz, centred at 40,020,300 Hz, its noise sent inverted as
-maxibitx sends it, with packets dropped): the tool reported a −6 dB centre
-of 40,020,322 Hz and suggested 40,020,300. On noise the measured widths
-come out wider than the filter by about the window's width, because the
-window adds its own; the centre is unaffected. A steady carrier inside
-the window is measured without that broadening.
+**Using the whole spectrum.** The level at the dial alone gave noisy,
+shallow curves on the zBitx (first measurements, below). But every
+offset *d* from the dial measures the filter too: at setting *S* it sees
+crystal frequency *S − d*, at the IF 24 kHz + *d*, which doesn't change
+with *S*. In dB,
+
+    level(S, d) = X(S − d) + C(d)
+
+where X is the crystal filter, with the noise added after it (the same at
+every crystal frequency, so it belongs to X), and C is everything that
+depends on the offset alone: the codec and its digital filter, the
+anti-alias filter, and any steady signal on the band. The tool reduces
+each step's spectrum to one level per offset, at the step's spacing out
+to ±22 kHz (the median FFT bin within each cell, so a narrow signal
+doesn't set it), and separates X and C by alternating medians, with C
+pinned to 0 at the dial. With 1 kHz steps, each crystal frequency is
+seen at up to 45 offsets. Signals that come and go are outliers to the
+medians, and a steady one stays at one offset and ends up in C. X covers
+the swept range plus about 11 kHz on each side (a crystal frequency is
+reported once it is seen at a quarter of the offsets).
+
+The report gives the filter with bars, the peak, the depth (peak to the
+5th percentile, the deepest any edge can be measured), the edges and
+centres at −3, −6 and −20 dB down to that depth, and the −6 dB centre
+(the −3 dB one if the depth is under 7 dB) as the value for the ini. An
+edge is where the response falls below the level and stays below it for
+3 kHz, so a ripple dip in the passband isn't taken for one. It writes
+the filter (with a 1 kHz window at the dial, measured the simple way,
+beside it), C, every step's spectrum (which `--refit` reads again without
+the radio), and a plot if matplotlib is there. The settle and dwell are
+counted in I/Q samples, after emptying the socket, so a laptop that
+falls behind the stream can't measure the previous step.
+
+**Bench check.** Against a simulated radio sending its noise inverted,
+as maxibitx does, with packets dropped: a filter with −6 dB edges at
+about 39,993.7 and 40,030.9 kHz, ±0.75 dB ripple, a steep upper skirt and
+a lower stopband only 35 dB down; noise in front of it 25 dB above the
+noise after it; a response after it falling 0.8 dB/kHz above +5 kHz; a
+steady carrier at +3 kHz and FT8-like bursts. The fit put the −3 and −6 dB
+edges within 100 Hz of the truth, suggested 40,012,300, and recovered C
+to within 0.3 dB out to ±18 kHz, with the carrier in C rather than in the
+filter. On synthetic data with the noise in front only 7 dB above the
+noise after (about what the antenna run below had), the centre still came
+out within 200 Hz; the edges come out a little wide when the measurement
+is that shallow.
+
+**First measurements (2026-10-04, simple method).** Three sweeps of the
+level at the dial, 40,000 to 40,045 kHz, show the same wide filter: a plateau from below
+40,000 kHz to about 40,028 to 40,033 kHz, then a drop to a floor. In two of
+them it stood 20 to 30 dB above the floor, but scattered by 1.5 to 3 dB
+from step to step, more at the longer dwell: signals and fading in a
+300 Hz window, not measurement noise. In the third it stood only 3 to
+5 dB above, smoothly: far less noise in front of the filter (a dummy
+load or a quiet band), so most of the noise entered after it. A fourth sweep on an antenna, 39,975 to
+40,040 kHz with a 3 kHz window, found both edges: the level falls by half
+its 7 dB depth at about 39,995.5 and 40,028.5 kHz, a centre of about
+40,012 kHz.
+
+That agrees with an analyzer measurement shared by Evan, AC9TU, believed
+to be of the zBitx's filter: centre 40.0124 MHz, 34.8 kHz wide at −3 dB
+and 36.8 kHz at −6 dB (39.9940 to 40.0308 MHz), the upper side down 60 dB
+at 40.0409 MHz, and the lower side never reaching −60 dB. So the zBitx's
+filter is a roughly 35 kHz roofing filter centred where the sBitx's
+default puts the dial, not an SSB-width filter, and with
+`xtal_filter_center` at 40,012,400 or 40,020,800 the dial is well inside
+it. The weak reception at first contact is not the crystal filter.
 
 **Using it.**
 
-1. Pick something to measure. A steady carrier at the dial is best: a
-   signal generator, or a broadcast or WWV carrier. Band noise on an
-   antenna works if it is well above the receiver's own noise. A dummy
-   load only gives the receiver's own noise, much of which is added after
-   the filter, so the curve comes out flattened.
-2. `python3 tools/xtal_sweep.py --host zbitx.local` (add
-   `--dial 15000000` to tune to the carrier and back afterwards).
+1. Measure on an antenna, on a quiet stretch of band (not an FT8
+   frequency), at a time of day when the band noise is high; or with a
+   noise source at the antenna input for the deepest result.
+2. `python3 tools/xtal_sweep.py --host zbitx.local`. Check the reported
+   depth: the edges are trustworthy down to it, and the centre even when
+   it is only a few dB.
 3. Put the reported `xtal_filter_center` in `hw_settings.ini` (above the
    `[tcxo]` line) and restart maxibitx.
 4. On a board that transmits, the carrier stays on the dial whatever the
