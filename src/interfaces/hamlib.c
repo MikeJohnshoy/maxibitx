@@ -228,9 +228,9 @@ static int handle_line(int fd, char *line)
 
     if (cmd[0] == 'l' && (cmd[1] == '\0' || cmd[1] == ' ')) {
         // get_level <name>. AF, CWPITCH, KEYSPD, RFPOWER and STRENGTH are real
-        // Hamlib levels (see dump_state); MICGAIN, ALC and CWWIDTH are this
-        // server's extensions, in their own units. Anything else (SQL,
-        // preamp, ...) has no equivalent here.
+        // Hamlib levels (see dump_state); MICGAIN, ALC, CWWIDTH and
+        // XTALCENTER are this server's extensions, in their own units.
+        // Anything else (SQL, preamp, ...) has no equivalent here.
         char level_name[32] = "";
         sscanf(cmd + 1, "%31s", level_name);
         if (strcmp(level_name, "AF") == 0) {
@@ -288,6 +288,12 @@ static int handle_line(int fd, char *line)
             snprintf(buf, sizeof(buf), "%d\n", rx_audio_get_narrow_width());
             send_line(fd, buf);
             printf("rigctl: l CWWIDTH -> %d Hz\n", rx_audio_get_narrow_width());
+        } else if (strcmp(level_name, "XTALCENTER") == 0) {
+            // Extension: xtal_filter_center in Hz, for tools/xtal_sweep.py.
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%d\n", radio_get_xtal_filter_center());
+            send_line(fd, buf);
+            printf("rigctl: l XTALCENTER -> %d Hz\n", radio_get_xtal_filter_center());
         } else {
             send_rprt(fd, -1);
             printf("rigctl: l %s -> unsupported level\n", level_name);
@@ -338,6 +344,17 @@ static int handle_line(int fd, char *line)
             int got = rx_audio_set_narrow_width((int)val);
             send_rprt(fd, 0);
             printf("rigctl: L CWWIDTH %.0f -> %d Hz (stage 3 width)\n", val, got);
+        } else if (sscanf(cmd + 1, "%31s %lf", level_name, &val) == 2 &&
+                   strcmp(level_name, "XTALCENTER") == 0) {
+            // Extension: moves xtal_filter_center until the next restart
+            // (radio.h). Unlike the levels above it can be refused - while
+            // transmitting, or outside the sanity bounds - and says so with
+            // RPRT -1 rather than clamping, since a sweep that silently
+            // measured some other setting would draw the wrong filter.
+            int ok = radio_set_xtal_filter_center((int)(val + 0.5)) == 0;
+            send_rprt(fd, ok ? 0 : -1);
+            printf("rigctl: L XTALCENTER %.0f -> %s, %d Hz\n", val,
+                   ok ? "ok" : "refused", radio_get_xtal_filter_center());
         } else {
             send_rprt(fd, -1);
             printf("rigctl: L %s -> unsupported level or bad args\n", cmd + 1);
