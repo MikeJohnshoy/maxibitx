@@ -254,6 +254,9 @@ int main(int argc, char **argv) {
              "range\n", refused_hz);
     else if (why == RADIO_TX_REFUSED_BOARD)
       printf("tx: PTT refused - transmit is not enabled on the %s\n", radio_hw_board_name());
+    else if (why == RADIO_TX_REFUSED_IF)
+      printf("tx: PTT refused - bfo_freq (%d Hz) and xtal_filter_center (%d Hz) "
+             "give no usable TX IF\n", bfo_freq, radio_get_xtal_filter_center());
   }
 
   // Graceful shutdown - roughly the reverse of bring-up
