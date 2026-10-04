@@ -74,14 +74,22 @@ double sound_get_tx_power(void);
    MICGAIN - a couple of dB on speech peaks is right. */
 double sound_get_alc_db(void);
 
-/* Re-derives the CW IF placement from this board's bfo_freq/
-   xtal_filter_center and whatever tone cw.c is currently generating, so
-   the two cancel to a key-down carrier on the dial. Called at startup and
-   again after every CW pitch change - radio_set_cw_pitch() owns that
-   sequence, so don't call this on its own expecting the pitch to move.
+/* Re-derives the TX IF placement (the CW and SSB shifts) from this
+   board's bfo_freq/xtal_filter_center and whatever tone cw.c is currently
+   generating, so the two cancel to a key-down carrier on the dial. Called
+   at startup, after every CW pitch change and after every
+   xtal_filter_center change - radio_set_cw_pitch() and
+   radio_set_xtal_filter_center() own those sequences, so don't call this
+   on its own expecting the pitch or the center to move.
    Returns -1 if the board's values give no usable IF, leaving the previous
    placement in force. */
 int sound_update_cw_if_placement(void);
+
+/* 0 while the most recent sound_update_cw_if_placement() failed, so the
+   placement in force doesn't match bfo_freq/xtal_filter_center and a
+   transmission would be off frequency by the difference; 1 otherwise.
+   radio_tx_allowed() refuses transmit on 0. */
+int sound_tx_if_placed(void);
 
 /* T/R timing instrumentation, on only when MAXIBITX_TR_TIMING is set.
 
