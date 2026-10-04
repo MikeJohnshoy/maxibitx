@@ -248,14 +248,17 @@ For the example, the input is a 700 Hz tone.
    `bfo_freq` and `xtal_filter_center` actually loaded from
    `data/hw_settings.ini` - `sound.c` calls
    `tx_pipeline_set_if_placement()` after `hw_settings_load()`, and again
-   via `sound_update_cw_if_placement()` on every pitch change, so a board
+   via `sound_update_cw_if_placement()` on every pitch change and every
+   runtime change of `xtal_filter_center` (rigctld `L XTALCENTER`), so a board
    whose IF differs transmits on frequency rather than off
    by the difference. `tx_pipeline.h`'s `TX_IF_SHIFT_*_BINS` remain as
    the starting values and as what the bench harness uses, since that
    links no hardware code and has no settings file to read. A placement
    that isn't physical (a non-positive difference, or one past Nyquist)
-   is rejected, leaving the defaults and logging it: transmitting at a
-   wrong IF is worse than transmitting at the default one.
+   is rejected and logged, and transmit is then refused
+   (`sound_tx_if_placed()`, checked by `radio_tx_allowed()`) until a
+   placement succeeds: the shift in force would no longer match the
+   clocks, and the transmission would be off frequency by the difference.
 
    One measured consequence of doing the shift in whole bins: 46.875 Hz is
    the finest placement available, so the carrier lands within half a bin
