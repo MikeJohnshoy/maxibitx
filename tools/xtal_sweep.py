@@ -16,12 +16,15 @@ the crystal filter at S - d, multiplied by a response that depends on d
 alone: the codec, its digital filter and the anti-alias filter, plus any
 steady signal on the band at that offset. In dB:
 
-    level(S, d) = X(S - d) + C(d)
+    level(S, d) = X(S - d) + C(d) + G(S)
 
 X is the crystal filter (with the noise added after it, which is the
-same at every crystal frequency); C is everything after it. One sweep
-gives a grid of levels over S and d, and a robust fit (alternating
-medians) separates the two. Each crystal frequency is seen at up to
+same at every crystal frequency); C is everything after it; G is
+whatever the band did while that step was measured - fading, the noise
+rising and falling - which moves every offset of the step together. One
+sweep gives a grid of levels over S and d, and a robust fit (alternating
+medians) separates the three, so the band's breathing doesn't end up
+drawn into the filter as ripple. Each crystal frequency is seen at up to
 (2 * span / step + 1) offsets, so X comes out far smoother than the
 level at the dial alone, and it covers the swept range widened by about
 half the span on each side (a crystal frequency is reported once it is
@@ -56,8 +59,8 @@ ini.
 
 Outputs: PREFIX.csv (the filter against crystal frequency, with the
 dial window's levels beside it), PREFIX_if.csv (C against offset),
-PREFIX_raw.csv (every step's spectrum, for --refit), and PREFIX.png if
-matplotlib is installed.
+PREFIX_steps.csv (G against setting), PREFIX_raw.csv (every step's
+spectrum, for --refit), and PREFIX.png if matplotlib is installed.
 
 What to measure. The filter can only be drawn as far down as the noise
 in front of it is above the noise added after it, so the depth of the
@@ -270,40 +273,60 @@ def offset_cells(spec, step, k_max):
 
 
 def fit(levels, k_max):
-    """Separates levels[iS, iD] (dB, NaN where missing) into X + C, with
-    X indexed by crystal frequency and C by offset, by alternating
-    medians. With S = S0 + iS * step and d = (iD - k_max) * step, the
-    crystal frequency S - d is S0 + (iX - k_max) * step, iX = iS - iD +
-    2 * k_max. C is pinned to 0 at the dial, so X reads as the level a
-    signal at the dial would have. Returns (X, n, C): n is how many
-    offsets each crystal frequency was seen at."""
+    """Separates levels[iS, iD] (dB, NaN where missing) into
+    X(S - d) + C(d) + G(S) by alternating medians. X is indexed by crystal
+    frequency, C by offset, G by step. With S = S0 + iS * step and
+    d = (iD - k_max) * step, the crystal frequency S - d is
+    S0 + (iX - k_max) * step, iX = iS - iD + 2 * k_max.
+
+    G is whatever changed with time during the sweep - fading, the band
+    noise rising and falling - which moves every offset of a step
+    together. Without it, a sweep made while the band breathed draws the
+    breathing into the filter. A straight-line trend in G can't be told
+    apart from a tilt of X against C, so G is held to zero mean and no
+    slope, and a steady drift stays in X and C.
+
+    C is pinned to 0 at the dial, so X reads as the level a signal at the
+    dial would have. Returns (X, n, C, G): n is how many offsets each
+    crystal frequency was seen at; G is 0 for a step with no data."""
     n_s, n_d = levels.shape
     ix = np.arange(n_s)[:, None] - np.arange(n_d)[None, :] + 2 * k_max
     n_x = n_s + 2 * k_max
     valid = ~np.isnan(levels)
+    rows = np.any(valid, axis=1)
     flat_ix = ix[valid]
-    flat_lv = levels[valid]
     order = np.argsort(flat_ix, kind="stable")
-    flat_ix, flat_lv = flat_ix[order], flat_lv[order]
-    bounds = np.searchsorted(flat_ix, np.arange(n_x + 1))
+    bounds = np.searchsorted(flat_ix[order], np.arange(n_x + 1))
     n = np.diff(bounds)
+
+    def medians(a, axis):
+        with np.errstate(all="ignore"):
+            out = np.nanmedian(np.where(valid, a, np.nan), axis=axis) \
+                if np.any(valid) else np.zeros(a.shape[1 - axis])
+        return np.nan_to_num(out)
 
     x = np.zeros(n_x)
     c = np.zeros(n_d)
-    for _ in range(100):
-        resid = np.where(valid, levels - x[ix], np.nan)
-        with np.errstate(all="ignore"):
-            c_new = np.array([np.nanmedian(col) if np.any(~np.isnan(col)) else 0.0
-                              for col in resid.T])
+    g = np.zeros(n_s)
+    t = np.arange(n_s, dtype=float)
+    for _ in range(200):
+        c_new = medians(levels - x[ix] - g[:, None], 0)
         c_new -= c_new[k_max]
-        flat_c = (levels - c_new[None, :])[valid][order]
-        x_new = np.array([np.median(flat_c[bounds[i]:bounds[i + 1]]) if n[i] else np.nan
+        g_new = medians(levels - x[ix] - c_new[None, :], 1)
+        if np.count_nonzero(rows) >= 3:
+            slope, icpt = np.polyfit(t[rows], g_new[rows], 1)
+            g_new = np.where(rows, g_new - (slope * t + icpt), 0.0)
+        else:
+            g_new[:] = 0.0
+        flat = (levels - c_new[None, :] - g_new[:, None])[valid][order]
+        x_new = np.array([np.median(flat[bounds[i]:bounds[i + 1]]) if n[i] else np.nan
                           for i in range(n_x)])
-        change = max(np.nanmax(np.abs(x_new - x)), np.max(np.abs(c_new - c)))
-        x, c = x_new, c_new
+        change = max(np.nanmax(np.abs(x_new - x)), np.max(np.abs(c_new - c)),
+                     np.max(np.abs(g_new - g)))
+        x, c, g = x_new, c_new, g_new
         if change < 0.005:
             break
-    return x, n, c
+    return x, n, c, g
 
 
 def find_edge(xs, rel, peak_i, level, direction, step):
@@ -331,9 +354,9 @@ def bar(rel, depth, width=40):
 
 
 def report(settings, step, k_max, levels, window_db, prefix):
-    """Fits, prints the result and writes PREFIX.csv, PREFIX_if.csv and,
-    if matplotlib is there, PREFIX.png."""
-    x, n, c = fit(levels, k_max)
+    """Fits, prints the result and writes PREFIX.csv, PREFIX_if.csv,
+    PREFIX_steps.csv and, if matplotlib is there, PREFIX.png."""
+    x, n, c, g = fit(levels, k_max)
     s0 = settings[0]
     xs = np.array([s0 + (i - k_max) * step for i in range(len(x))])
     ok = (n >= max(5, MIN_SEEN * (2 * k_max + 1))) & ~np.isnan(x)
@@ -384,6 +407,14 @@ def report(settings, step, k_max, levels, window_db, prefix):
     for row in range(0, len(picks), 6):
         print("  " + "  ".join(f"{offsets[i] / 1000:+6.1f}k {c[i]:+6.1f}"
                                for i in picks[row:row + 6]))
+    measured = ~np.all(np.isnan(levels), axis=1)
+    if np.any(measured):
+        gm = g[measured]
+        print()
+        print(f"level changes during the sweep (fading, band noise), taken out of the "
+              f"result: {gm.min():+.1f} to {gm.max():+.1f} dB about the trend")
+        if gm.max() - gm.min() > 6:
+            print("  - the band was moving a lot; a second sweep is worth comparing")
 
     with open(prefix + ".csv", "w", newline="") as f:
         w = csv.writer(f)
@@ -399,13 +430,19 @@ def report(settings, step, k_max, levels, window_db, prefix):
         w.writerow(["offset_hz", "rel_db"])
         for d, v in zip(offsets, c):
             w.writerow([int(d), f"{v:.2f}"])
-    written = [prefix + ".csv", prefix + "_if.csv"]
-    if plot(prefix + ".png", xs_ok, rel, window_db, offsets, c, edges, depth):
+    with open(prefix + "_steps.csv", "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["xtal_filter_center_hz", "level_change_db"])
+        for st, v, m in zip(settings, g, measured):
+            w.writerow([st, f"{v:.2f}" if m else ""])
+    written = [prefix + ".csv", prefix + "_if.csv", prefix + "_steps.csv"]
+    steps = [(st, v) for st, v, m in zip(settings, g, measured) if m]
+    if plot(prefix + ".png", xs_ok, rel, window_db, offsets, c, steps, edges, depth):
         written.append(prefix + ".png")
     return written
 
 
-def plot(path, xs, rel, window_db, offsets, c, edges, depth):
+def plot(path, xs, rel, window_db, offsets, c, steps, edges, depth):
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -413,8 +450,8 @@ def plot(path, xs, rel, window_db, offsets, c, edges, depth):
     except ImportError:
         return False
     ink, muted, grid, ground = "#0b0b0b", "#52514e", "#e6e5e0", "#fcfcfb"
-    fig, (a1, a2) = plt.subplots(2, 1, figsize=(10, 7.5), dpi=120,
-                                 gridspec_kw={"height_ratios": [3, 2]})
+    fig, (a1, a2, a3) = plt.subplots(3, 1, figsize=(10, 9.5), dpi=120,
+                                     gridspec_kw={"height_ratios": [3, 2, 1.4]})
     fig.patch.set_facecolor(ground)
     a1.plot(xs / 1e3, rel, color="#2a78d6", lw=2, label="fitted from every offset")
     pts = [(s, v) for s, v in window_db if v is not None]
@@ -437,7 +474,13 @@ def plot(path, xs, rel, window_db, offsets, c, edges, depth):
     a2.set_ylabel("dB relative to the dial", color=muted)
     a2.set_title("After the filter: codec, digital filters and steady signals",
                  loc="left", color=ink)
-    for a in (a1, a2):
+    a3.plot([st / 1e3 for st, _ in steps], [v for _, v in steps], color="#eda100",
+            lw=1.5, marker="o", ms=2.5)
+    a3.set_xlabel("setting (kHz), in the order measured", color=muted)
+    a3.set_ylabel("dB", color=muted)
+    a3.set_title("Level changes during the sweep, taken out of the result",
+                 loc="left", color=ink)
+    for a in (a1, a2, a3):
         a.set_facecolor(ground)
         a.grid(color=grid, lw=0.8)
         a.tick_params(colors=muted)
