@@ -153,20 +153,29 @@ double sound_get_alc_db(void) {
   return cw_tx_pipeline ? (double)tx_pipeline_alc_db(cw_tx_pipeline) : 0.0;
 }
 
-// Re-derives the CW bin rotation from this board's IF values and whatever
-// tone cw.c is currently generating. Called once at startup and again after
-// every pitch change, so the shift and the tone always cancel to a carrier
-// on the dial.
+// Re-derives the CW and SSB bin rotations from this board's IF values and
+// whatever tone cw.c is currently generating. Called once at startup and
+// again after every pitch change or xtal_filter_center change, so the
+// shift and the tone always cancel to a carrier on the dial.
 //
 // Reads cw_get_pitch() rather than taking the pitch as an argument: that
 // keeps one source of truth for what is actually being generated, so this
 // can't be called with a pitch cw.c doesn't have. Returns -1 if the board's
-// values don't give a usable IF, leaving the previous placement alone.
+// values don't give a usable IF, leaving the previous placement alone and
+// sound_tx_if_placed() at 0 until a later call succeeds.
+static atomic_int tx_if_placed = 1;
+
 int sound_update_cw_if_placement(void) {
   if (!cw_tx_pipeline)
     return 0; // nothing built yet; sound_thread_start() will do it
-  return tx_pipeline_set_if_placement(cw_tx_pipeline, bfo_freq, xtal_filter_center,
-                                      cw_get_pitch());
+  int r = tx_pipeline_set_if_placement(cw_tx_pipeline, bfo_freq, xtal_filter_center,
+                                       cw_get_pitch());
+  atomic_store(&tx_if_placed, r == 0);
+  return r;
+}
+
+int sound_tx_if_placed(void) {
+  return atomic_load(&tx_if_placed);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1181,7 +1190,7 @@ int sound_thread_start(const char *device_name) {
   if (sound_update_cw_if_placement() < 0) {
     fprintf(stderr,
             "sound: bfo_freq (%d) and xtal_filter_center (%d) don't give a "
-            "usable TX IF - keeping the compiled-in placement\n",
+            "usable TX IF - transmit is refused\n",
             bfo_freq, xtal_filter_center);
   } else {
     printf("sound: TX IF placed from bfo_freq - xtal_filter_center = %d Hz, "
