@@ -36,8 +36,9 @@ void radio_tune_to(uint32_t f);
 // real-time audio thread.
 //
 // Returns 0 when the state was accepted and -1 when a request to
-// transmit was refused, either because this board may not transmit
-// (radio_hw_tx_permitted()) or because the dial is outside every
+// transmit was refused: this board may not transmit
+// (radio_hw_tx_permitted()), bfo_freq and xtal_filter_center give no
+// usable TX IF (sound_tx_if_placed()), or the dial is outside every
 // calibrated [tx_band] range (hw_settings_tx_allowed()). Doing the check
 // here covers every PTT source at once - the key, rigctld's T, Kenwood TX,
 // HPSDR MOX and TCI. Refusal leaves the radio in receive.
@@ -46,12 +47,14 @@ void radio_tune_to(uint32_t f);
 int radio_set_tx(int tx_on);
 
 // 1 if radio_set_tx(1) would be accepted with the dial at freq_hz: the
-// same two checks, for an interface that reports whether TX is possible.
+// same three checks, for an interface that reports whether TX is possible.
 int radio_tx_allowed(int freq_hz);
 
 enum radio_tx_refusal {
   RADIO_TX_NOT_REFUSED = 0,
   RADIO_TX_REFUSED_BOARD, // this board may not transmit
+  RADIO_TX_REFUSED_IF,    // bfo_freq and xtal_filter_center give no
+                          // usable TX IF (sound_tx_if_placed())
   RADIO_TX_REFUSED_BAND,  // outside every calibrated [tx_band]
 };
 
@@ -157,6 +160,34 @@ int radio_set_cw_pitch(int hz);
 // The current CW pitch in Hz - one value for the sidetone, the RX BFO and
 // the narrow filter, since radio_set_cw_pitch() keeps them equal.
 int radio_get_cw_pitch(void);
+
+// Bounds radio_set_xtal_filter_center() accepts: a guard against a typo
+// (a dropped digit would retune both clocks megahertz away), not the
+// filter's limits. Both boards' 40MHz filters sit well inside.
+#define RADIO_XTAL_CENTER_MIN_HZ 39900000
+#define RADIO_XTAL_CENTER_MAX_HZ 40100000
+
+// Moves xtal_filter_center at run time, for measuring the crystal filter
+// (tools/xtal_sweep.py) - the ini's value is what a restart uses. Reached
+// via rigctld's L XTALCENTER (docs/06_api.md).
+//
+// In receive, retunes both clocks that depend on it: clk1 to the new
+// center + RX_IF_FREQ_HZ and clk2 to the dial (+ RIT) + the new center, so
+// the dial stays at IF RX_IF_FREQ_HZ. Then re-derives the TX IF placement
+// (sound_update_cw_if_placement()), because the TX shifts are
+// bfo_freq - xtal_filter_center. A center that leaves no usable TX IF is
+// still accepted - a sweep has to cross such values - and transmit is
+// refused until a usable one is set again (RADIO_TX_REFUSED_IF).
+//
+// Returns 0, or -1 with nothing changed while transmitting (the TX clocks
+// and shift would disagree for the rest of the transmission) or outside
+// RADIO_XTAL_CENTER_MIN_HZ..MAX_HZ.
+int radio_set_xtal_filter_center(int hz);
+
+// The xtal_filter_center in force, Hz - the ini's value until
+// radio_set_xtal_filter_center() moves it. What rigctld's l XTALCENTER
+// reports.
+int radio_get_xtal_filter_center(void);
 
 // Parses and applies one command string from a control surface (currently
 // just "freq NNN" from hpsdr_p1.c).
