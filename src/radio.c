@@ -21,7 +21,8 @@ int in_tx = 0;
 // Measured center of this board's crystal filter (~40.0124MHz) - a
 // property of the hardware, not a clock setting. RX places its mixing
 // product here. Why it's separate from bfo_freq:
-// antialias_filter_design.md §3. Overridable in hw_settings.ini.
+// antialias_filter_design.md §3. Overridable in hw_settings.ini, and at
+// run time by radio_set_xtal_filter_center() below.
 int xtal_filter_center = 40012400;
 
 // clk1 while transmitting - deliberately not xtal_filter_center.
@@ -151,9 +152,11 @@ int radio_set_cw_pitch(int hz) {
   if (sound_update_cw_if_placement() < 0) {
     // The pitch still applies - this only means the board's bfo_freq and
     // xtal_filter_center give no usable IF, a calibration problem that
-    // predates the pitch change.
+    // predates the pitch change. radio_tx_allowed() refuses transmit until
+    // a placement succeeds.
     fprintf(stderr, "radio: CW pitch is %d Hz but the TX IF placement was "
-                    "refused - check bfo_freq/xtal_filter_center\n", pitch);
+                    "refused - check bfo_freq/xtal_filter_center; transmit "
+                    "is refused until it is usable\n", pitch);
   }
   printf("radio: CW pitch %d Hz - sidetone, RX BFO, narrow filter and TX IF "
          "shift all moved together\n", pitch);
@@ -168,6 +171,39 @@ int radio_get_cw_pitch(void) {
 
 enum radio_mode radio_get_mode(void) {
   return current_mode;
+}
+
+int radio_set_xtal_filter_center(int hz) {
+  // Refused mid-transmission for the same reason as a pitch change: the TX
+  // clk2 and the TX IF shift are both derived from this value, and a
+  // transmission straddling the change would carry one old and one new.
+  if (in_tx) {
+    printf("radio: xtal_filter_center change to %d Hz refused while "
+           "transmitting - still %d Hz\n", hz, xtal_filter_center);
+    return -1;
+  }
+  if (hz < RADIO_XTAL_CENTER_MIN_HZ || hz > RADIO_XTAL_CENTER_MAX_HZ) {
+    printf("radio: xtal_filter_center %d Hz refused - outside %d..%d Hz\n",
+           hz, RADIO_XTAL_CENTER_MIN_HZ, RADIO_XTAL_CENTER_MAX_HZ);
+    return -1;
+  }
+
+  xtal_filter_center = hz;
+  // clk1 first, then clk2: between the two writes the dial sits off the
+  // new IF by the size of the step, for the length of one I2C write.
+  si5351bx_setfreq(1, xtal_filter_center + RX_IF_FREQ_HZ);
+  si5351bx_setfreq(2, freq_hdr + rit_applied_hz() + xtal_filter_center);
+
+  // No log line on success: a sweep makes dozens of these, and
+  // hamlib.c logs each request already.
+  if (sound_update_cw_if_placement() < 0)
+    printf("radio: xtal_filter_center %d Hz with bfo_freq %d Hz gives no usable "
+           "TX IF - transmit is refused until it does\n", hz, bfo_freq);
+  return 0;
+}
+
+int radio_get_xtal_filter_center(void) {
+  return xtal_filter_center;
 }
 
 // TX transitions run on this dedicated worker thread rather than
@@ -296,7 +332,18 @@ enum radio_tx_refusal radio_tx_refused(int *freq_hz) {
 }
 
 int radio_tx_allowed(int freq_hz) {
-  return radio_hw_tx_permitted() && hw_settings_tx_allowed(freq_hz);
+  return radio_hw_tx_permitted() && sound_tx_if_placed() && hw_settings_tx_allowed(freq_hz);
+}
+
+// Which of radio_tx_allowed()'s checks refuses, in the same order.
+static enum radio_tx_refusal tx_refusal_reason(int freq_hz) {
+  if (!radio_hw_tx_permitted())
+    return RADIO_TX_REFUSED_BOARD;
+  if (!sound_tx_if_placed())
+    return RADIO_TX_REFUSED_IF;
+  if (!hw_settings_tx_allowed(freq_hz))
+    return RADIO_TX_REFUSED_BAND;
+  return RADIO_TX_NOT_REFUSED;
 }
 
 // switch between RX and TX
@@ -304,8 +351,7 @@ int radio_set_tx(int tx_on) {
   // Only transmitting is gated; returning to receive always proceeds.
   if (tx_on && !radio_tx_allowed(freq_hdr)) {
     tx_refused_hz = freq_hdr;
-    atomic_store(&tx_refused_why, radio_hw_tx_permitted() ? RADIO_TX_REFUSED_BAND
-                                                          : RADIO_TX_REFUSED_BOARD);
+    atomic_store(&tx_refused_why, tx_refusal_reason(freq_hdr));
     return -1;
   }
 
