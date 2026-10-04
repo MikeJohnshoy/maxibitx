@@ -645,15 +645,20 @@ offset *d* from the dial measures the filter too: at setting *S* it sees
 crystal frequency *S − d*, at the IF 24 kHz + *d*, which doesn't change
 with *S*. In dB,
 
-    level(S, d) = X(S − d) + C(d)
+    level(S, d) = X(S − d) + C(d) + G(S)
 
 where X is the crystal filter, with the noise added after it (the same at
-every crystal frequency, so it belongs to X), and C is everything that
+every crystal frequency, so it belongs to X), C is everything that
 depends on the offset alone: the codec and its digital filter, the
-anti-alias filter, and any steady signal on the band. The tool reduces
+anti-alias filter, and any steady signal on the band, and G is what the
+band did while step S was measured. Fading and band noise rising and
+falling move every offset of a step together; measured at the dial
+alone, they are drawn into the filter as ripple (the 14:20 sweep below).
+A straight-line trend in G can't be told from a tilt of X against C, so
+G is held to zero mean and no slope. The tool reduces
 each step's spectrum to one level per offset, at the step's spacing out
 to ±22 kHz (the median FFT bin within each cell, so a narrow signal
-doesn't set it), and separates X and C by alternating medians, with C
+doesn't set it), and separates X, C and G by alternating medians, with C
 pinned to 0 at the dial. With 1 kHz steps, each crystal frequency is
 seen at up to 45 offsets. Signals that come and go are outliers to the
 medians, and a steady one stays at one offset and ends up in C. X covers
@@ -683,7 +688,10 @@ to within 0.3 dB out to ±18 kHz, with the carrier in C rather than in the
 filter. On synthetic data with the noise in front only 7 dB above the
 noise after (about what the antenna run below had), the centre still came
 out within 200 Hz; the edges come out a little wide when the measurement
-is that shallow.
+is that shallow. With the band's level swinging ±4 dB over ten steps
+during the sweep, fitting X and C alone drew up to 1.5 dB of false ripple
+into the passband; with G in the fit, the passband is within 0.4 dB of
+the truth and the −6 dB edges within about 100 Hz.
 
 **First measurements (2026-10-04, simple method).** Three sweeps of the
 level at the dial, 40,000 to 40,045 kHz, show the same wide filter: a plateau from below
@@ -705,6 +713,19 @@ filter is a roughly 35 kHz roofing filter centred where the sBitx's
 default puts the dial, not an SSB-width filter, and with
 `xtal_filter_center` at 40,012,400 or 40,020,800 the dial is well inside
 it. The weak reception at first contact is not the crystal filter.
+
+A fifth sweep at 14:20, on an antenna with much more noise in front of
+the filter, was about 39 dB deep: the floor beyond 40,035.5 kHz sat 39 dB
+below the peak. Its upper skirt is clear: −10 dB at about 40,027.4 kHz,
+−20 dB at 40,032.5 kHz, −30 dB at 40,033.6 kHz, and the floor by
+40,035.5 kHz. It started at 40,000 kHz, inside the passband, so it has no
+lower edge. Its passband, though, swings by about 9 dB in smooth waves a
+few kHz long (peaks near 40,006 and 40,017 kHz, a dip near 40,023 kHz),
+much more than Evan's measurement allows (the −4 dB point is at
+40,029.8 kHz). Steps were about 1.5 s apart, so a wave a few kHz long is
+the band's level changing over 10 to 20 seconds, which is what G is for.
+The skirt and the floor are trustworthy; the passband shape needs the
+whole-spectrum fit.
 
 **Using it.**
 
