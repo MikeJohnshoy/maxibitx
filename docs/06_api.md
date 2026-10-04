@@ -87,7 +87,7 @@ through any of them is seen by all the others; the last write wins.
 | State | Values | Notes |
 |---|---|---|
 | Frequency | Hz, integer | The dial. Changing it clears RIT. |
-| Mode | CW, CWR, USB, LSB, DIGITAL | Selects both the onboard demodulator and the TX audio source (below). Starts in CW. CWR is CW-reverse: the other side of the BFO on receive, identical to CW on transmit. |
+| Mode | CW, CWR, USB, LSB, DIGITAL | Selects both the onboard demodulator and the TX audio source (below). Starts in DIGITAL. CWR is CW-reverse: the other side of the BFO on receive, identical to CW on transmit. |
 | PTT | RX / TX | |
 | RIT | −9999 to +9999 Hz, plus an on/off flag | Receive only; never moves the transmit frequency. Survives TX; cleared by a frequency change. |
 | Volume | 0-100 % | The radio's own speaker (log taper). Doesn't affect USB audio. |
