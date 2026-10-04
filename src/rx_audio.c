@@ -441,8 +441,9 @@ static int narrow_filter_min_phase = 1;
 // isn't inverted. Derivation: rx_uac_out_digital_mode_bandwidth.md §10.
 #define RX_IQ_SPECTRUM_INVERTED 1
 
-// Current demodulator, set via rx_audio_set_demod() from radio_set_mode().
-// CW matches radio.c's startup mode.
+// Current demodulator, set via rx_audio_set_demod() from radio_set_mode(),
+// which maxibitx.c calls at startup with radio.h's RADIO_STARTUP_MODE. CW
+// until then, which is what the bench harnesses expect.
 static enum rx_demod demod = RX_DEMOD_CW;
 
 // Stage 3's FFT implementation (rx_filter.c). One persistent instance,
