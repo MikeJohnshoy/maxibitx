@@ -153,7 +153,7 @@ connected.
 | `m` | `PKTUSB` then `2400` | Mode, then passband (two lines). DIGITAL reads as `PKTUSB`. |
 | `M <mode> <passband>` | `RPRT 0` | Mode: `CW`, `CWR`, `USB`, `LSB`, `PKTUSB` or `DIGITAL`. Passband is stored and echoed by `m` but not applied. Unknown mode: `RPRT -1`. |
 | `t` | `0` or `1` | PTT |
-| `T <0\|1>` | `RPRT 0` | Any nonzero value means TX. Also `RPRT 0` when ignored because the local key holds TX. `RPRT -1` when the dial is outside every `[tx_band]` range - those ranges are enforced, not just advertised - or on a board that may not transmit. |
+| `T <0\|1>` | `RPRT 0` | Any nonzero value means TX. Also `RPRT 0` when ignored because the local key holds TX. `RPRT -1` when the dial is outside every `[tx_band]` range - those ranges are enforced, not just advertised - on a board that may not transmit, or while `bfo_freq` and `xtal_filter_center` give no usable TX IF (see `XTALCENTER`). |
 | `j` | `-150` | RIT offset, Hz. The stored value: CAT `RT0;` can switch RIT off without zeroing it. |
 | `J <Hz>` | `RPRT 0` | −9999 to 9999; `J 0` turns RIT off. Out of range: `RPRT -1`. |
 | `l AF` | `0.670000` | Volume, 0.0-1.0 |
@@ -168,6 +168,7 @@ connected.
 | `u FFTFILT` / `U FFTFILT <0\|1>` | `1` / `RPRT 0` | Which CW filter: 1 the FFT filter (the default, always minimum phase), 0 an elliptic IIR from the pre-designed bank. `CWPITCH`/`CWWIDTH` apply to either (extension) |
 | `l CWPITCH` / `L CWPITCH <hz>` | `700` / `RPRT 0` | CW pitch: 500 to 1000 Hz in 100 Hz steps. Moves four things together — the RX BFO (the tone you hear), stage 3's filter center, the TX sidetone, and the CW IF shift that keeps the carrier on the dial. The transmitted frequency does not change. Refused while transmitting (`RPRT 0`, pitch unchanged — read it back). A real Hamlib level, advertised in `dump_state` |
 | `l CWWIDTH` / `L CWWIDTH <hz>` | `300` / `RPRT 0` | Stage 3's width: 150, 300, 450 or 600 Hz (extension). Both settings snap to the nearest value `src/narrow_filter_bank.h` carries; the log line reports which one was selected, and a client should display the `l` readback rather than what it asked for |
+| `l XTALCENTER` / `L XTALCENTER <hz>` | `40012400` / `RPRT 0` | `xtal_filter_center`, the crystal frequency the dial is mixed onto (extension). The set form moves both receive clocks so the dial stays at the 24 kHz IF, and re-derives the TX IF shifts. It lasts until maxibitx restarts and is never written to `hw_settings.ini`. `RPRT -1`, unchanged, while transmitting or outside 39,900,000-40,100,000 Hz. A value whose TX IF placement is impossible (`bfo_freq − xtal_filter_center` not between the CW pitch and 48 kHz) is accepted, and `T 1` is refused until a usable one is set. For measuring the filter: `tools/xtal_sweep.py` |
 | `u KEYER` / `U KEYER <0-4>` | `0` / `RPRT 0` | CW keyer mode: 0 straight key, 1 bug, 2 ultimatic, 3 iambic A, 4 iambic B. Takes effect once the keyer is idle. A mode a `make KEYER=keyer_straight` build doesn't offer: `RPRT -1` (extension) |
 | `l KEYSPD` / `L KEYSPD <1-60>` | `20` / `RPRT 0` | Keyer speed, WPM; clamped to 1-60. Takes effect at the next element. A real Hamlib level, advertised in `dump_state` |
 | `b <text>` / `\send_morse <text>` | `RPRT 0` | Sends the text as CW at `KEYSPD`, in CW or CWR (`RPRT -1` in any other mode). Letters in either case, digits, `. , ? ' ! / ( ) : ; - _ " @ $ + = &`, and prosigns as `<AR>` `<AS>` `<BK>` `<BT>` `<HH>` `<KN>` `<SK>` `<SN>`; anything else is skipped and named on the console. `3T` between characters, `7T` between words (a run of spaces is one). Queued behind text still going out; `RPRT -1` if the 512-character queue can't take all of it. TX is requested at once. Touching the key or paddle stops it after the element being sent |
@@ -181,7 +182,7 @@ connected.
 | `q`, `Q`, `quit` | (connection closes) | |
 
 Anything else replies `RPRT -1`. The extensions (`MICGAIN`, `ALC`,
-`NARROW`, `FFTFILT`, `CWWIDTH`, `TONE`, `PADREV`, `KEYER`, `MORSE`) aren't Hamlib names or aren't in Hamlib's
+`NARROW`, `FFTFILT`, `CWWIDTH`, `XTALCENTER`, `TONE`, `PADREV`, `KEYER`, `MORSE`) aren't Hamlib names or aren't in Hamlib's
 units, so a stock Hamlib client won't use them, but they follow the same
 syntax. `AF`, `CWPITCH`, `KEYSPD`, `RFPOWER` and `STRENGTH` are real Hamlib levels and are
 advertised in `dump_state`.
