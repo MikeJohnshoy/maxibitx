@@ -1,8 +1,9 @@
 # Porting maxibitx to the zBitx and Pi Zero 2W: a study
 
-Status: **step 1 built** (receive only, §7) on the `zmax` branch, not yet
-run on a zBitx; step 2 (transmit) not started. Written before any code;
-§9 records the decisions taken on it, and §10 step 1 as built.
+Status: **step 1 built** (receive only, §7) on the `zmax` branch and
+receiving on a zBitx; step 2 (transmit) not started. Written before any
+code; §9 records the decisions taken on it, §10 step 1 as built, and §11
+how to measure the crystal filter's centre.
 
 The request: run maxibitx's headless radio and its external interfaces
 on the zBitx hardware with a Raspberry Pi Zero 2W, in place of the
@@ -590,3 +591,81 @@ Processing now averages 40% of the 10.67 ms block and peaks at 56%,
 leaving about 4.7 ms in the worst block, against 1.9 ms before. With
 the transmit pipeline's predicted 0.6 ms added, that still leaves about
 4 ms. The CPU is no longer a reason to hold back the transmit step.
+
+## 11. Measuring the crystal filter
+
+**Why.** On the zBitx, received signals were well down on every band
+with the sBitx's `xtal_filter_center` of 40,012,400 Hz. The zBitx's own
+code receives with clk1 at its `bfo_freq` (40,048,000 Hz by default) and
+clk2 at the dial + `bfo_freq` − 28,125 Hz, which puts the dial at about
+40,019,875 Hz in its filter. That suggests the zBitx's filter sits
+several kHz higher than the sBitx's, but it is an inference from code,
+not a measurement.
+
+**Why the spectrum display can't settle it.** In sdrOxide, with
+40,012,400 and then 40,020,800, the noise from +17 to +30 kHz rose 4 to
+5 dB and the region below the dial fell about 2 dB: the passband moved
+as predicted. A roll-off starting around +5 to +9 kHz did not move. It is
+fixed in the IF domain, after the crystal filter (most likely the
+codec's digital filter), so a wide display shows the crystal filter and
+what follows it multiplied together.
+
+**The method.** Hold the dial still and step `xtal_filter_center`.
+clk2 = dial + setting puts the dial's signal at crystal frequency
+*setting*, and clk1 = setting + 24 kHz always brings that to the same
+24 kHz IF. Everything after the crystal filter sees the same frequency
+at every step, so the level at the dial against the setting is the
+crystal filter's response, with the setting as the crystal frequency.
+The setting that puts the dial in the middle of the filter is the value
+for `hw_settings.ini`.
+
+**What was built.**
+
+- `radio_set_xtal_filter_center()` in `radio.c` moves the value at run
+  time: clk1 and clk2 (with RIT) in receive, then the TX IF shifts
+  through `sound_update_cw_if_placement()`, because both are
+  `bfo_freq − xtal_filter_center`. Refused while transmitting, and
+  outside 39.9 to 40.1 MHz (a guard against a dropped digit). Not saved:
+  a restart goes back to the ini's value.
+- rigctld's `l XTALCENTER` and `L XTALCENTER <hz>` reach it
+  ([`../06_api.md`](../06_api.md)).
+- A sweep has to cross settings where the TX shift is impossible
+  (`bfo_freq − xtal_filter_center` not between the CW pitch and 48 kHz;
+  above about 40,034,300 Hz on the sBitx's values). Those are accepted,
+  and transmit is refused while one is in force (`sound_tx_if_placed()`,
+  checked by `radio_tx_allowed()`, logged as an IF refusal). The same
+  check covers an impossible pair in `hw_settings.ini` at start-up, which
+  used to keep the compiled-in shift and transmit off frequency.
+- [`tools/xtal_sweep.py`](../../tools/README.md) runs the sweep from a
+  laptop: by default 40,000,000 to 40,045,000 Hz in 500 Hz steps, 0.5 s
+  of I/Q discarded after each step and 1 s measured, the power in a
+  300 Hz window at the dial from the I/Q stream. It prints the table, the
+  peak, the edges and centres at −3, −6 and −20 dB, and the −6 dB centre
+  rounded to 100 Hz as the value to use. It writes a CSV, and restores the
+  original setting at the end or on Ctrl-C. The settle and dwell are
+  counted in I/Q samples, after emptying the socket, so a laptop that
+  falls behind the stream can't measure the previous step.
+
+**Bench check.** Against a simulated radio (a 4-pole filter, −3 dB
+width 2,700 Hz, centred at 40,020,300 Hz, its noise sent inverted as
+maxibitx sends it, with packets dropped): the tool reported a −6 dB centre
+of 40,020,322 Hz and suggested 40,020,300. On noise the measured widths
+come out wider than the filter by about the window's width, because the
+window adds its own; the centre is unaffected. A steady carrier inside
+the window is measured without that broadening.
+
+**Using it.**
+
+1. Pick something to measure. A steady carrier at the dial is best: a
+   signal generator, or a broadcast or WWV carrier. Band noise on an
+   antenna works if it is well above the receiver's own noise. A dummy
+   load only gives the receiver's own noise, much of which is added after
+   the filter, so the curve comes out flattened.
+2. `python3 tools/xtal_sweep.py --host zbitx.local` (add
+   `--dial 15000000` to tune to the carrier and back afterwards).
+3. Put the reported `xtal_filter_center` in `hw_settings.ini` (above the
+   `[tcxo]` line) and restart maxibitx.
+4. On a board that transmits, the carrier stays on the dial whatever the
+   setting, because the TX shift follows it. `bfo_freq`, which places the
+   unwanted mixer product beyond the filter's edge, is calibrated
+   separately.
