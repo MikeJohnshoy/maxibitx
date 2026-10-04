@@ -101,7 +101,10 @@ At each step, the offset *d* from the dial sees the crystal filter at
 codec, its digital filter and the anti-alias filter, which see the same
 IF at every step). The tool separates the two with a robust fit, so each
 crystal frequency is measured at up to 45 offsets rather than one. The
-result is smoother, signals that come and go are ignored, and it covers
+fit also takes out the band's level rising and falling during the sweep
+(fading), which moves every offset of a step together and would
+otherwise be drawn into the filter as ripple. The result is smoother,
+signals that come and go are ignored, and it covers
 the swept range plus about 11 kHz on each side, so the filter's edges are
 measured even when they are outside the sweep.
 [`../docs/dsp_design_notes/zbitx_port_study.md`](../docs/dsp_design_notes/zbitx_port_study.md)
@@ -124,7 +127,8 @@ also on Ctrl-C, and never writes the ini.
 
 Files, named from `--out` (default `xtal_sweep_<time>`): `.csv` (the
 filter, with a 1 kHz window at the dial measured the simple way beside
-it), `_if.csv` (the response after the filter), `_raw.csv` (every step's
+it), `_if.csv` (the response after the filter), `_steps.csv` (the
+band's level changes it took out, step by step), `_raw.csv` (every step's
 spectrum; `--refit` reads it again without the radio), and `.png` if
 matplotlib is installed.
 
