@@ -88,3 +88,41 @@ mode: `-c "cw_macros:0,cq test |ar|;"` or `-c "cw_msg:0,tu,kb2ml,5nn;"`
 (these key the transmitter too). `./test-tci --serve` on any
 computer runs a stubbed server to try it against without a radio. See
 [`../docs/06_api.md`](../docs/06_api.md), "TCI".
+
+## `xtal_sweep.py`
+
+Measures a radio's crystal filter, to find the right
+`xtal_filter_center` for `data/hw_settings.ini`. It holds the dial still,
+steps `xtal_filter_center` over rigctld (`L XTALCENTER`, TCP 4532), and
+at each step averages the level at the dial from the I/Q stream (UDP
+4536). Because the second mixer always brings the dial back to the same
+24 kHz IF, the codec and DSP see the same frequency at every step, and
+the level against the setting is the crystal filter's response alone.
+[`../docs/dsp_design_notes/zbitx_port_study.md`](../docs/dsp_design_notes/zbitx_port_study.md)
+§11 explains the method.
+
+```
+python3 tools/xtal_sweep.py --host zbitx.local
+python3 tools/xtal_sweep.py --host sbitx.local --dial 15000000 --csv sbitx.csv
+```
+
+By default it sweeps 40,000,000 to 40,045,000 Hz in 500 Hz steps (about
+two and a half minutes). It prints the level at each step, then a table
+with bars, the peak, the edges and centres at −3, −6 and −20 dB, and the
+−6 dB centre rounded to 100 Hz as the value to put in the ini. It writes
+a CSV and restores the original setting at the end, also on Ctrl-C. It
+never writes the ini.
+
+Measure on a steady carrier at the dial if you can (a signal generator,
+or a broadcast or WWV carrier), or on band noise well above the
+receiver's own. A dummy load gives a flattened curve. The measurement
+window (`--bw`, 300 Hz) widens the measured widths on noise by about its
+own width; the centre is unaffected. `--help` lists the other options:
+the range and step, the settle and dwell times, the window's offset, and
+`--dial` to tune for the sweep and back afterwards.
+
+**Requirements:** Python 3 and `numpy`. Needs a maxibitx with rigctld's
+`XTALCENTER` level ([`../docs/06_api.md`](../docs/06_api.md)); with an
+older build it says so and stops. While a setting leaves no usable
+transmit IF, maxibitx refuses to transmit; the sweep won't start while
+the radio is transmitting.
