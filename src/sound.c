@@ -58,7 +58,7 @@ static int rx_mute_by_switch = 1;
 // 21, ~-3.0dB. Bench-derived, not a final calibration - see
 // docs/dsp_design_notes/rx_gain_and_level_calibration.md. rx_clip_check()
 // warns if it turns out too hot.
-#define RX_CAPTURE_GAIN_PERCENT 80   // was 70
+#define RX_CAPTURE_GAIN_PERCENT 100
 
 // WM8731 'Mic' gain for the R (mic) capture channel. A starting midpoint,
 // not calibrated - and possibly inert on this board: 'Input Mux' is fixed
