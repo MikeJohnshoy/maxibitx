@@ -119,7 +119,14 @@ enum radio_mode {
 // which is what makes one call enough.
 void radio_set_mode(enum radio_mode m);
 
-// The current mode; RADIO_MODE_CW until something sets it.
+// The mode maxibitx starts in, applied by maxibitx.c with radio_set_mode()
+// once rx_audio.c is up. DIGITAL, since most clients are remote SDR and
+// digital-mode programs: USB demodulation, the narrow CW filter held out,
+// and PTT from the computer only (the key jack is ignored until a client
+// selects CW).
+#define RADIO_STARTUP_MODE RADIO_MODE_DIGITAL
+
+// The current mode.
 enum radio_mode radio_get_mode(void);
 
 // Moves the CW pitch, everywhere it has to move, and returns the pitch
