@@ -166,9 +166,10 @@ network.
 4. Start the si5351 on the board's I2C bus, with clk1 at its receive
    frequency, and configure the INA260 power monitor if one answers.
 5. Build the software oscillator's table and tune to the startup
-   frequency (7.030 MHz, CW).
+   frequency (7.030 MHz).
 6. Initialise the CW tone generator and start the key input thread.
-7. Initialise the receive demodulator.
+7. Initialise the receive demodulator, and select the startup mode,
+   DIGITAL, since most clients are remote SDR and digital-mode programs.
 8. Start rigctld, TCI, HPSDR, iq_stream, the USB gadget and its CAT
    port.
 9. Configure the codec's mixer and start the audio thread.
