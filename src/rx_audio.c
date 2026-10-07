@@ -381,6 +381,7 @@ static double volume_percent_to_gain(int percent) {
 // exactly what was set. rx_volume is derived from it, including in
 // rx_audio_init(), since pow() can't appear in a static initializer.
 static int rx_volume_percent = RX_VOLUME_DEFAULT_PERCENT;
+static int rx_muted = 0;
 static double rx_volume = 0.03;
 
 // What the operator asked for: 1 = stage 3 applied (default), 0 = bypassed.
@@ -518,11 +519,20 @@ void rx_audio_set_volume(int percent) {
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
     rx_volume_percent = percent;
-    rx_volume = volume_percent_to_gain(percent);
+    rx_volume = rx_muted ? 0.0 : volume_percent_to_gain(percent);
 }
 
 int rx_audio_get_volume(void) {
     return rx_volume_percent;
+}
+
+void rx_audio_set_mute(int on) {
+    rx_muted = (on != 0);
+    rx_volume = rx_muted ? 0.0 : volume_percent_to_gain(rx_volume_percent);
+}
+
+int rx_audio_get_mute(void) {
+    return rx_muted;
 }
 
 void rx_audio_set_narrow_filter(int enable) {
