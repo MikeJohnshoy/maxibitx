@@ -1,4 +1,3 @@
-[05_process_and_threading_model.md](https://github.com/user-attachments/files/33181114/05_process_and_threading_model.md)
 # 05 — process and threading model
 
 Status: current. Covers the startup sequence, the threads once running,
