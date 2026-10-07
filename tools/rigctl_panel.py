@@ -158,7 +158,7 @@ SPECTRUM_DB_FLOOR = -100.0     # dBFS-style: 0 dB is one full-scale tone
 # and -37.5 puts the strongest signal measured on an sBitx (-50 dBFS) at
 # 80% of the height. A stronger signal flat-tops, and the trace says
 # "clipping" when it does.
-SPECTRUM_DB_CEILING = -37.5
+SPECTRUM_DB_CEILING = -30.0
 # Displayed half-spans. The FFT always covers the full +-48 kHz at
 # 46.875 Hz/bin; these crop it, so a narrow span spreads the same bins
 # wider rather than resolving finer.
