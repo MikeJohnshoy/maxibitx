@@ -113,7 +113,6 @@ ALC_METER_MAX_DB = 15.0
 # remembered frequency yet. The panel remembers the last frequency used
 # on each band in its config file.
 BANDS = (
-    ("160 m", 1800000, 2000000, 1810000),
     ("80 m", 3500000, 4000000, 3530000),
     ("60 m", 5330500, 5406500, 5354000),
     ("40 m", 7000000, 7300000, 7030000),
