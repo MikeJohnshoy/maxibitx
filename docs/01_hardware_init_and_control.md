@@ -1,3 +1,4 @@
+[01_hardware_init_and_control.md](https://github.com/user-attachments/files/33181010/01_hardware_init_and_control.md)
 # 01 — sbitx hardware: initialization and control
 
 This covers everything that has to be brought up before any signal ever
@@ -26,10 +27,12 @@ happens to those samples once they arrive.
 7. `cw_init()` / `key_input_start()` — the keyed tone, then the key jack
    and its input thread ([The key jack](#the-key-jack), below)
 8. `rx_audio_init()` — the onboard demodulator
-9. Networking and control surfaces — Hamlib/rigctld, TCI, HPSDR,
-   iq_stream, USB gadget, CAT (covered in
-   [`04_remote_control_and_iq_output.md`](04_remote_control_and_iq_output.md))
-10. `setup_audio_codec()` / `sound_thread_start()` — WM8731 codec and
+9. `knobs_start()` — the front-panel knobs and their thread, on a board
+   whose knobs the Pi reads ([The front-panel knobs](#the-front-panel-knobs), below)
+10. Networking and control surfaces — Hamlib/rigctld, TCI, HPSDR,
+    iq_stream, USB gadget, CAT (covered in
+    [`04_remote_control_and_iq_output.md`](04_remote_control_and_iq_output.md))
+11. `setup_audio_codec()` / `sound_thread_start()` — WM8731 codec and
     capture stream (below)
 
 Each step above prints one console line reporting its own result, in a
@@ -75,7 +78,9 @@ line `init: GPIO configured for the <board>: ...` says what was claimed.
 
 The key jack's two contacts are inputs, claimed separately by
 `key_input_start()` (`key_input.c`) in one request with pull-ups and edge
-events — see [The key jack](#the-key-jack) below.
+events — see [The key jack](#the-key-jack) below. The sBitx's two knobs
+are inputs too, claimed the same way by `encoder.c` — see
+[The front-panel knobs](#the-front-panel-knobs).
 
 Unlike the old wiringPi-based version, there's no separate "set the pin
 mode, then write it low" sequence — each `gpio_request_output()` call
@@ -120,6 +125,16 @@ leave behind rather than a live read of the radio's current state:
 | `LPF_D` | 11 | 7 | 26 | LPF band select (shares SPI0's CE1 pin, unused as SPI here) |
 | `KEY_RING_GPIO` | 7 | 4 | 7 | key jack ring: dash, straight key, mic PTT; pull-up, active low |
 | `KEY_TIP_GPIO` | 21 | 5 | 29 | key jack tip: dot, straight key; pull-up, active low |
+| `ENC1_A` | 13 | 9 | 21 | tuning knob, encoder A (shares SPI0's MISO pin, unused as SPI here) |
+| `ENC1_B` | 12 | 10 | 19 | tuning knob, encoder B (SPI0's MOSI) |
+| `ENC1_SW` | 14 | 11 | 23 | tuning knob's push switch (SPI0's SCLK) |
+| `ENC2_A` | 0 | 17 | 11 | volume knob, encoder A |
+| `ENC2_B` | 2 | 27 | 13 | volume knob, encoder B |
+| `ENC2_SW` | 3 | 22 | 15 | volume knob's push switch |
+
+The six `ENC` rows come from sbitx's own pin names and wiringPi numbers,
+converted with the same mapping as the rows above; they have not been
+read back with `gpioget` on a running sBitx yet.
 
 If this ever needs porting to different hardware (a different Pi model,
 a different board layout), re-derive this table the same way — from a
@@ -169,6 +184,40 @@ How the edges reach the transmitted signal:
 [`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md) and
 [`cw_keyer_design_study.md`](dsp_design_notes/cw_keyer_design_study.md) §16.
 
+## The front-panel knobs
+
+The sBitx has two knobs, each a rotary encoder with a push switch:
+tuning (sbitx's `ENC1`) and volume (`ENC2`, sbitx's multi-function
+knob). Their pins are part of the board profile (`radio_hw_knob()`), so
+the zBitx, whose knob and buttons belong to its RP2040 front panel rather
+than the Pi's GPIO, has none and the log says `init: no front-panel knobs
+on the zBitx's GPIO`.
+
+`encoder.c` claims all six lines in one request with pull-ups and edge
+events, and a thread of its own (ordinary scheduling) sleeps in
+`ppoll()` until a knob moves. Each encoder's A and B contacts step
+through a two-bit Gray code and rest at a click with both open; every
+edge counts +1 or -1 by the two states it joins, so contact bounce counts
+up and down and nets to nothing, and a click is reported when the knob
+reaches a rest state having counted at least half a click's edges one
+way. A knob with two edges a click (resting with both contacts closed as
+well as both open) is a board-profile setting, `edges_per_detent`; the
+sBitx's is set to 4, unconfirmed. A press is taken on its first closing
+edge and the switch is then ignored for 20 ms.
+
+What they do is `knobs.c`'s:
+
+| Knob | Turn | Push |
+|---|---|---|
+| Tuning | the dial moves by the tuning step a click; below 1 kHz, a fast turn multiplies it by 2, 5 or 10. Nothing while transmitting. | next step: 10 Hz, 100 Hz, 1 kHz, 10 kHz, then 10 Hz again |
+| Volume | 2% (1 dB) a click; unmutes | mutes or unmutes the speaker, keeping the volume |
+
+The tuning step is rigctld's `n` / `N`, so a client can show and set it;
+`tools/rigctl_panel.py` sets it to the digit tapped. The mute is rigctld's
+`u MUTE` / `U MUTE`. If a knob counts the wrong way, swap its `a_pin` and
+`b_pin` in `radio_hw.c`; if each click moves it two steps, or one every
+other click, its `edges_per_detent` is wrong. Tests: `make test-encoder`.
+
 ## Board selection
 
 maxibitx runs on two radio boards, and every difference between them
@@ -194,8 +243,8 @@ board that may not transmit.
 
 The rest of the code asks nothing about the board; it calls
 `radio_hw_tune()`, `radio_hw_tx_permitted()`, `radio_hw_relays_tx()`,
-`radio_hw_tx_settle_ms()` and `radio_hw_i2c_bus()`, which mean the same
-on every board. The zBitx profile is receive only: `radio_hw_tx_permitted()`
+`radio_hw_tx_settle_ms()`, `radio_hw_i2c_bus()` and `radio_hw_knob()`,
+which mean the same on every board. The zBitx profile is receive only: `radio_hw_tx_permitted()`
 is 0, so `radio_set_tx()` refuses every transmit request, and its relay
 half of the T/R sequence refuses to go to transmit as well. The design:
 [`zbitx_port_study.md`](dsp_design_notes/zbitx_port_study.md) §5 and §9.
