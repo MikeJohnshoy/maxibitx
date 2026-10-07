@@ -104,6 +104,9 @@ OLD_CONFIG_PATH = os.path.expanduser("~/.minibitx_panel.json")
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 4532
 POLL_INTERVAL_S = 1.0
+# The frequency alone is read this often, so a turn of the sBitx's tuning
+# knob shows at once.
+FREQ_POLL_INTERVAL_S = 0.25
 RECONNECT_INTERVAL_MS = 5000
 SOCKET_TIMEOUT_S = 2.0
 WIN_W, WIN_H = 800, 480
@@ -465,6 +468,7 @@ def setup_style(root):
     s.configure("Panel.TFrame", background=PANEL)
     s.configure("TLabel", background=GROUND, foreground=TEXT)
     s.configure("Muted.TLabel", foreground=MUTED, font=(ui, 10))
+    s.configure("MuteOn.TLabel", foreground=AMBER, font=(ui, 10, "bold"))
     s.configure("Status.TLabel", foreground=MUTED, font=(ui, 10))
     s.configure("PanelMuted.TLabel", background=PANEL, foreground=MUTED, font=(ui, 10))
     s.configure("Mono.TLabel", font=(mono, 13, "bold"))
@@ -514,19 +518,21 @@ class FreqDisplay(tk.Canvas):
     wheel over a digit, a vertical drag on it, or the Up and Down keys
     change the frequency by that digit's place; Left and Right move the
     step. Double-click opens a box to type a frequency. on_tune(hz) is
-    called with every new frequency; on_type() for the double-click.
+    called with every new frequency, on_step(hz) when the operator picks a
+    new step, on_type() for the double-click.
     """
 
     DIGIT_W = 20
     SEP_W = 10
     DRAG_STEP_PX = 14
 
-    def __init__(self, parent, mono, on_tune, on_type, **kw):
+    def __init__(self, parent, mono, on_tune, on_type, on_step=None, **kw):
         super().__init__(parent, width=200, height=44, bg=GROUND, highlightthickness=0,
                          takefocus=1, **kw)
         self.font = (mono, 24, "bold")
         self.on_tune = on_tune
         self.on_type = on_type
+        self.on_step = on_step
         self.hz = None
         self.step = 10
         self.slots = []     # (x0, x1, place) for each drawn digit
@@ -548,6 +554,18 @@ class FreqDisplay(tk.Canvas):
         if hz != self.hz:
             self.hz = hz
             self.draw()
+
+    def set_step(self, step):
+        """The radio's step, which its tuning knob can change too."""
+        if step != self.step and 1 <= step <= 10000000:
+            self.step = step
+            self.draw()
+
+    def _pick_step(self, step):
+        self.step = step
+        self.draw()
+        if self.on_step:
+            self.on_step(step)
 
     def draw(self):
         self.delete("all")
@@ -590,8 +608,7 @@ class FreqDisplay(tk.Canvas):
     def _move_step(self, factor):
         step = int(self.step * factor)
         if 1 <= step <= 10000000:
-            self.step = step
-            self.draw()
+            self._pick_step(step)
 
     def _press(self, event):
         self.focus_set()
@@ -612,8 +629,7 @@ class FreqDisplay(tk.Canvas):
         if not self.dragged:
             place = self._place_at(event.x)
             if place is not None:
-                self.step = place
-                self.draw()
+                self._pick_step(place)
         self.drag_y = None
 
     def _wheel(self, event):
@@ -820,6 +836,9 @@ class Panel(tk.Tk):
         self.freq_sending = False
         self.rit_hz = 0
         self.rit_hold_until = 0.0
+        self.step_hold_until = 0.0
+        self.mute_hold_until = 0.0
+        self.muted = False
         self.mode = None
         self.status_message = None
         self.status_until = 0.0
@@ -894,7 +913,8 @@ class Panel(tk.Tk):
         self.band_combo.bind("<<ComboboxSelected>>", self.on_band_selected)
         f = ttk.Frame(top)
         f.grid(row=0, column=1, sticky="w")
-        self.freq_display = FreqDisplay(f, self.mono, self.on_freq_tuned, self.on_freq_type)
+        self.freq_display = FreqDisplay(f, self.mono, self.on_freq_tuned, self.on_freq_type,
+                                        self.on_step_picked)
         self.freq_display.grid(row=0, column=0)
         ttk.Label(f, text="MHz", style="Muted.TLabel").grid(row=0, column=1, sticky="s", pady=(0, 6))
         modes = ttk.Frame(top)
@@ -910,7 +930,11 @@ class Panel(tk.Tk):
         self.rx_button.grid(row=0, column=3, padx=4)
         vol = ttk.Frame(top)
         vol.grid(row=0, column=4)
-        ttk.Label(vol, text="VOL", style="Muted.TLabel").grid(row=0, column=0, padx=(0, 4))
+        # Tap the caption to mute; it reads MUTE while muted.
+        self.vol_caption = ttk.Label(vol, text="VOL", style="Muted.TLabel", width=5, anchor="e",
+                                     cursor="hand2")
+        self.vol_caption.grid(row=0, column=0, padx=(0, 4))
+        self.vol_caption.bind("<Button-1>", lambda e: self.send_mute(not self.muted))
         self.vol_scale = ttk.Scale(vol, from_=0, to=100, variable=self.vol_var, length=50,
                                    command=lambda v: self.vol_label.configure(
                                        text=f"{round(float(v))}"))
@@ -1226,22 +1250,29 @@ class Panel(tk.Tk):
 
     POLL_COMMANDS = ("f", "j", "l AF", "l MICGAIN", "m", "u NARROW", "u FFTFILT", "l CWPITCH",
                      "l CWWIDTH", "l STRENGTH", "u TONE", "t", "l RFPOWER", "l ALC", "u KEYER",
-                     "l KEYSPD", "u PADREV", "u MORSE")
+                     "l KEYSPD", "u PADREV", "u MORSE", "n", "u MUTE")
 
     def poll_loop(self):
+        every = max(1, round(POLL_INTERVAL_S / FREQ_POLL_INTERVAL_S))
+        n = 0
         while not self.poll_stop.is_set():
             if not self.client.connected():
                 self.after(0, self.disconnect)
                 return
+            full = n % every == 0
             replies = {}
-            for cmd in self.POLL_COMMANDS:
+            for cmd in self.POLL_COMMANDS if full else ("f",):
                 r = self.client.query(cmd)
                 if r is None:
                     self.after(0, self.disconnect)
                     return
                 replies[cmd] = r
-            self.after(0, lambda r=replies: self.apply_poll(r))
-            time.sleep(POLL_INTERVAL_S)
+            if full:
+                self.after(0, lambda r=replies: self.apply_poll(r))
+            else:
+                self.after(0, lambda r=replies: self.apply_freq(r["f"]))
+            n += 1
+            time.sleep(FREQ_POLL_INTERVAL_S)
 
     def apply_poll(self, r):
         if not self.client.connected():
@@ -1275,6 +1306,10 @@ class Panel(tk.Tk):
                 self.apply_int(r["l KEYSPD"], lambda v: self.wpm_var.set(str(v)))
             self.apply_int(r["u PADREV"], lambda v: self.padrev_var.set(v != 0))
             self.apply_int(r["u MORSE"], self.apply_morse)
+            if time.monotonic() >= self.step_hold_until:
+                self.apply_int(r["n"], self.freq_display.set_step)
+            if time.monotonic() >= self.mute_hold_until:
+                self.apply_int(r["u MUTE"], lambda v: self.show_mute(v != 0))
         finally:
             self.syncing = False
 
@@ -1465,7 +1500,25 @@ class Panel(tk.Tk):
         self.query_async(f"J {hz}")
 
     def on_volume_released(self, _event=None):
+        if self.muted:
+            self.send_mute(False)   # as turning the radio's volume knob unmutes
         self.query_async(f"L AF {self.vol_var.get() / 100.0:.3f}")
+
+    def send_mute(self, on):
+        self.show_mute(on)
+        self.mute_hold_until = time.monotonic() + 1.5
+        self.query_async(f"U MUTE {1 if on else 0}")
+
+    def show_mute(self, on):
+        self.muted = on
+        self.vol_caption.configure(text="MUTE" if on else "VOL",
+                                   style="MuteOn.TLabel" if on else "Muted.TLabel")
+
+    def on_step_picked(self, step):
+        """A digit tapped: it becomes the radio's tuning step too, for its
+        tuning knob."""
+        self.step_hold_until = time.monotonic() + 1.5
+        self.query_async(f"N {step}")
 
     def on_micgain_released(self, _event=None):
         self.query_async(f"L MICGAIN {self.micgain_var.get():.3f}")
