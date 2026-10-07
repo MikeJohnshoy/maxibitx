@@ -1,3 +1,4 @@
+[00_intro.md](https://github.com/user-attachments/files/33181004/00_intro.md)
 # Introduction to maxibitx
 
 maxibitx is a headless, all-mode (CW, CWR, USB, LSB and DIGITAL) radio
@@ -322,11 +323,11 @@ external interfaces are in `src/interfaces/`.
   boards maxibitx runs on is here, as one profile per board, selected by
   `hw_settings.ini`'s `sbitx_version` line: claiming the GPIO outputs at
   boot, the band low-pass filter relays, the relay half of the T/R
-  sequence, whether the board may transmit, the si5351's I2C bus, and
-  the INA260 monitor.
+  sequence, whether the board may transmit, the si5351's I2C bus, the
+  front-panel knobs' pins, and the INA260 monitor.
 - **`gpio.c`**: a thin layer over the kernel's GPIO character-device
   interface (line requests and edge events), used for the outputs here
-  and for the key jack in `key_input.c`.
+  and for the key jack in `key_input.c` and the knobs in `encoder.c`.
 - **`i2c.c`**: a thin layer over the kernel's I2C driver, used by the
   si5351 and the INA260.
 - **`si5351v2.c`**: the si5351 clock generator: computes PLL and
@@ -376,6 +377,12 @@ external interfaces are in `src/interfaces/`.
   kernel-timestamped edges on a real-time thread, debounces them,
   detects a mono plug at startup, applies paddle reversal, and queues the edges
   for the audio thread.
+- **`encoder.c`**: the front-panel knobs on the sBitx, tuning and
+  volume. Reads their encoders and push switches as edge events on a
+  thread of its own, and reports whole clicks and presses.
+- **`knobs.c`**: what the knobs do: the tuning knob moves the dial by the
+  tuning step (rigctld `n`/`N`), faster when turned fast, and a push
+  changes the step; the volume knob sets the volume, and a push mutes.
 - **`keyer.c`**: the keyer: straight, bug, ultimatic, iambic A and B,
   1 to 60 WPM, and queued text sent with correct letter and word
   spacing. **`keyer_straight.c`** is a straight-key-only replacement,
@@ -1317,11 +1324,12 @@ targets. Each prints its cases and exits non-zero on a failure.
 | `make test-upsample48k` | `upsample48k.c`: passband gain and rejection of the image the zero-stuffing creates |
 | `make test-cw` | `cw.c`: the keying envelope and its weighting, with key edges arriving through `key_input.c` at their own timestamps, including late capture reads and a codec clock 300 ppm off |
 | `make test-key-input` | `key_input.c`: debounce, bounce trains and glitches, mono-plug detection, paddle reversal, and placing edges in blocks |
+| `make test-encoder` | `encoder.c` and `knobs.c`: clicks each way through contact bounce, presses and their debounce, the tuning step, speed-up and push, no tuning in TX, volume and mute |
 | `make test-keyer` | `keyer.c`: exact element timing in samples for golden cases, and random paddle input in every mode checked against a sample-by-sample specification model; text, spacing and speed changes |
 | `make test-keyer-straight` | the same tests against `keyer_straight.c`, which must refuse what it does not offer |
 | `make test-tci-ws` | `tci_ws.c` over loopback: the WebSocket handshake and its refusals, every frame length encoding, fragmentation, close, oversize and malformed frames, the client limit, and the send queue's drop policy |
 | `make test-tci` | the TCI server over loopback, with the radio stubbed: a JTDX-style start-up, state echoes, PTT rules, receive audio in every format and rate, I/Q at both rates, transmit audio paced by `TX_CHRONO`, and CW text read back from what the real keyer keys |
-| `make test-radio-hw` | `hw_settings.c`'s `sbitx_version` and `i2c_bus` keys and `radio_hw.c`'s board profiles, with GPIO and I2C stubbed: the pins each board claims and their levels, LPF selection, the order of the T/R relay sequence, and that the zBitx can neither be permitted to transmit nor raise TX_LINE |
+| `make test-radio-hw` | `hw_settings.c`'s `sbitx_version` and `i2c_bus` keys and `radio_hw.c`'s board profiles, with GPIO and I2C stubbed: the pins each board claims and their levels, LPF selection, the order of the T/R relay sequence, that the zBitx can neither be permitted to transmit nor raise TX_LINE, and each board's knob pins, clear of every other pin in use |
 
 `make check-comments` runs `tools/check_comments.py` over the sources,
 enforcing the comment policy: comments state what the code does now,
