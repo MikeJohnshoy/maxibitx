@@ -1,3 +1,4 @@
+[06_api.md](https://github.com/user-attachments/files/33181129/06_api.md)
 # 06 — maxibitx API
 
 This is the reference for building an application on top of maxibitx
@@ -154,10 +155,13 @@ connected.
 | `M <mode> <passband>` | `RPRT 0` | Mode: `CW`, `CWR`, `USB`, `LSB`, `PKTUSB` or `DIGITAL`. Passband is stored and echoed by `m` but not applied. Unknown mode: `RPRT -1`. |
 | `t` | `0` or `1` | PTT |
 | `T <0\|1>` | `RPRT 0` | Any nonzero value means TX. Also `RPRT 0` when ignored because the local key holds TX. `RPRT -1` when the dial is outside every `[tx_band]` range - those ranges are enforced, not just advertised - on a board that may not transmit, or while `bfo_freq` and `xtal_filter_center` give no usable TX IF (see `XTALCENTER`). |
+| `n` | `10` | Tuning step, Hz: how far one click of the radio's tuning knob moves the dial. A push of that knob changes it too. |
+| `N <Hz>` | `RPRT 0` | 1 to 10,000,000. Out of range: `RPRT -1`. |
 | `j` | `-150` | RIT offset, Hz. The stored value: CAT `RT0;` can switch RIT off without zeroing it. |
 | `J <Hz>` | `RPRT 0` | −9999 to 9999; `J 0` turns RIT off. Out of range: `RPRT -1`. |
 | `l AF` | `0.670000` | Volume, 0.0-1.0 |
 | `L AF <0.0-1.0>` | `RPRT 0` | |
+| `u MUTE` / `U MUTE <0\|1>` | `0` / `RPRT 0` | The local speaker muted; the volume is kept and returns on unmute. A push of the volume knob toggles it, and turning that knob unmutes. A real Hamlib function, not advertised in `dump_state` |
 | `l STRENGTH` | `-12` | S-meter, integer dB relative to S9 (−54 to +60). Uncalibrated - relative readings only. |
 | `l MICGAIN` | `1.000000` | Mic gain - the TX drive control, USB/LSB only (extension) |
 | `L MICGAIN <value>` | `RPRT 0` | Clamped to 0-64 (extension) |
