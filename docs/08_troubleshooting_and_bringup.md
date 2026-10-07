@@ -1,3 +1,4 @@
+[08_troubleshooting_and_bringup.md](https://github.com/user-attachments/files/33181142/08_troubleshooting_and_bringup.md)
 # 08 — troubleshooting and bring-up
 
 Status: has real content now (audio thread xruns, below) - no longer a
@@ -52,6 +53,20 @@ it. Turn off the serial console and the UART (for example with
 `raspi-config`, Interface Options → Serial Port, both off; or remove
 `console=serial0,...` from `cmdline.txt` and `enable_uart=1` from
 `config.txt`) and reboot.
+
+**On an sBitx, the knobs can't be claimed.** `gpio: cannot request edge
+events on BCM9/BCM10/BCM11/... ('maxibitx-knobs'): Device or resource busy`,
+then `init: front-panel knobs unavailable, continuing without them`. The
+tuning knob is on BCM 9, 10 and 11, SPI0's MISO, MOSI and SCLK, so SPI
+must be off (`dtparam=spi=on` removed from `config.txt`, or
+`raspi-config`, Interface Options → SPI, off) - as it must be for
+`LPF_C` and `LPF_D` on SPI0's chip selects. The radio runs without the
+knobs.
+
+**A knob counts backwards, or two steps a click.** See
+[`01_hardware_init_and_control.md`](01_hardware_init_and_control.md),
+"The front-panel knobs": swap its A and B pins, or change its
+`edges_per_detent`, in `radio_hw.c`.
 
 ## Audio thread xruns (hw:0,0 capture/playback)
 
