@@ -209,10 +209,10 @@ int main(void) {
 
   struct radio_hw_knob tune = radio_hw_knob(RADIO_KNOB_TUNING);
   struct radio_hw_knob vol = radio_hw_knob(RADIO_KNOB_VOLUME);
-  check(tune.a_pin == 9 && tune.b_pin == 10 && tune.sw_pin == 11 && tune.edges_per_detent == 4,
-        "tuning knob: A 9, B 10, switch 11 (wiringPi 13, 12, 14)");
-  check(vol.a_pin == 17 && vol.b_pin == 27 && vol.sw_pin == 22 && vol.edges_per_detent == 4,
-        "volume knob: A 17, B 27, switch 22 (wiringPi 0, 2, 3)");
+  check(tune.a_pin == 17 && tune.b_pin == 27 && tune.sw_pin == 22 && tune.edges_per_detent == 4,
+        "tuning knob: A 17, B 27, switch 22 (ENC2, wiringPi 0, 2, 3)");
+  check(vol.a_pin == 9 && vol.b_pin == 10 && vol.sw_pin == 11 && vol.edges_per_detent == 4,
+        "volume knob: A 9, B 10, switch 11 (ENC1, wiringPi 13, 12, 14)");
   unsigned knob_pins = BIT(tune.a_pin) | BIT(tune.b_pin) | BIT(tune.sw_pin) | BIT(vol.a_pin) |
                        BIT(vol.b_pin) | BIT(vol.sw_pin);
   unsigned other = claimed_pins() | BIT(KEY_TIP_GPIO) | BIT(KEY_RING_GPIO) | BIT(13) | BIT(6);
