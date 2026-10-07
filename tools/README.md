@@ -1,4 +1,3 @@
-[README.md](https://github.com/user-attachments/files/33180817/README.md)
 # tools/
 
 Client-side utilities that talk to a running maxibitx over the network -
