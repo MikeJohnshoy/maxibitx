@@ -1,4 +1,3 @@
-[04_remote_control_and_iq_output.md](https://github.com/user-attachments/files/33181079/04_remote_control_and_iq_output.md)
 # 04 — remote control and I/Q output
 
 This covers everything minibitx exposes to the outside world: how an
