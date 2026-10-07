@@ -23,6 +23,7 @@
 #include "key_input.h"   // u/U PADREV below
 #include "keyer.h"       // l/L KEYSPD, u/U KEYER, b and \stop_morse below
 #include "morse.h"       // b's text
+#include "knobs.h"       // n/N, the tuning knob's step
 
 static int listen_fd = -1;
 static volatile int running = 0;
@@ -192,6 +193,30 @@ static int handle_line(int fd, char *line)
         radio_set_rit((int)hz);
         send_rprt(fd, 0);
         printf("rigctl: J %ld -> RIT %+ld Hz\n", hz, hz);
+        return 0;
+    }
+
+    if (cmd[0] == 'n' && (cmd[1] == '\0' || cmd[1] == ' ')) {
+        // get_ts - the tuning step, Hz: how far one click of the tuning
+        // knob moves the dial (knobs.h).
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%d\n", knobs_get_step());
+        send_line(fd, buf);
+        printf("rigctl: n -> %d Hz\n", knobs_get_step());
+        return 0;
+    }
+
+    if (cmd[0] == 'N' && cmd[1] == ' ') {
+        // set_ts <hz> - 1 Hz to KNOBS_STEP_MAX_HZ; outside it, RPRT -1.
+        long hz = strtol(cmd + 1, NULL, 10);
+        if (hz < 1 || hz > KNOBS_STEP_MAX_HZ) {
+            send_rprt(fd, -1);
+            printf("rigctl: N %ld -> out of range (1-%d Hz), ignored\n", hz, KNOBS_STEP_MAX_HZ);
+            return 0;
+        }
+        knobs_set_step((int)hz);
+        send_rprt(fd, 0);
+        printf("rigctl: N %ld -> tuning step %ld Hz\n", hz, hz);
         return 0;
     }
 
@@ -370,7 +395,8 @@ static int handle_line(int fd, char *line)
         // key_input.h), KEYER (the keyer's mode, 0-4, keyer.h's enum
         // keyer_mode) and MORSE (1 while text is queued or being sent,
         // read-only). Not Hamlib RIG_FUNC names - extensions
-        // for tools/rigctl_panel.py. There is no MINPHASE: the FFT filter
+        // for tools/rigctl_panel.py - except MUTE, the local speaker's
+        // mute (rx_audio.h), which is one. There is no MINPHASE: the FFT filter
         // always runs minimum phase, since nobody listening to CW would pick
         // 16ms of group delay over 4.5ms (rx_audio.h).
         char func_name[32] = "";
@@ -408,6 +434,11 @@ static int handle_line(int fd, char *line)
             snprintf(buf, sizeof(buf), "%d\n", keyer_text_busy() ? 1 : 0);
             send_line(fd, buf);
             printf("rigctl: u MORSE -> %d\n", keyer_text_busy() ? 1 : 0);
+        } else if (strcmp(func_name, "MUTE") == 0) {
+            char buf[8];
+            snprintf(buf, sizeof(buf), "%d\n", rx_audio_get_mute());
+            send_line(fd, buf);
+            printf("rigctl: u MUTE -> %d\n", rx_audio_get_mute());
         } else {
             send_rprt(fd, -1);
             printf("rigctl: u %s -> unsupported function\n", func_name);
@@ -457,6 +488,11 @@ static int handle_line(int fd, char *line)
                 send_rprt(fd, 0);
                 printf("rigctl: U KEYER %d -> keyer %s\n", val, keyer_mode_name((enum keyer_mode)val));
             }
+        } else if (strcmp(func_name, "MUTE") == 0) {
+            // The local speaker; the volume is kept and returns on unmute.
+            rx_audio_set_mute(val != 0);
+            send_rprt(fd, 0);
+            printf("rigctl: U MUTE %d -> speaker %s\n", val, val ? "muted" : "unmuted");
         } else if (strcmp(func_name, "TONE") == 0) {
             // Test-tone generator: 0 off, 1 single tone, 2 two-tone
             // (tone_gen.h). Doesn't key the radio - any PTT source does.
@@ -549,7 +585,7 @@ static int handle_line(int fd, char *line)
         // quantized here: a client's set is honored to the nearest pitch, as
         // on a rig with a coarse pitch control. has_get_func/set_func stay
         // 0: NARROW, FFTFILT, TONE, PADREV, KEYER and MORSE aren't
-        // RIG_FUNC bits.
+        // RIG_FUNC bits, and MUTE, which is, isn't advertised.
         //
         // Mode masks carry the modes m/M actually handle: CW (0x2), USB
         // (0x4), LSB (0x8), CWR (0x80) and PKTUSB (0x800, DIGITAL) =
