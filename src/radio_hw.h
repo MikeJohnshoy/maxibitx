@@ -18,6 +18,18 @@
 #define KEY_TIP_GPIO  5 // tip: dot, or a straight key's contact (sbitx's
                         // DASH line - its name, not its role here)
 
+// The front-panel knobs: rotary encoders with a push switch, read by
+// encoder.c. What each does is knobs.c's.
+enum radio_knob { RADIO_KNOB_TUNING = 0, RADIO_KNOB_VOLUME = 1, RADIO_KNOBS = 2 };
+
+// One knob's lines (BCM numbering), each pulled up and closed to ground.
+// Turning it so A changes before B counts up. a_pin -1: the board has no
+// such knob that the Pi reads.
+struct radio_hw_knob {
+  int a_pin, b_pin, sw_pin;
+  int edges_per_detent; // quadrature edges from one click of the knob to the next: 4 or 2
+};
+
 // Selects the board named by hw_settings.ini's sbitx_version line
 // (hw_settings.h): "SBITX_V3" for an sBitx DE, v2 or v3, "SBITX_V4" for a
 // zBitx. Returns 0, or -1 - after saying what the valid names are - for a
@@ -44,6 +56,9 @@ int radio_hw_gpio_init(void);
 // on one where they are switched only for transmit (the zBitx), does
 // nothing.
 void radio_hw_tune(int freq_hz);
+
+// The selected board's knob k; a_pin is -1 if it has none.
+struct radio_hw_knob radio_hw_knob(enum radio_knob k);
 
 // 1 if this board may transmit at all, 0 if every transmit request is to
 // be refused (the zBitx, until its transmit path is calibrated).
