@@ -44,6 +44,7 @@ struct board {
   int lpf_pins[MAX_LPF + 1]; // every LPF relay line, -1 ends the list
   struct lpf_band lpf[MAX_LPF + 1];
   int lpf_in_rx_path;  // 1: the band's LPF is selected on every retune
+  struct radio_hw_knob knobs[RADIO_KNOBS];
   int (*relays_tx)(int on, int freq_hz);
 };
 
@@ -72,6 +73,10 @@ static const struct board boards[] = {
         .lpf = {{5500000, 7}, {10500000, 8}, {18500000, 25}, {30000000, 24}, {0, 0}},
         .lpf_in_rx_path = 1,
         .relays_tx = sbitx_relays_tx,
+        // sbitx's ENC1 (tuning) and ENC2 (volume, its multi-function
+        // knob), wiringPi 13/12/14 and 0/2/3. ENC1 uses three SPI0 pins
+        // (MISO, MOSI, SCLK), so SPI must stay off, as for LPF_C and D.
+        .knobs = {[RADIO_KNOB_TUNING] = {9, 10, 11, 4}, [RADIO_KNOB_VOLUME] = {17, 27, 22, 4}},
     },
     {
         // zbitx (drexjj/zbitx, branches dev and devcwmod): LPF_B reaches
@@ -91,6 +96,9 @@ static const struct board boards[] = {
         .lpf = {{5500000, 7}, {10500000, 8}, {21500000, 25}, {30000000, 24}, {0, 0}},
         .lpf_in_rx_path = 0,
         .relays_tx = zbitx_relays_tx,
+        // Its knob and buttons belong to the RP2040 front panel, not the
+        // Pi's GPIO.
+        .knobs = {[RADIO_KNOB_TUNING] = {-1, -1, -1, 0}, [RADIO_KNOB_VOLUME] = {-1, -1, -1, 0}},
     },
 };
 
@@ -125,6 +133,13 @@ const char *radio_hw_board_name(void) { return board ? board->name : "none"; }
 int radio_hw_i2c_bus(void) { return hw_i2c_bus >= 0 ? hw_i2c_bus : board->i2c_bus; }
 
 int radio_hw_tx_permitted(void) { return board && board->tx_permitted; }
+
+struct radio_hw_knob radio_hw_knob(enum radio_knob k) {
+  struct radio_hw_knob none = {-1, -1, -1, 0};
+  if (!board || k < 0 || k >= RADIO_KNOBS)
+    return none;
+  return board->knobs[k];
+}
 
 int radio_hw_tx_settle_ms(void) {
   if (board->ext_ptt_pin >= 0)
