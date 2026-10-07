@@ -532,7 +532,7 @@ Tune button, an S-meter, and a live spectrum, frequency scale and
 waterfall with a 5, 10 or 30 kHz span, with a marker where RIT is
 listening. Settings (the connection, the filter type, paddle reversal,
 the TX test tones, the macros and the fields they fill in) open from its
-SETUP button. [`../tools/README.md`](../tools/README.md) describes it.
+gear button. [`../tools/README.md`](../tools/README.md) describes it.
 
 Two things make it more interesting than a utility. First, it is a
 *client*, not part of the daemon — it speaks the ordinary rigctld
