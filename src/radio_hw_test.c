@@ -4,8 +4,10 @@
 // i2c_bus keys, and radio_hw.c's two board profiles, with gpio.c and i2c.c
 // stubbed so every line request and write is recorded rather than made.
 // Checks which pins each board claims and at what level, LPF selection on a
-// retune, the relay half of the T/R sequence in both directions, and that
-// the zBitx can neither be permitted to transmit nor raise TX_LINE.
+// retune, the relay half of the T/R sequence in both directions, that the
+// zBitx can neither be permitted to transmit nor raise TX_LINE, and each
+// board's front-panel knobs: their pins, and that no knob pin is one the
+// board drives, the key jack's, or the sBitx si5351's I2C pins.
 // docs/dsp_design_notes/zbitx_port_study.md §5 and §9.
 //
 //   make test-radio-hw && ./test-radio-hw
@@ -165,6 +167,8 @@ int main(void) {
   check(radio_hw_relays_tx(0, 14060000) == 0, "the relays go to receive");
   check(high_pins() == BIT(15) && level[23] == 0, "... TX_LINE low, LPFs off, RX_LINE high");
   check(radio_hw_tx_settle_ms() == 10, "relay wait is the LPF's 10 ms");
+  check(radio_hw_knob(RADIO_KNOB_TUNING).a_pin < 0 && radio_hw_knob(RADIO_KNOB_VOLUME).a_pin < 0,
+        "no knobs on the Pi's GPIO (the RP2040 panel has them)");
 
   printf("D. sBitx (SBITX_V3)\n");
   check(radio_hw_select_board("SBITX_V3") == 0, "SBITX_V3 is accepted");
@@ -202,6 +206,19 @@ int main(void) {
   check(high_pins() == BIT(8), "the band's LPF stays selected through T/R");
   tx_ext_ptt_delay_ms = 20;
   check(radio_hw_tx_settle_ms() == 20, "relay wait is ext_ptt_delay_ms");
+
+  struct radio_hw_knob tune = radio_hw_knob(RADIO_KNOB_TUNING);
+  struct radio_hw_knob vol = radio_hw_knob(RADIO_KNOB_VOLUME);
+  check(tune.a_pin == 9 && tune.b_pin == 10 && tune.sw_pin == 11 && tune.edges_per_detent == 4,
+        "tuning knob: A 9, B 10, switch 11 (wiringPi 13, 12, 14)");
+  check(vol.a_pin == 17 && vol.b_pin == 27 && vol.sw_pin == 22 && vol.edges_per_detent == 4,
+        "volume knob: A 17, B 27, switch 22 (wiringPi 0, 2, 3)");
+  unsigned knob_pins = BIT(tune.a_pin) | BIT(tune.b_pin) | BIT(tune.sw_pin) | BIT(vol.a_pin) |
+                       BIT(vol.b_pin) | BIT(vol.sw_pin);
+  unsigned other = claimed_pins() | BIT(KEY_TIP_GPIO) | BIT(KEY_RING_GPIO) | BIT(13) | BIT(6);
+  check((knob_pins & other) == 0 && __builtin_popcount(knob_pins) == 6,
+        "six distinct knob pins, none driven, the key's, or the si5351 bus's (13, 6)");
+  check(radio_hw_knob(RADIO_KNOBS).a_pin < 0, "an out-of-range knob has no pins");
 
   printf("\n%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);
   return failures ? 1 : 0;
