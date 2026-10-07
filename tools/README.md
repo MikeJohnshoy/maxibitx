@@ -1,3 +1,4 @@
+[README.md](https://github.com/user-attachments/files/33180817/README.md)
 # tools/
 
 Client-side utilities that talk to a running maxibitx over the network -
@@ -53,6 +54,16 @@ tuning step (it turns amber and underlined). Then the mouse wheel over a
 digit, a drag up or down on it, or the Up and Down keys change it; Left
 and Right move the step. Double-click the frequency to type one in:
 `14058.2` (kHz), `14.0582` (MHz) or `14058200` (Hz).
+
+**The sBitx's knobs.** The step tapped is also the radio's tuning step
+(rigctld `N`), so the sBitx's tuning knob moves the dial by that digit,
+and a push of the knob, which moves the step on, moves the underline
+too. The panel reads the frequency four times a second, so a turn of the
+knob shows at once. A push of the volume knob mutes the speaker and the
+VOL caption reads MUTE in amber; tap the caption to mute or unmute from
+the panel, and moving the volume slider unmutes, as turning the knob
+does. A maxibitx without knob support simply doesn't answer `n` or
+`u MUTE`, and the panel carries on without them.
 
 **Settings** open from the gear at the top right (or the RX/TX button):
 the connection, the peak line, paddle reversal, the CW filter type (FFT
