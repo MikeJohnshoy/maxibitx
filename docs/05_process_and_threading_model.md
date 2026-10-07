@@ -1,3 +1,4 @@
+[05_process_and_threading_model.md](https://github.com/user-attachments/files/33181114/05_process_and_threading_model.md)
 # 05 — process and threading model
 
 Status: current. Covers the startup sequence, the threads once running,
@@ -12,7 +13,7 @@ reading `sound.c`.
   GPIO → si5351 on the board's I2C bus (clk1 at its RX value) → INA260 →
   software VFO and initial tune → CW tone (`cw_init()`) → key jack and its input thread
   (`key_input_start()`) → RX demodulator (`rx_audio_init()`) →
-  Hamlib/rigctld → TCI server (`tci_init()`) → HPSDR → I/Q telemetry stream (`iq_stream.c`) → USB
+  front-panel knobs (`knobs_start()`) → Hamlib/rigctld → TCI server (`tci_init()`) → HPSDR → I/Q telemetry stream (`iq_stream.c`) → USB
   gadget (`uac_init()`) → Kenwood CAT on the gadget's serial port
   (`cat_init()`) → audio codec → audio thread. See
   [`01_hardware_init_and_control.md`](01_hardware_init_and_control.md)
@@ -37,6 +38,11 @@ reading `sound.c`.
     thread holds it, it is starting TX, and the audio thread has nothing to
     do that block. Releasing TX after the hang time stays with the audio
     thread, and it won't release while an edge is still queued;
+  - on a board with front-panel knobs, the knob thread (`encoder.c`),
+    asleep in `ppoll()` on the knobs' edge events, at ordinary priority.
+    It calls `knobs.c`'s handlers itself: a turn of the tuning knob calls
+    `radio_tune_to()`, as a rigctld or CAT client's thread does, and the
+    volume knob sets `rx_audio.c`'s volume and mute;
   - HPSDR's listener and pacer threads (`hpsdr_p1.c`);
   - the I/Q telemetry stream's listener and pacer threads
     (`iq_stream.c`);
