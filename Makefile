@@ -53,7 +53,7 @@ LDFLAGS := -lm -lasound -lpthread -ldl -lfftw3f
 SRC := src/maxibitx.c src/radio.c src/radio_hw.c src/interfaces/hpsdr_p1.c src/interfaces/usb_gadget.c src/i2c.c \
      src/si5351v2.c src/sound.c src/vfo.c src/interfaces/hamlib.c src/hw_settings.c src/antialias.c src/decim48k.c src/cw.c \
      src/rx_audio.c src/gpio.c src/interfaces/iq_stream.c src/fft_filter.c src/tx_pipeline.c src/rx_filter.c src/upsample48k.c src/tone_gen.c \
-     src/key_input.c src/$(KEYER).c src/morse.c src/interfaces/tci.c src/interfaces/tci_stream.c \
+     src/key_input.c src/encoder.c src/knobs.c src/$(KEYER).c src/morse.c src/interfaces/tci.c src/interfaces/tci_stream.c \
      src/interfaces/tci_ws.c src/interfaces/tci_cw.c
 OBJ := $(SRC:.c=.o)
 
@@ -85,7 +85,7 @@ check-filters:
 	python3 tools/gen_narrow_filters.py --check
 
 clean:
-	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw test-key-input test-keyer test-keyer-straight test-tci-ws test-tci test-radio-hw \
+	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw test-key-input test-keyer test-keyer-straight test-tci-ws test-tci test-radio-hw test-encoder \
 		src/fft_filter.o src/fft_filter_test.o src/tx_pipeline.o src/tx_pipeline_test.o \
 		src/rx_filter.o src/rx_filter_test.o src/rx_audio_test.o src/rx_audio_impulse_test.o src/upsample48k_test.o
 
@@ -174,6 +174,14 @@ test-cw: src/cw.c src/cw.h src/cw_envelope_test.c src/key_input.c src/key_input.
 # key_input_take() places edges in a block. See key_input_test.c.
 test-key-input: src/key_input.c src/key_input.h src/key_input_test.c src/gpio.c
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/key_input.c src/gpio.c src/key_input_test.c -o $@ -lpthread
+
+# The front-panel knobs: encoder.c's decoding fed synthetic edges - clicks,
+# contact bounce, presses and their debounce - and knobs.c's handlers with
+# the radio and the speaker stubbed: the tuning step, the speed-up, the
+# push through the steps, no tuning in TX, volume and mute. gpio.c is
+# linked but never called. See encoder_test.c.
+test-encoder: src/encoder.c src/encoder.h src/knobs.c src/knobs.h src/encoder_test.c src/gpio.c src/radio_hw.h
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/encoder.c src/knobs.c src/gpio.c src/encoder_test.c -o $@ -lpthread
 
 # keyer.h, twice: test-keyer against keyer.c - the design study's golden
 # cases, random paddle input checked sample for sample against the
