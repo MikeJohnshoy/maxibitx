@@ -1,4 +1,3 @@
-[06_api.md](https://github.com/user-attachments/files/33181129/06_api.md)
 # 06 — maxibitx API
 
 This is the reference for building an application on top of maxibitx
