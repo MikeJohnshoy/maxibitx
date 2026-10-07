@@ -17,6 +17,7 @@
 #include "cw.h"
 #include "key_input.h"
 #include "keyer.h"
+#include "knobs.h"
 #include "rx_audio.h"
 #include "tone_gen.h"
 #include <stdio.h>
@@ -146,6 +147,19 @@ int main(int argc, char **argv) {
   // demodulator and the narrow-filter hold follow it like any other change.
   radio_set_mode(RADIO_STARTUP_MODE);
   printf("init: mode %s\n", startup_mode_name(RADIO_STARTUP_MODE));
+
+  // The front-panel knobs (src/encoder.c reads them, src/knobs.c acts on
+  // them): tuning and volume on the sBitx, none the Pi reads on the zBitx.
+  // After the demodulator, whose volume one of them turns. Not fatal: the
+  // radio works without them.
+  int n_knobs = knobs_start();
+  if (n_knobs < 0)
+    printf("init: front-panel knobs unavailable, continuing without them\n");
+  else if (n_knobs == 0)
+    printf("init: no front-panel knobs on the %s's GPIO\n", radio_hw_board_name());
+  else
+    printf("init: knobs ready - tuning step %d Hz (push for the next), volume push mutes\n",
+           knobs_get_step());
 
   // Bring up the rigctld-compatible control surface (src/interfaces/hamlib.c) first -
   // not a hard failure if the port's unavailable, same as HPSDR/UAC2.
