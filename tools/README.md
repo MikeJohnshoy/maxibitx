@@ -15,62 +15,63 @@ each source file's header names the file itself. Run it with
 
 ## `rigctl_panel.py`
 
-A small desktop GUI: a frequency readout/entry (with quick +/- step
-buttons), a volume slider, and a live spectrum display with a waterfall
-(about 8 s of history) under it. Talks the same
-plain-text rigctld protocol WSJT-X/Thetis/etc. already use against
-minibitx's built-in server (`hamlib.c`, default TCP 4532) - see
-[`../docs/04_remote_control_and_iq_output.md`](../docs/04_remote_control_and_iq_output.md)
-for the full command set. Volume relies on the `l`/`L AF` level commands
-added alongside this tool - a minibitx build from before that change
-will still connect and show frequency, but volume will read/set nothing.
+A touch-friendly control panel, laid out for the sBitx's 7-inch 800×480
+screen and just as usable in a window on a laptop. It is a client like
+any other: control over rigctld (`hamlib.c`, TCP 4532) and the spectrum
+over the I/Q stream (`iq_stream.c`, UDP 4536), so it runs on the Pi
+itself or anywhere on the network
+([`../docs/06_api.md`](../docs/06_api.md)).
 
-The spectrum is fed by a second, independent connection - UDP to
-`src/interfaces/iq_stream.c`'s lightweight I/Q telemetry stream (port 4536) - kept
-deliberately separate from both the HPSDR Protocol 1 link WSJT-X/Thetis
-use for their own I/Q (`hpsdr_p1.c`, single-client - a second client
-there would silently steal the stream from whichever SDR app connected
-first) and the CAT/audio USB gadget (`usb_gadget.c`). See
-[`../docs/dsp_design_notes/iq_stream_design.md`](../docs/dsp_design_notes/iq_stream_design.md)
-for the full design and bench verification. A minibitx build from before
-`iq_stream.c` existed will still connect for frequency/volume; the
-spectrum panel will just say it's waiting for data that never arrives.
+The screen, top to bottom:
 
-Run it on a laptop, or on the Pi's own desktop if it has one - it's a
-separate process from `minibitx`, connecting over TCP (rigctld) and UDP
-(spectrum) like any other client, so it works either locally
-(`127.0.0.1`) or from anywhere on the network that can reach the Pi.
+- **Top bar:** band menu, the frequency, mode (CW, CWR, USB, LSB, DIGI),
+  the RX/TX light, and volume. The band menu remembers the last
+  frequency used on each band.
+- **RIT:** −100, −10, the offset (tap it to clear), +10, +100.
+  **FILTER:** the CW filter on or off, its width and its centre (the CW
+  pitch). In DIGI the radio holds the filter out of circuit and the
+  group says so.
+- **Spectrum:** span (5, 10 or 30 kHz), a status line, the S-meter, then
+  the trace, a frequency scale and the waterfall under it.
+- **By mode:** in CW, ten macro buttons; in USB/LSB, mic gain and the ALC
+  meter; in DIGI, a note that the digital-mode program has the audio.
+- **Bottom row:** keyer type, WPM, the CW text field, Send and Stop,
+  power, and Tune.
 
-**Requirements:** Python 3's standard library, `tkinter`, and `numpy`
-(for the spectrum's FFT - the plot itself is drawn on a plain Tkinter
-Canvas, no plotting library needed). `tkinter` usually ships with Python
-on Windows/macOS, but is a separate package on Debian/Raspberry Pi OS:
+**Tuning digit by digit.** Tap a digit of the frequency to make it the
+tuning step (it turns amber and underlined). Then the mouse wheel over a
+digit, a drag up or down on it, or the Up and Down keys change it; Left
+and Right move the step. Double-click the frequency to type one in:
+`14058.2` (kHz), `14.0582` (MHz) or `14058200` (Hz).
+
+**Settings** open from the RX/TX button: the connection, paddle
+reversal, the CW filter type (FFT or elliptic), the TX test tones with
+their Transmit switch, your call and park, and the ten macros (a button
+label and the text sent; `{MYCALL}` and `{PARK}` are filled in, and a
+macro that needs one refuses until it's set). Settings, the last host and
+the band memory are kept in `~/.maxibitx_panel.json`.
+
+**Tune** keys the transmitter with the 1 kHz test tone, so the carrier is
+1 kHz from the dial, at the power set beside it; maxibitx drops it after
+30 s. **APF, NR and XIT** are on the screen but disabled: maxibitx doesn't
+have them yet.
+
+The panel connects at start-up to the last host used (127.0.0.1 the first
+time, which is right on the Pi) and keeps trying every 5 s while it
+isn't connected, so it comes back on its own when maxibitx restarts.
 
 ```
-sudo apt install python3-tk
-pip install numpy   # or: sudo apt install python3-numpy
+python3 tools/rigctl_panel.py                   # a window, last host
+python3 tools/rigctl_panel.py --fullscreen      # on the sBitx's own screen
+python3 tools/rigctl_panel.py --host sbitx.local
 ```
 
-**Run:**
+**Requirements:** Python 3 with `tkinter`, and `numpy`. The IBM Plex
+fonts are used when installed, DejaVu otherwise. On Raspberry Pi OS:
 
 ```
-python3 tools/rigctl_panel.py
+sudo apt install python3-tk python3-numpy fonts-ibm-plex
 ```
-
-Enter the Pi's hostname or IP and the rigctld port (4532 by default),
-click Connect. The panel remembers the last host/port used
-(`~/.maxibitx_panel.json`; if that doesn't exist yet it reads the older
-`~/.minibitx_panel.json`) so subsequent launches don't need retyping
-them. Frequency and volume both poll once a second while connected, so
-the panel stays current even if something else (another rigctld client,
-FLRig's CAT, an HPSDR app's MOX) changes state in the meantime - except
-the frequency entry box itself, which is left alone while it has focus
-so a poll tick can't overwrite what you're mid-way through typing. The
-spectrum starts/stops with the same Connect/Disconnect button, spans the
-full ±48kHz native-96kHz baseband range around dial center (see
-`iq_stream_design.md` for what actually limits how much of that is real,
-undistorted signal vs. crystal-filter skirt), and updates at roughly
-15fps regardless of how much faster the underlying FFT itself runs.
 
 ## `tci_client.py`
 
