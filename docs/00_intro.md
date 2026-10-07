@@ -1,4 +1,3 @@
-[00_intro.md](https://github.com/user-attachments/files/33181004/00_intro.md)
 # Introduction to maxibitx
 
 maxibitx is a headless, all-mode (CW, CWR, USB, LSB and DIGITAL) radio
