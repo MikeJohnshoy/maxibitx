@@ -27,11 +27,15 @@ The screen, top to bottom:
 - **Top bar:** band menu, the frequency, mode (CW, CWR, USB, LSB, DIGI),
   the RX/TX light, and volume. The band menu remembers the last
   frequency used on each band.
-- **RIT:** −100, −10, the offset (tap it to clear), +10, +100.
+- **RIT:** −100, −10, the offset (tap it to clear), +10, +100. While
+  it's set, a green marker on the spectrum, scale and waterfall shows
+  where the receiver is listening; the display stays centred on the dial,
+  so a signal doesn't move when RIT does. An offset past the span shows
+  as an arrow at that edge.
   **FILTER:** the CW filter on or off, its width and its centre (the CW
   pitch). In DIGI the radio holds the filter out of circuit and the
   group says so.
-- **Spectrum:** span (5, 10 or 30 kHz), a status line, the S-meter, then
+- **Spectrum:** SETUP, span (5, 10 or 30 kHz), a status line, the S-meter, then
   the trace, a frequency scale and the waterfall under it.
 - **By mode:** in CW, ten macro buttons; in USB/LSB, mic gain and the ALC
   meter; in DIGI, a note that the digital-mode program has the audio.
@@ -44,12 +48,15 @@ digit, a drag up or down on it, or the Up and Down keys change it; Left
 and Right move the step. Double-click the frequency to type one in:
 `14058.2` (kHz), `14.0582` (MHz) or `14058200` (Hz).
 
-**Settings** open from the RX/TX button: the connection, paddle
-reversal, the CW filter type (FFT or elliptic), the TX test tones with
-their Transmit switch, your call and park, and the ten macros (a button
-label and the text sent; `{MYCALL}` and `{PARK}` are filled in, and a
-macro that needs one refuses until it's set). Settings, the last host and
-the band memory are kept in `~/.maxibitx_panel.json`.
+**Settings** open from SETUP (or the RX/TX button): the connection,
+paddle reversal, the CW filter type (FFT or elliptic), the TX test tones
+with their Transmit switch, the ten macros (a button label and the text
+sent), and the macro fields. A field is a name and a value: MYCALL and
+PARK to start with, and up to eight of your own (NAME, QTH, RIG...). A
+macro's `{NAME}` is replaced by that field's value, and a macro naming a
+field with no value isn't sent, so a CQ never goes out without your
+call. Settings, the last host and the band memory are kept in
+`~/.maxibitx_panel.json`.
 
 **Tune** keys the transmitter with the 1 kHz test tone, so the carrier is
 1 kHz from the dial, at the power set beside it; maxibitx drops it after
