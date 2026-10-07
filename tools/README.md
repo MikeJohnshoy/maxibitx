@@ -25,7 +25,7 @@ itself or anywhere on the network
 The screen, top to bottom:
 
 - **Top bar:** band menu, the frequency, mode (CW, CWR, USB, LSB, DIGI),
-  the RX/TX light, and volume. The band menu remembers the last
+  the RX/TX light, volume, and the settings gear. The band menu remembers the last
   frequency used on each band.
 - **RIT:** −100, −10, the offset (tap it to clear), +10, +100. While
   it's set, a green marker on the spectrum, scale and waterfall shows
@@ -35,7 +35,7 @@ The screen, top to bottom:
   **FILTER:** the CW filter on or off, its width and its centre (the CW
   pitch). In DIGI the radio holds the filter out of circuit and the
   group says so.
-- **Spectrum:** SETUP, span (5, 10 or 30 kHz), a status line, the S-meter, then
+- **Spectrum:** span (5, 10 or 30 kHz), a status line, the S-meter, then
   the trace, a frequency scale and the waterfall under it.
 - **By mode:** in CW, ten macro buttons; in USB/LSB, mic gain and the ALC
   meter; in DIGI, a note that the digital-mode program has the audio.
@@ -48,7 +48,7 @@ digit, a drag up or down on it, or the Up and Down keys change it; Left
 and Right move the step. Double-click the frequency to type one in:
 `14058.2` (kHz), `14.0582` (MHz) or `14058200` (Hz).
 
-**Settings** open from SETUP (or the RX/TX button): the connection,
+**Settings** open from the gear at the top right (or the RX/TX button): the connection,
 paddle reversal, the CW filter type (FFT or elliptic), the TX test tones
 with their Transmit switch, the ten macros (a button label and the text
 sent), and the macro fields. A field is a name and a value: MYCALL and
