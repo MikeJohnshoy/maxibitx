@@ -14,6 +14,7 @@ test-keyer-straight
 test-tci-ws
 test-tci
 test-radio-hw
+test-encoder
 src/*.o
 *.o
 
