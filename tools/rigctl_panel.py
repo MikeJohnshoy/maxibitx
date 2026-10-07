@@ -28,6 +28,10 @@ the macro fields. A field is a name and a value, MYCALL and PARK to
 start with, up to eight; a macro's {NAME} is replaced by the value, and
 a macro naming a field with no value isn't sent.
 
+The trace is the average of the FFTs since the last frame, about six,
+so the noise floor holds steady without signals widening; a dimmer peak
+line behind it falls back 15 dB a second (off in Settings if unwanted).
+
 While RIT is set, a green marker on the spectrum, scale and waterfall
 shows where the receiver is listening. The display stays centred on the
 dial (the transmit frequency), so a signal doesn't move when RIT does;
@@ -152,12 +156,18 @@ IQ_STREAM_PORT = 4536          # src/interfaces/iq_stream.h's IQ_STREAM_PORT
 IQ_STREAM_MAGIC = b"IQS1"
 SUBSCRIBE_INTERVAL_S = 1.0     # comfortably under iq_stream.c's 5 s subscriber timeout
 FFT_SIZE = 2048                # 96000/2048 = 46.875 Hz/bin across the full +-48 kHz
-SPECTRUM_REDRAW_MS = 66        # about 15 frames a second
+FFT_HOP = FFT_SIZE // 2        # half-overlapped FFTs: about 94 a second
+SPECTRUM_REDRAW_MS = 66        # about 15 frames a second, each the average of ~6 FFTs
+# The peak line: each bin holds its highest level and falls back at this
+# rate, so a CW station's dits leave a steady outline between them.
+PEAK_DECAY_DB_PER_S = 15.0
+PEAK_COLOR = "#4D7A8F"         # TRACE, dimmed
 SPECTRUM_DB_FLOOR = -100.0     # dBFS-style: 0 dB is one full-scale tone
-# Not 0 dBFS: nothing on this receiver's raw I/Q comes near full scale,
-# and -37.5 puts the strongest signal measured on an sBitx (-50 dBFS) at
-# 80% of the height. A stronger signal flat-tops, and the trace says
-# "clipping" when it does.
+# Not 0 dBFS: nothing on this receiver's raw I/Q comes near full scale.
+# -37.5 was set from the strongest signal first measured on an sBitx
+# (-50 dBFS); strong FT8 went past it, so -30. A signal above the
+# ceiling flat-tops and the trace says "over scale": the display's
+# limit, not the radio's - the codec's is 0 dBFS, 30 dB higher.
 SPECTRUM_DB_CEILING = -30.0
 # Displayed half-spans. The FFT always covers the full +-48 kHz at
 # 46.875 Hz/bin; these crop it, so a narrow span spreads the same bins
@@ -327,8 +337,10 @@ class RigctlClient:
 
 
 class SpectrumClient:
-    """Subscribes to iq_stream.c's UDP stream and keeps an FFT of the most
-    recent FFT_SIZE samples ready for the display.
+    """Subscribes to iq_stream.c's UDP stream and FFTs it, FFT_SIZE samples
+    at a time, every FFT_HOP. get_latest() returns the average power of the
+    FFTs since the last call: averaged over time, never across bins, so the
+    noise floor steadies and signals stay as narrow as one FFT shows them.
 
     Independent of the rigctld connection: its own socket, its own
     keepalive (iq_stream.c drops a subscriber silent for 5 s) and its own
@@ -347,6 +359,8 @@ class SpectrumClient:
         self.lock = threading.Lock()
         self.sample_buf = np.zeros(0, dtype=np.complex128)
         self.latest_db = None  # fftshifted, low to high frequency, or None
+        self.power_sum = None  # FFT power summed since the last get_latest()
+        self.power_count = 0
         self.window = np.hanning(FFT_SIZE)
         self.window_mean = float(np.mean(self.window)) or 1.0
 
@@ -359,6 +373,8 @@ class SpectrumClient:
         self.sample_buf = np.zeros(0, dtype=np.complex128)
         with self.lock:
             self.latest_db = None
+            self.power_sum = None
+            self.power_count = 0
         threading.Thread(target=self._recv_loop, daemon=True).start()
         threading.Thread(target=self._keepalive_loop, daemon=True).start()
 
@@ -402,18 +418,28 @@ class SpectrumClient:
             # right, as SDR displays draw it.
             samples = (iq[:, 0] - 1j * iq[:, 1]) / 32767.0
             self.sample_buf = np.concatenate((self.sample_buf, samples))
-            if len(self.sample_buf) > FFT_SIZE * 2:
-                self.sample_buf = self.sample_buf[-FFT_SIZE * 2:]
-            if len(self.sample_buf) >= FFT_SIZE:
-                block = self.sample_buf[-FFT_SIZE:]
+            if len(self.sample_buf) > FFT_SIZE * 4:   # behind: drop the oldest
+                self.sample_buf = self.sample_buf[-FFT_SIZE:]
+            while len(self.sample_buf) >= FFT_SIZE:
+                block = self.sample_buf[:FFT_SIZE]
+                self.sample_buf = self.sample_buf[FFT_HOP:]
                 spectrum = np.fft.fftshift(np.fft.fft(block * self.window))
-                mag = np.abs(spectrum) / (FFT_SIZE * self.window_mean)
-                db = 20.0 * np.log10(mag + 1e-12)
+                power = (np.abs(spectrum) / (FFT_SIZE * self.window_mean)) ** 2
                 with self.lock:
-                    self.latest_db = db
+                    if self.power_sum is None:
+                        self.power_sum = power
+                    else:
+                        self.power_sum += power
+                    self.power_count += 1
 
     def get_latest(self):
+        """The average since the last call, in dB; the previous one again
+        if no FFT has finished since."""
         with self.lock:
+            if self.power_count:
+                self.latest_db = 10.0 * np.log10(self.power_sum / self.power_count + 1e-24)
+                self.power_sum = None
+                self.power_count = 0
             return None if self.latest_db is None else self.latest_db.copy()
 
 
@@ -697,6 +723,14 @@ class SettingsDialog(tk.Toplevel):
                   style="PanelMuted.TLabel").grid(row=2, column=0, columnspan=3, sticky="w",
                                                   pady=(6, 0))
 
+        disp = ttk.LabelFrame(f, text="Spectrum", padding=8)
+        disp.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        ttk.Checkbutton(disp, text="Peak line", variable=p.peak_var, style="Toolbutton",
+                        command=p.save_settings).grid(row=0, column=0, sticky="w")
+        ttk.Label(disp, text="each frequency's highest level, falling back "
+                  f"{PEAK_DECAY_DB_PER_S:g} dB a second", style="PanelMuted.TLabel").grid(
+            row=0, column=1, sticky="w", padx=(10, 0))
+
         f.columnconfigure(0, weight=1)
         f.columnconfigure(1, weight=1)
         return f
@@ -807,6 +841,10 @@ class Panel(tk.Tk):
         macros = (list(macros) + [list(m) for m in DEFAULT_MACROS])[:len(DEFAULT_MACROS)]
         self.macro_vars = [(tk.StringVar(value=lab), tk.StringVar(value=txt)) for lab, txt in macros]
         self.band_memory = dict(cfg.get("band_memory", {}))
+        self.peak_var = tk.BooleanVar(value=cfg.get("peak_line", True))
+        self.peak_db = None        # the peak line's levels, display bins
+        self.peak_key = None       # (dial, bins) the peak line was built for
+        self.peak_time = 0.0
 
         self.mode_var = tk.StringVar(value="CW")
         self.ritmode_var = tk.StringVar(value="RIT")
@@ -1176,6 +1214,7 @@ class Panel(tk.Tk):
                        if field_name(n.get())],
             "macros": [[lab.get(), txt.get()] for lab, txt in self.macro_vars],
             "band_memory": self.band_memory,
+            "peak_line": self.peak_var.get(),
         })
         save_config(self.cfg)
 
@@ -1636,6 +1675,21 @@ class Panel(tk.Tk):
             c.tag_lower(c.create_rectangle(x1 - 3, y0, x2 + 3, y0 + SCALE_H, fill="#101B22",
                                            outline="", tags="offset"), t)
 
+    def update_peak(self, db):
+        """The peak line: each bin's highest level, falling back at
+        PEAK_DECAY_DB_PER_S. Starts again on a retune or a span change,
+        when the old bins no longer line up with the new ones."""
+        now = time.monotonic()
+        key = (self.current_freq_hz, len(db))
+        if self.peak_db is None or key != self.peak_key:
+            self.peak_db = db.copy()
+            self.peak_key = key
+        else:
+            fall = PEAK_DECAY_DB_PER_S * min(now - self.peak_time, 1.0)
+            self.peak_db = np.maximum(db, self.peak_db - fall)
+        self.peak_time = now
+        return self.peak_db
+
     def redraw_spectrum(self):
         if not self.spectrum_running:
             return
@@ -1664,16 +1718,25 @@ class Panel(tk.Tk):
             db = db[center - half_bins:center + half_bins]
             n = len(db)
             peak_db = float(np.max(db))
-            frac = (np.clip(db, SPECTRUM_DB_FLOOR, SPECTRUM_DB_CEILING) - SPECTRUM_DB_FLOOR) \
-                / (SPECTRUM_DB_CEILING - SPECTRUM_DB_FLOOR)
+
+            def to_frac(levels):
+                return (np.clip(levels, SPECTRUM_DB_FLOOR, SPECTRUM_DB_CEILING)
+                        - SPECTRUM_DB_FLOOR) / (SPECTRUM_DB_CEILING - SPECTRUM_DB_FLOOR)
+
+            def trace(levels, color, width):
+                coords = np.empty(n * 2)
+                coords[0::2] = np.arange(n) * (w / n)
+                coords[1::2] = TRACE_H - 2 - to_frac(levels) * (TRACE_H - 6)
+                c.create_line(*coords.tolist(), fill=color, width=width, tags="trace")
+
+            frac = to_frac(db)
             self.add_waterfall_row(frac)
-            coords = np.empty(n * 2)
-            coords[0::2] = np.arange(n) * (w / n)
-            coords[1::2] = TRACE_H - 2 - frac * (TRACE_H - 6)
-            c.create_line(*coords.tolist(), fill=TRACE, width=1.5, tags="trace")
+            if self.peak_var.get():
+                trace(self.update_peak(db), PEAK_COLOR, 1)
+            trace(db, TRACE, 1.5)
             c.create_line(w / 2, 0, w / 2, TRACE_H, fill=AMBER, width=1.5, tags="trace")
             if peak_db >= SPECTRUM_DB_CEILING:
-                c.create_text(w - 4, 8, text="clipping", anchor="e", fill=TX_RED,
+                c.create_text(w - 4, 8, text="over scale", anchor="e", fill=AMBER,
                               font=(self.mono, 8), tags="trace")
             self.draw_scale(w, half_bins * bin_hz)
             self.draw_offset_marker(w, half_bins * bin_hz, self.rit_hz, "RIT", RIT_GREEN)
