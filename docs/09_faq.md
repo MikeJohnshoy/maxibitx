@@ -523,12 +523,15 @@ limitations.
 
 ### What is `rigctl_panel.py`?
 
-A small standalone Tk control panel, about a thousand lines of Python,
-that runs on the Pi or any machine on the network. It shows frequency,
-mode, RIT, volume, the narrow-filter switches and its pitch/width
-selectors, mic gain, TX power, an S-meter, an ALC meter, a TX test section
-and a live spectrum and waterfall with a selectable ±2.5/±5/±15 kHz span. The window
-scrolls, so it fits a display shorter than its own content.
+A Tk control panel, about fifteen hundred lines of Python, laid out for the
+sBitx's 7-inch 800×480 touchscreen and usable in a window on any machine
+on the network. It shows the frequency (tunable digit by digit), band,
+mode, RIT, volume, the CW filter and its width and centre, keyer type and
+speed, CW text and ten macros, mic gain and ALC in USB/LSB, TX power, a
+Tune button, an S-meter, and a live spectrum, frequency scale and
+waterfall with a 5, 10 or 30 kHz span. Settings (the connection, the
+filter type, paddle reversal, the TX test tones and the macros) open from
+its RX/TX button. [`../tools/README.md`](../tools/README.md) describes it.
 
 Two things make it more interesting than a utility. First, it is a
 *client*, not part of the daemon — it speaks the ordinary rigctld
