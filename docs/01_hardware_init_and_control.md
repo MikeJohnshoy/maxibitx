@@ -1,4 +1,3 @@
-[01_hardware_init_and_control.md](https://github.com/user-attachments/files/33181010/01_hardware_init_and_control.md)
 # 01 — sbitx hardware: initialization and control
 
 This covers everything that has to be brought up before any signal ever
@@ -125,16 +124,16 @@ leave behind rather than a live read of the radio's current state:
 | `LPF_D` | 11 | 7 | 26 | LPF band select (shares SPI0's CE1 pin, unused as SPI here) |
 | `KEY_RING_GPIO` | 7 | 4 | 7 | key jack ring: dash, straight key, mic PTT; pull-up, active low |
 | `KEY_TIP_GPIO` | 21 | 5 | 29 | key jack tip: dot, straight key; pull-up, active low |
-| `ENC1_A` | 13 | 9 | 21 | tuning knob, encoder A (shares SPI0's MISO pin, unused as SPI here) |
-| `ENC1_B` | 12 | 10 | 19 | tuning knob, encoder B (SPI0's MOSI) |
-| `ENC1_SW` | 14 | 11 | 23 | tuning knob's push switch (SPI0's SCLK) |
-| `ENC2_A` | 0 | 17 | 11 | volume knob, encoder A |
-| `ENC2_B` | 2 | 27 | 13 | volume knob, encoder B |
-| `ENC2_SW` | 3 | 22 | 15 | volume knob's push switch |
+| `ENC1_A` | 13 | 9 | 21 | volume knob, encoder A (shares SPI0's MISO pin, unused as SPI here) |
+| `ENC1_B` | 12 | 10 | 19 | volume knob, encoder B (SPI0's MOSI) |
+| `ENC1_SW` | 14 | 11 | 23 | volume knob's push switch (SPI0's SCLK) |
+| `ENC2_A` | 0 | 17 | 11 | tuning knob, encoder A |
+| `ENC2_B` | 2 | 27 | 13 | tuning knob, encoder B |
+| `ENC2_SW` | 3 | 22 | 15 | tuning knob's push switch |
 
 The six `ENC` rows come from sbitx's own pin names and wiringPi numbers,
-converted with the same mapping as the rows above; they have not been
-read back with `gpioget` on a running sBitx yet.
+converted with the same mapping as the rows above. Which encoder is which
+knob was found by turning them on a DE board running maxibitx.
 
 If this ever needs porting to different hardware (a different Pi model,
 a different board layout), re-derive this table the same way — from a
@@ -187,7 +186,7 @@ How the edges reach the transmitted signal:
 ## The front-panel knobs
 
 The sBitx has two knobs, each a rotary encoder with a push switch:
-tuning (sbitx's `ENC1`) and volume (`ENC2`, sbitx's multi-function
+tuning (sbitx's `ENC2`) and volume (`ENC1`, sbitx's multi-function
 knob). Their pins are part of the board profile (`radio_hw_knob()`), so
 the zBitx, whose knob and buttons belong to its RP2040 front panel rather
 than the Pi's GPIO, has none and the log says `init: no front-panel knobs
