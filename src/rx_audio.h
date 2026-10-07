@@ -36,6 +36,12 @@ void rx_audio_set_volume(int percent);
 // on connect, before ever calling set_volume).
 int rx_audio_get_volume(void);
 
+// Mute: 1 silences the local speaker without changing the volume, which
+// returns on unmute. rx_audio_set_volume() leaves the mute as it is.
+// Like the volume, uac_out/WSJT-X is unaffected.
+void rx_audio_set_mute(int on);
+int rx_audio_get_mute(void);
+
 // The narrow, post-demodulation "single signal" selectivity filter,
 // centered on the selected CW pitch - a separate stage from the wide
 // image-reject filter upstream of it (see rx_audio.c's file header and
