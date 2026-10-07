@@ -267,8 +267,9 @@ its push-to-talk in USB and LSB.
 
 ### A control panel that doubles as an example
 
-`tools/rigctl_panel.py` is a small desktop control panel, written in
-Python with Tk. It was built early in development and grew with it. It
+`tools/rigctl_panel.py` is a control panel written in Python with Tk,
+laid out for the sBitx's 7-inch touchscreen and usable in a window on
+any computer. It
 uses only maxibitx's public interfaces (rigctld for control, iq_stream
 for a live spectrum and waterfall), so it works on the Pi itself or from
 any computer on the network. It exercises nearly everything the radio
