@@ -77,7 +77,7 @@ static const struct board boards[] = {
         // (wiringPi 13/12/14), as wired on an sBitx DE. ENC1 uses three
         // SPI0 pins (MISO, MOSI, SCLK), so SPI must stay off, as for
         // LPF_C and D.
-        .knobs = {[RADIO_KNOB_TUNING] = {17, 27, 22, 4}, [RADIO_KNOB_VOLUME] = {9, 10, 11, 4}},
+        .knobs = {[RADIO_KNOB_TUNING] = {17, 27, 22, 4}, [RADIO_KNOB_VOLUME] = {10, 9, 11, 4}},
     },
     {
         // zbitx (drexjj/zbitx, branches dev and devcwmod): LPF_B reaches
