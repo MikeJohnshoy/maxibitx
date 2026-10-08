@@ -95,10 +95,16 @@ time, which is right on the Pi) and keeps trying every 5 s while it
 isn't connected, so it comes back on its own when maxibitx restarts.
 
 ```
-python3 tools/rigctl_panel.py                   # a window, last host
-python3 tools/rigctl_panel.py --fullscreen      # on the sBitx's own screen
+python3 tools/rigctl_panel.py                   # last host
+python3 tools/rigctl_panel.py --fullscreen      # full screen on any screen
+python3 tools/rigctl_panel.py --window          # a window on any screen
 python3 tools/rigctl_panel.py --host sbitx.local
 ```
+
+On a screen no bigger than 800x480, like the sBitx's 7-inch display, the
+panel opens full screen with no title bar, so all of it fits; on a larger
+one it opens as an 800x480 window. F11 switches between the two, and
+Escape leaves full screen.
 
 **Requirements:** Python 3 with `tkinter`, and `numpy`. The IBM Plex
 fonts are used when installed, DejaVu otherwise. On Raspberry Pi OS:
