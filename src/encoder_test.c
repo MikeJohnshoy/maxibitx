@@ -14,7 +14,7 @@
 // inside the lockout. Knobs: the tuning step and its range, the speed-up
 // and where it stops, a push stepping through 10 Hz to 10 kHz, the dial's
 // limits, no tuning while transmitting; volume clicks, mute on a push and
-// unmute on a turn.
+// unmute on a turn; one console line per knob once it has settled.
 
 #include <stdint.h>
 #include <stdio.h>
@@ -270,6 +270,23 @@ int main(void) {
   for (int i = 0; i < 40; i++)
     knobs_turn(RADIO_KNOB_VOLUME, 1, t += 100 * MS);
   check(volume == 100, "stops at 100%");
+
+  printf("Settled lines\n");
+  knobs_log_settled(t + 10000 * MS); // clear what the cases above left
+  knobs_set_step(10);
+  freq_hdr = 14060000;
+  for (int i = 0; i < 5; i++)
+    knobs_turn(RADIO_KNOB_TUNING, 1, t += 100 * MS);
+  check(knobs_log_settled(t + 200 * MS) == 0, "nothing while the knob is still turning");
+  check(knobs_log_settled(t + 600 * MS) == 1, "one line once it has been still 500 ms");
+  check(knobs_log_settled(t + 2000 * MS) == 0, "... and only one");
+  knobs_turn(RADIO_KNOB_VOLUME, 1, t += 100 * MS);
+  knobs_turn(RADIO_KNOB_TUNING, -1, t += 100 * MS);
+  check(knobs_log_settled(t + 600 * MS) == 2, "both knobs turned: a line each");
+  in_tx = 1;
+  knobs_turn(RADIO_KNOB_TUNING, 1, t += 100 * MS);
+  in_tx = 0;
+  check(knobs_log_settled(t + 600 * MS) == 0, "a click that changed nothing (in TX): no line");
 
   printf("\n%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);
   return failures ? 1 : 0;
