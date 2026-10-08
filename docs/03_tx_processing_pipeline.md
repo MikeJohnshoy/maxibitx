@@ -68,7 +68,7 @@ The derivations and bench numbers behind the current design are
   Crystal filter, centered at xtal_filter_center (40,012,400 Hz)
      |
      v
-  Mixer 1  <---  clk2 = freq_hdr + xtal_filter_center (no RIT during TX)
+  Mixer 1  <---  clk2 = freq_hdr + XIT + xtal_filter_center (no RIT during TX)
      |
      v
   PA (fixed gain)
@@ -163,11 +163,16 @@ produce a carrier.
 
 `radio_tx_apply(1)` then runs, in order: mute RX capture
 (`sound_set_rx_capture(0)`, before any TX RF exists), set clk1 to
-`bfo_freq` and clk2 to `freq_hdr + xtal_filter_center`, run the board's
-relay half of the sequence (`radio_hw_relays_tx(1, freq_hdr)`,
-`radio_hw.c`), and open the exciter feed
-(`sound_set_tx_drive(TX_MASTER_VOL)`). Returning to RX is the reverse:
-exciter feed to 0, `radio_hw_relays_tx(0, freq_hdr)`, clk1 back to
+`bfo_freq` and clk2 to the transmit frequency plus `xtal_filter_center`,
+run the board's relay half of the sequence (`radio_hw_relays_tx(1,
+tx_freq)`, `radio_hw.c`), and open the exciter feed
+(`sound_set_tx_drive(TX_MASTER_VOL)`). The transmit frequency is
+`radio_tx_freq()`: the dial, plus XIT when it's on (rigctld `Z`, CAT `XT`,
+TCI `xit_offset`). `radio_set_tx(1)` fixes it for the whole transmission
+before raising `in_tx`, and the `[tx_band]` check and the per-band power
+scale use it too, so XIT can't carry a signal out of a band unnoticed.
+Returning to RX is the reverse: exciter feed to 0,
+`radio_hw_relays_tx(0, ...)`, clk1 back to
 `xtal_filter_center + RX_IF_FREQ_HZ`, clk2 back to its RX value (with
 RIT), and RX capture unmuted last, once the relay has settled.
 
@@ -311,7 +316,8 @@ what lets the filter keep one product and reject the other.
 product is deep in its stopband.
 
 **Mixer 1 — clk2.** clk2 is `freq_hdr + xtal_filter_center` =
-47,042,400 Hz, the same as RX without RIT. The output is
+47,042,400 Hz, the same as RX without RIT (XIT, when on, adds its
+offset here). The output is
 47,042,400 − 40,012,409.4 = 7,029,990.6 Hz: the carrier lands 9.4 Hz
 below the dial. That residual comes from the bin rotate moving in
 whole 46.875 Hz steps. The zeroed image, if any of it survives, would
@@ -438,8 +444,8 @@ clamped. The constants (`sound.c` unless noted):
   no power information. It is kept for legibility against sbitx's
   `tx_amp = tx_drive * band.scale`. The operator's power control is
   `POWER` above, not this.
-- **`hw_settings_tx_scale(freq)`** (`hw_settings.c`) — the current
-  band's `scale` from the `[tx_band]` entries in
+- **`hw_settings_tx_scale(freq)`** (`hw_settings.c`) — the transmit
+  frequency's band `scale` from the `[tx_band]` entries in
   `data/hw_settings.ini`, compensating for the PA's gain varying across
   bands. The values were re-derived with a wattmeter for this pipeline;
   procedure and results are in
