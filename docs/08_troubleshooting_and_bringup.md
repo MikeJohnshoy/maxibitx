@@ -282,3 +282,18 @@ JTDX and WSJT-X Improved should produce (they key with source `tci`).
 `audio from the USB gadget` or `no TCI stream` means the client keyed
 without it - check its TCI audio setting. A client that disconnects while
 transmitting releases TX and says so.
+
+## What the console shows
+
+Once start-up is done, the console reports what happens to the radio:
+tuning, mode, PTT and its refusals, filter and keyer changes, LPF
+switching, clients connecting and leaving, xruns. It does not report what
+clients ask about it. rigctld's reads (`f`, `l STRENGTH`, `u MORSE`, ...)
+print nothing, so the control panel's twenty-odd reads a second stay off
+the screen; CAT prints a read only when its answer changes. A front-panel
+knob prints one line when it stops (`knobs: tuned to 14060200 Hz`,
+`knobs: volume 54%`), and a push prints the new step or the mute.
+
+To see everything a rigctld client sends, start maxibitx with
+`MAXIBITX_RIGCTL_TRACE=1` (the `init: Hamlib/rigctld listening` line
+says it's on); for TCI, `MAXIBITX_TCI_TRACE=1`, above.
