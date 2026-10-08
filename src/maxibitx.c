@@ -21,6 +21,7 @@
 #include "rx_audio.h"
 #include "tone_gen.h"
 #include <stdio.h>
+#include <time.h>
 #include <unistd.h>
 #include <signal.h>
  
@@ -243,6 +244,11 @@ int main(int argc, char **argv) {
   int tone_tx_seconds = 0;
   while (!shutdown_requested) {
     sleep(1);
+
+    // A knob turned and now still: one line for where it ended.
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    knobs_log_settled((int64_t)now.tv_sec * 1000000000LL + now.tv_nsec);
     if (in_tx && tone_gen_get_mode() != TONE_GEN_OFF) {
       if (++tone_tx_seconds >= TONE_GEN_TIMEOUT_S) {
         tone_gen_set_mode(TONE_GEN_OFF);
