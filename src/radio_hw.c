@@ -74,8 +74,9 @@ static const struct board boards[] = {
         .lpf_in_rx_path = 1,
         .relays_tx = sbitx_relays_tx,
         // Tuning is sbitx's ENC2 (wiringPi 0/2/3) and volume its ENC1
-        // (wiringPi 13/12/14), as wired on an sBitx DE. ENC1 uses three
-        // SPI0 pins (MISO, MOSI, SCLK), so SPI must stay off, as for
+        // (wiringPi 13/12/14), as wired on an sBitx DE; ENC1's A and B are
+        // taken the other way round, so clockwise turns it up. ENC1 uses
+        // three SPI0 pins (MISO, MOSI, SCLK), so SPI must stay off, as for
         // LPF_C and D.
         .knobs = {[RADIO_KNOB_TUNING] = {17, 27, 22, 4}, [RADIO_KNOB_VOLUME] = {10, 9, 11, 4}},
     },
