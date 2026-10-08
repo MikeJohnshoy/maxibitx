@@ -87,8 +87,8 @@ band memory are kept in `~/.maxibitx_panel.json`.
 **Tune** keys the transmitter with the single test tone at the power set
 beside it. In CW and CWR the carrier is on the dial (plus XIT), where a
 key-down goes; in USB and DIGI it is 1 kHz above the dial, in LSB 1 kHz
-below; maxibitx drops it after 30 s. **APF and NR** are on the screen
-but disabled: maxibitx doesn't have them yet.
+below; maxibitx drops it after 30 s. **NR** is on the screen but
+disabled: maxibitx doesn't have it yet.
 
 The panel connects at start-up to the last host used (127.0.0.1 the first
 time, which is right on the Pi) and keeps trying every 5 s while it
