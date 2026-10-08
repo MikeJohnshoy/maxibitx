@@ -999,8 +999,8 @@ static void *audio_loop(void *arg) {
       if (tx_audio_active) {
         // Per-band calibrated scale (see the TX_SAMPLE_HEADROOM
         // comment above) - looked up once per block, not per
-        // sample, since freq_hdr doesn't change mid-block.
-        double band_scale = hw_settings_tx_scale(freq_hdr);
+        // sample. radio_tx_freq(): where this transmission is, XIT included.
+        double band_scale = hw_settings_tx_scale(radio_tx_freq());
         double amp = TX_SAMPLE_HEADROOM * TX_DRIVE * band_scale * TX_GAIN_CORRECTION;
 
         // The limiter's ceiling, as an amplitude: POWER's fraction of
