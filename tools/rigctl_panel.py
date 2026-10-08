@@ -74,9 +74,13 @@ are optional; without them the panel uses DejaVu).
 
 Run it:
 
-    python3 tools/rigctl_panel.py                    # a window, last host
-    python3 tools/rigctl_panel.py --fullscreen       # the sBitx's screen
+    python3 tools/rigctl_panel.py                    # last host; full screen on
+                                                     # an 800x480 screen, else a window
+    python3 tools/rigctl_panel.py --fullscreen       # full screen on any screen
+    python3 tools/rigctl_panel.py --window           # a window on any screen
     python3 tools/rigctl_panel.py --host sbitx.local
+
+F11 switches between full screen and a window; Escape leaves full screen.
 """
 
 import argparse
@@ -720,8 +724,17 @@ class SettingsDialog(tk.Toplevel):
         self.panel = panel
         self.title("maxibitx panel - settings")
         self.configure(bg=GROUND)
-        self.geometry(f"{WIN_W - 20}x{WIN_H - 20}+{panel.winfo_rootx() + 10}+{panel.winfo_rooty() + 10}")
         self.transient(panel)
+        if panel.fullscreen:
+            # Over the full-screen panel, full screen too: a title bar would
+            # push the bottom of the tabs off the sBitx's screen. Close is
+            # at the top right.
+            self.geometry(f"{self.winfo_screenwidth()}x{self.winfo_screenheight()}+0+0")
+            self.after(150, lambda: (self.attributes("-fullscreen", True), self.lift(),
+                                     self.focus_force()))
+        else:
+            self.geometry(f"{WIN_W - 20}x{WIN_H - 20}+{panel.winfo_rootx() + 10}"
+                          f"+{panel.winfo_rooty() + 10}")
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=6, pady=6)
         nb.add(self.build_radio_tab(nb), text="Radio")
@@ -846,11 +859,23 @@ class Panel(tk.Tk):
         self.title("maxibitx")
         self.configure(bg=GROUND)
         self.ui, self.mono = setup_style(self)
-        if args.fullscreen:
-            self.attributes("-fullscreen", True)
+        # Full screen on a screen no bigger than the panel (the sBitx's
+        # 800x480), where a title bar would push the bottom row off it, or
+        # when asked; a window otherwise. F11 switches, Escape leaves.
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        small = sw <= WIN_W + 40 and sh <= WIN_H + 40
+        self.fullscreen = not args.window and (args.fullscreen or small)
+        if self.fullscreen:
+            self.geometry(f"{sw}x{sh}+0+0")
+            # Again once the window is mapped: some window managers (labwc
+            # and wayfire on Raspberry Pi OS among them) ignore a full-screen
+            # request made before the window exists.
+            self.after(200, lambda: self.set_fullscreen(True))
         else:
             self.geometry(f"{WIN_W}x{WIN_H}")
-        self.minsize(WIN_W, WIN_H)
+            self.minsize(WIN_W, WIN_H)
+        self.bind("<F11>", lambda e: self.set_fullscreen(not self.fullscreen))
+        self.bind("<Escape>", lambda e: self.set_fullscreen(False))
 
         self.client = RigctlClient()
         self.spectrum = SpectrumClient()
@@ -1167,6 +1192,14 @@ class Panel(tk.Tk):
         self.filter_frame.configure(text="FILTER - out of circuit in DIGI" if gated else "FILTER")
 
     # ---- status line ----
+
+    def set_fullscreen(self, on):
+        self.fullscreen = on
+        self.attributes("-fullscreen", on)
+        if on:
+            self.geometry(f"{self.winfo_screenwidth()}x{self.winfo_screenheight()}+0+0")
+        else:
+            self.geometry(f"{WIN_W}x{WIN_H}")
 
     def say(self, text, seconds=4.0):
         """Show text in the status line for a few seconds, ahead of the
@@ -1916,7 +1949,10 @@ def main():
     ap = argparse.ArgumentParser(description="maxibitx control panel")
     ap.add_argument("--host", help="maxibitx's host (default: the last one used)")
     ap.add_argument("--port", type=int, help=f"rigctld port (default {DEFAULT_PORT})")
-    ap.add_argument("--fullscreen", action="store_true", help="fill the screen (the sBitx's display)")
+    ap.add_argument("--fullscreen", action="store_true",
+                    help="fill the screen (the default on an 800x480 screen like the sBitx's)")
+    ap.add_argument("--window", action="store_true",
+                    help="a window even on a small screen (F11 switches, Escape leaves full screen)")
     Panel(ap.parse_args()).mainloop()
 
 
