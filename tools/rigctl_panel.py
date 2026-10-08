@@ -41,9 +41,9 @@ transmit (solid while transmitting); an arrow at the edge shows an
 offset beyond the span. APF and NR are on the screen but disabled:
 maxibitx has neither yet.
 
-TUNE keys the transmitter with the 1 kHz test tone (u TONE 1, then
-T 1), so the carrier is 1 kHz from the dial; maxibitx drops it after
-30 s.
+TUNE keys the transmitter with the single test tone (u TONE 1, then T
+1): in CW and CWR the carrier is on the dial (plus XIT), in the other
+modes 1 kHz from it; maxibitx drops it after 30 s.
 
 rigctld commands used:
 
@@ -64,7 +64,7 @@ rigctld commands used:
     u KEYER / U KEYER       0 straight, 1 bug, 2 ultimatic, 3 iambic A, 4 B
     l KEYSPD / L KEYSPD     keyer speed, WPM
     u PADREV / U PADREV     paddle reversal
-    u TONE / U TONE         test tone: 0 off, 1 1 kHz, 2 two-tone
+    u TONE / U TONE         test tone: 0 off, 1 single, 2 two-tone
     b <text>, \\stop_morse   send CW text, stop it (CW/CWR only)
     u MORSE                 1 while text is queued or going out
 
@@ -1653,7 +1653,8 @@ class Panel(tk.Tk):
             self.query_async(f"T {1 if self.ptt_var.get() else 0}")
 
     def on_tune_toggled(self):
-        """TUNE: the 1 kHz test tone, keyed. maxibitx drops it after 30 s."""
+        """TUNE: the single test tone, keyed - on the dial in CW and CWR, 1 kHz
+        from it otherwise. maxibitx drops it after 30 s."""
         if self.tune_var.get():
             self.query_async("U TONE 1", then=lambda r: self.query_async("T 1"))
         else:
