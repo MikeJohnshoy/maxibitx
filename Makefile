@@ -85,7 +85,7 @@ check-filters:
 	python3 tools/gen_narrow_filters.py --check
 
 clean:
-	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw test-key-input test-keyer test-keyer-straight test-tci-ws test-tci test-radio-hw test-encoder \
+	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw test-key-input test-keyer test-keyer-straight test-tci-ws test-tci test-radio-hw test-encoder test-radio \
 		src/fft_filter.o src/fft_filter_test.o src/tx_pipeline.o src/tx_pipeline_test.o \
 		src/rx_filter.o src/rx_filter_test.o src/rx_audio_test.o src/rx_audio_impulse_test.o src/upsample48k_test.o
 
@@ -174,6 +174,14 @@ test-cw: src/cw.c src/cw.h src/cw_envelope_test.c src/key_input.c src/key_input.
 # key_input_take() places edges in a block. See key_input_test.c.
 test-key-input: src/key_input.c src/key_input.h src/key_input_test.c src/gpio.c
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/key_input.c src/gpio.c src/key_input_test.c -o $@ -lpthread
+
+# radio.c's RIT and XIT: what each puts on the si5351's clk2 in receive and
+# in transmit, a change mid-transmission, a retune clearing both, and the
+# [tx_band] check and the LPF taking the transmit frequency - with the clock
+# generator, the board, the codec and the band table stubbed, and the TX
+# worker thread running for real. See radio_test.c.
+test-radio: src/radio.c src/radio.h src/radio_test.c src/vfo.c src/vfo.h
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces src/radio.c src/vfo.c src/radio_test.c -o $@ -lm -lpthread
 
 # The front-panel knobs: encoder.c's decoding fed synthetic edges - clicks,
 # contact bounce, presses and their debounce - and knobs.c's handlers with
