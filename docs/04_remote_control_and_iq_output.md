@@ -82,9 +82,13 @@ frequency readout/entry, a volume slider, and a narrow-filter checkbox,
 meant to run on a laptop or the Pi's own desktop, connecting to
 `<pi-host>:4532` same as any other rigctld client. See `tools/README.md`.
 
-Every command that changes or reports state also echoes to the console,
-one line per command, e.g. `rigctl: F 7074000 -> tuned to 7074000 Hz` or
-`rigctl: T 1 -> TX on`. `radio_tune_to()`/`radio_set_tx()` (`radio.c`)
+Every command that changes state, and every refused or unknown command,
+echoes to the console, one line per command, e.g. `rigctl: F 7074000 ->
+tuned to 7074000 Hz` or `rigctl: T 1 -> TX on`. Reads (`f`, `l ...`,
+`u ...`, `dump_state`, ...) print nothing: `tools/rigctl_panel.py` polls
+about twenty a second, which would bury everything else. To see them too,
+start maxibitx with `MAXIBITX_RIGCTL_TRACE=1` in the environment; the
+`init: Hamlib/rigctld listening` line then says so. `radio_tune_to()`/`radio_set_tx()` (`radio.c`)
 themselves print nothing — each control surface logs its own result,
 since it's the one that knows which command triggered the change. This
 is minibitx's primary window into operational state once startup
