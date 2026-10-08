@@ -27,11 +27,15 @@ The screen, top to bottom:
 - **Top bar:** band menu, the frequency, mode (CW, CWR, USB, LSB, DIGI),
   the RX/TX light, volume, and the settings gear. The band menu remembers the last
   frequency used on each band.
-- **RIT:** −100, −10, the offset (tap it to clear), +10, +100. While
-  it's set, a green marker on the spectrum, scale and waterfall shows
-  where the receiver is listening; the display stays centred on the dial,
-  so a signal doesn't move when RIT does. An offset past the span shows
-  as an arrow at that edge.
+- **RIT / XIT:** RIT or XIT picks which offset −100, −10, +10 and +100
+  change; the value between them is that offset (tap it to clear it), and
+  the group's title says where it puts you, e.g. `XIT · TX 14.057.000`.
+  RIT moves only the receiver, XIT only the transmitter. A green marker
+  on the spectrum, scale and waterfall shows where RIT has the receiver
+  listening, a red `TX` marker where XIT will transmit, solid while
+  transmitting. The display stays centred on the dial, so a signal
+  doesn't move when either does. An offset past the span shows as an
+  arrow at that edge. Retuning clears both.
   **FILTER:** the CW filter on or off, its width and its centre (the CW
   pitch). In DIGI the radio holds the filter out of circuit and the
   group says so.
@@ -82,7 +86,7 @@ band memory are kept in `~/.maxibitx_panel.json`.
 
 **Tune** keys the transmitter with the 1 kHz test tone, so the carrier is
 1 kHz from the dial, at the power set beside it; maxibitx drops it after
-30 s. **APF, NR and XIT** are on the screen but disabled: maxibitx doesn't
+30 s. **APF and NR** are on the screen but disabled: maxibitx doesn't
 have them yet.
 
 The panel connects at start-up to the last host used (127.0.0.1 the first
