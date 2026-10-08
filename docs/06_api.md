@@ -144,7 +144,8 @@ error. A leading `+` (extended-response request) is accepted and
 ignored - replies are always the plain form. Long command names
 (`\set_freq`) aren't supported, except `\dump_state` and `\chk_vfo`.
 Each connection gets its own thread; any number of clients can be
-connected.
+connected. The console shows every set and every error, but not reads,
+unless `MAXIBITX_RIGCTL_TRACE=1` is in maxibitx's environment.
 
 | Command | Reply | Notes |
 |---|---|---|
