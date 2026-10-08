@@ -15,6 +15,14 @@ static volatile int mode = TONE_GEN_OFF;
 static double phase_a = 0.0;
 static double phase_b = 0.0;
 
+// Audio-thread-only, like the phases.
+static double single_hz = TONE_GEN_SINGLE_HZ;
+
+void tone_gen_set_single_hz(double hz) {
+    if (hz > 0.0)
+        single_hz = hz;
+}
+
 void tone_gen_set_mode(enum tone_gen_mode m) {
     if (m == TONE_GEN_OFF || m == TONE_GEN_SINGLE || m == TONE_GEN_TWO)
         mode = m;
@@ -35,7 +43,7 @@ static double advance(double *phase, double hz) {
 double tone_gen_sample(void) {
     switch (mode) {
     case TONE_GEN_SINGLE:
-        return advance(&phase_a, TONE_GEN_SINGLE_HZ);
+        return advance(&phase_a, single_hz);
     case TONE_GEN_TWO:
         // 0.5 each: the sum peaks at 1.0, the same PEP as one full-scale
         // tone, with half its average power.
