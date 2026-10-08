@@ -172,6 +172,7 @@ SPECTRUM_DB_FLOOR = -100.0     # dBFS-style: 0 dB is one full-scale tone; with a
 # The noise then sits a few dB up from the bottom wherever it is, and the
 # height above it goes to signals.
 AUTO_FLOOR_PERCENTILE = 20
+AUTO_FLOOR_WITHIN_HZ = 10000   # only bins this close to the centre, inside the filter's flat top
 AUTO_FLOOR_BELOW_NOISE_DB = 6.0
 AUTO_FLOOR_SMOOTHING_S = 2.0
 AUTO_FLOOR_SNAP_DB = 15.0      # a jump this big (a new band) is taken at once
@@ -184,12 +185,14 @@ AUTO_FLOOR_MIN_RANGE_DB = 30.0 # never closer than this to the ceiling
 SPECTRUM_DB_CEILING = -30.0
 # Displayed half-spans. The FFT always covers the full +-48 kHz at
 # 46.875 Hz/bin; these crop it, so a narrow span spreads the same bins
-# wider rather than resolving finer.
-SPECTRUM_SPAN_CHOICES_HZ = (2500, 5000, 15000)
-SPECTRUM_DEFAULT_HALF_SPAN_HZ = 15000
+# wider rather than resolving finer. The widest stays inside the crystal
+# filter: the sBitx's is about 27 kHz wide at -6 dB, so a 30 kHz span
+# showed its skirts at both edges (the zBitx's is about 35 kHz).
+SPECTRUM_SPAN_CHOICES_HZ = (2500, 5000, 12500)
+SPECTRUM_DEFAULT_HALF_SPAN_HZ = 12500
 # Frequency scale under the trace: (major, minor) tick spacing in Hz for
 # each half-span. Majors carry a label.
-SCALE_TICKS_HZ = {2500: (1000, 500), 5000: (2000, 500), 15000: (5000, 1000)}
+SCALE_TICKS_HZ = {2500: (1000, 500), 5000: (2000, 500), 12500: (5000, 1000)}
 TRACE_H = 70                   # spectrum trace height, px
 SCALE_H = 18                   # frequency scale strip height, px
 WATERFALL_STOPS = ((0.00, (8, 19, 28)), (0.30, (0, 0, 150)), (0.50, (0, 170, 230)),
@@ -1752,12 +1755,15 @@ class Panel(tk.Tk):
             c.tag_lower(c.create_rectangle(x1 - 3, y0, x2 + 3, y0 + SCALE_H, fill="#101B22",
                                            outline="", tags="offset"), t)
 
-    def display_floor(self, db):
+    def display_floor(self, db, bin_hz):
         """The level at the bottom of the trace and the darkest waterfall
-        colour: fixed, or with auto floor, just below the band noise."""
+        colour: fixed, or with auto floor, just below the band noise -
+        measured near the centre, away from the crystal filter's skirts."""
         if not self.auto_floor_var.get():
             return SPECTRUM_DB_FLOOR
-        noise = float(np.percentile(db, AUTO_FLOOR_PERCENTILE))
+        keep = max(int(AUTO_FLOOR_WITHIN_HZ / bin_hz), 8)
+        mid = len(db) // 2
+        noise = float(np.percentile(db[max(0, mid - keep):mid + keep], AUTO_FLOOR_PERCENTILE))
         now = time.monotonic()
         if self.noise_db is None or abs(noise - self.noise_db) > AUTO_FLOOR_SNAP_DB:
             self.noise_db = noise
@@ -1811,7 +1817,7 @@ class Panel(tk.Tk):
             db = db[center - half_bins:center + half_bins]
             n = len(db)
             peak_db = float(np.max(db))
-            floor_db = self.display_floor(db)
+            floor_db = self.display_floor(db, bin_hz)
 
             def to_frac(levels):
                 return (np.clip(levels, floor_db, SPECTRUM_DB_CEILING)
