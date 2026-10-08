@@ -218,8 +218,11 @@ period:
   (`uac_pull_audio_tx()`) and upsampled 2x (`upsample48k.c`). Gaps are
   filled with silence so the filter history stays continuous.
 - Test tones, in any mode, while the generator is on (`tone_gen.c`,
-  rigctld `U TONE 1|2`): a full-scale 1000 Hz tone, or 700 + 1900 Hz at
-  half amplitude each. Both peak at full scale, so both reach the same
+  rigctld `U TONE 1|2`): a full-scale single tone, or 700 + 1900 Hz at
+  half amplitude each. The single tone is 1000 Hz in USB, LSB and
+  DIGITAL, landing 1 kHz from the dial; in CW and CWR it is the CW pitch,
+  which the CW shift lands on the dial (plus XIT), so TUNE's carrier is
+  where a key-down goes. Both peak at full scale, so both reach the same
   PEP as CW; the two-tone's average power is half. Any PTT source keys
   them, and the sideband still follows the mode. After 30 s in transmit
   the generator turns itself off and PTT drops. Design and measurement
