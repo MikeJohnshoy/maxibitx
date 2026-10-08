@@ -110,8 +110,8 @@ flowchart TD
 ### The radio model
 
 There is one radio state, owned by `radio.c` and shared by every
-interface: one VFO frequency, one mode, a receive-only RIT offset, and a
-transmit flag. A change made through any interface is the change; the
+interface: one VFO frequency, one mode, a receive-only RIT offset, a
+transmit-only XIT offset, and a transmit flag. A change made through any interface is the change; the
 next read through any other interface sees it. The mode selects both the
 onboard demodulator and the transmit source:
 
@@ -138,7 +138,7 @@ radio's controls, in different forms, so there are five interfaces:
 
 | Interface | Transport | Carries |
 |---|---|---|
-| rigctld | TCP 4532, text | tuning, mode, PTT, RIT, levels, S-meter, keyer, CW text |
+| rigctld | TCP 4532, text | tuning, mode, PTT, RIT, XIT, levels, S-meter, keyer, CW text |
 | iq_stream | UDP 4536 | raw 96 kHz I/Q in a minimal format, up to 4 subscribers |
 | HPSDR Protocol 1 | UDP 1024 | I/Q, tuning and MOX for existing SDR applications, one client |
 | USB gadget | the Pi's USB-C port | 48 kHz audio in and out, Kenwood TS-480 CAT |
@@ -309,7 +309,7 @@ external interfaces are in `src/interfaces/`.
 ### Radio state
 
 - **`radio.c`**: the single owner of radio state: frequency, mode, RIT,
-  CW pitch and the transmit flag. `radio_tune_to()` sets the first
+  XIT, CW pitch and the transmit flag. `radio_tune_to()` sets the first
   oscillator and the band filter. `radio_set_mode()` points the
   demodulator at the mode, and holds the narrow filter out in DIGITAL.
   `radio_set_tx()` checks that the board may transmit and that the dial
@@ -929,7 +929,7 @@ flowchart TD
     BFO["clk1 = bfo_freq<br/>40,035,000 Hz"] --> M2
     M2 -->|"wanted product on the filter centre<br/>other 45 kHz above, rejected"| XF["Crystal filter"]
     XF --> M1["Mixer 1"]
-    CLK2["clk2 = dial + xtal_filter_center<br/>no RIT"] --> M1
+    CLK2["clk2 = dial + XIT + xtal_filter_center<br/>no RIT"] --> M1
     M1 --> PA["PA, fixed gain"] --> LPF["Band LPF"] --> ANT["Antenna"]
 ```
 
@@ -972,7 +972,7 @@ runs `radio_tx_apply()`.
 1. Mute the receive input (the codec's line-input mute, left channel),
    before any transmit RF exists.
 2. Set clk1 to `bfo_freq` (40,035,000 Hz), and clk2 to the dial plus
-   the crystal filter centre, without RIT.
+   the crystal filter centre, without RIT and with XIT.
 3. Raise EXT_PTT, for an external amplifier.
 4. Wait `ext_ptt_delay_ms` (20 ms by default, settable from 0 to 100 in
    `hw_settings.ini`), so an amplifier's relay has closed before RF
@@ -1323,6 +1323,7 @@ targets. Each prints its cases and exits non-zero on a failure.
 | `make test-upsample48k` | `upsample48k.c`: passband gain and rejection of the image the zero-stuffing creates |
 | `make test-cw` | `cw.c`: the keying envelope and its weighting, with key edges arriving through `key_input.c` at their own timestamps, including late capture reads and a codec clock 300 ppm off |
 | `make test-key-input` | `key_input.c`: debounce, bounce trains and glitches, mono-plug detection, paddle reversal, and placing edges in blocks |
+| `make test-radio` | `radio.c`'s RIT and XIT: the receive and transmit clocks each moves, a change mid-transmission, a retune clearing both, and the band check at the transmit frequency |
 | `make test-encoder` | `encoder.c` and `knobs.c`: clicks each way through contact bounce, presses and their debounce, the tuning step, speed-up and push, no tuning in TX, volume and mute |
 | `make test-keyer` | `keyer.c`: exact element timing in samples for golden cases, and random paddle input in every mode checked against a sample-by-sample specification model; text, spacing and speed changes |
 | `make test-keyer-straight` | the same tests against `keyer_straight.c`, which must refuse what it does not offer |
