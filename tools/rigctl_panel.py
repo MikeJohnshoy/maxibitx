@@ -165,7 +165,17 @@ SPECTRUM_REDRAW_MS = 66        # about 15 frames a second, each the average of ~
 # rate, so a CW station's dits leave a steady outline between them.
 PEAK_DECAY_DB_PER_S = 15.0
 PEAK_COLOR = "#4D7A8F"         # TRACE, dimmed
-SPECTRUM_DB_FLOOR = -100.0     # dBFS-style: 0 dB is one full-scale tone
+SPECTRUM_DB_FLOOR = -100.0     # dBFS-style: 0 dB is one full-scale tone; with auto floor off
+# Auto floor: the bottom of the display follows the band's noise, taken as
+# the 20th percentile of the displayed bins (signals, even a band full of
+# FT8, rarely cover a fifth of them), smoothed over a couple of seconds.
+# The noise then sits a few dB up from the bottom wherever it is, and the
+# height above it goes to signals.
+AUTO_FLOOR_PERCENTILE = 20
+AUTO_FLOOR_BELOW_NOISE_DB = 6.0
+AUTO_FLOOR_SMOOTHING_S = 2.0
+AUTO_FLOOR_SNAP_DB = 15.0      # a jump this big (a new band) is taken at once
+AUTO_FLOOR_MIN_RANGE_DB = 30.0 # never closer than this to the ceiling
 # Not 0 dBFS: nothing on this receiver's raw I/Q comes near full scale.
 # -37.5 was set from the strongest signal first measured on an sBitx
 # (-50 dBFS); strong FT8 went past it, so -30. A signal above the
@@ -570,11 +580,19 @@ class FreqDisplay(tk.Canvas):
     def draw(self):
         self.delete("all")
         self.slots = []
+        text = str(self.hz) if self.hz is not None else "--------"
         if self.hz is None:
-            self.create_text(4, 38, text="--.---.---", fill=DIM, font=self.font, anchor="sw")
-            self.configure(width=200)
+            x = 2
+            for i, ch in enumerate(text):
+                if i > 0 and (len(text) - i) % 3 == 0:
+                    self.create_text(x + self.SEP_W / 2, 38, text=".", fill=DIM,
+                                     font=self.font, anchor="s")
+                    x += self.SEP_W
+                self.create_text(x + self.DIGIT_W / 2, 38, text=ch, fill=DIM, font=self.font,
+                                 anchor="s")
+                x += self.DIGIT_W
+            self.configure(width=x + 4)
             return
-        text = str(self.hz)
         x = 2
         for i, ch in enumerate(text):
             place = 10 ** (len(text) - 1 - i)
@@ -743,9 +761,11 @@ class SettingsDialog(tk.Toplevel):
         disp.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         ttk.Checkbutton(disp, text="Peak line", variable=p.peak_var, style="Toolbutton",
                         command=p.save_settings).grid(row=0, column=0, sticky="w")
-        ttk.Label(disp, text="each frequency's highest level, falling back "
-                  f"{PEAK_DECAY_DB_PER_S:g} dB a second", style="PanelMuted.TLabel").grid(
-            row=0, column=1, sticky="w", padx=(10, 0))
+        ttk.Checkbutton(disp, text="Auto floor", variable=p.auto_floor_var, style="Toolbutton",
+                        command=p.save_settings).grid(row=0, column=1, sticky="w", padx=(4, 0))
+        ttk.Label(disp, text=f"peak line falls {PEAK_DECAY_DB_PER_S:g} dB/s; auto floor follows "
+                  f"the band noise (off: {SPECTRUM_DB_FLOOR:g} dB)",
+                  style="PanelMuted.TLabel").grid(row=0, column=2, sticky="w", padx=(10, 0))
 
         f.columnconfigure(0, weight=1)
         f.columnconfigure(1, weight=1)
@@ -861,6 +881,9 @@ class Panel(tk.Tk):
         self.macro_vars = [(tk.StringVar(value=lab), tk.StringVar(value=txt)) for lab, txt in macros]
         self.band_memory = dict(cfg.get("band_memory", {}))
         self.peak_var = tk.BooleanVar(value=cfg.get("peak_line", True))
+        self.auto_floor_var = tk.BooleanVar(value=cfg.get("auto_floor", True))
+        self.noise_db = None       # the auto floor's smoothed noise estimate
+        self.noise_time = 0.0
         self.peak_db = None        # the peak line's levels, display bins
         self.peak_key = None       # (dial, bins) the peak line was built for
         self.peak_time = 0.0
@@ -1239,6 +1262,7 @@ class Panel(tk.Tk):
             "macros": [[lab.get(), txt.get()] for lab, txt in self.macro_vars],
             "band_memory": self.band_memory,
             "peak_line": self.peak_var.get(),
+            "auto_floor": self.auto_floor_var.get(),
         })
         save_config(self.cfg)
 
@@ -1658,7 +1682,7 @@ class Panel(tk.Tk):
         self.waterfall_image.configure(data=header + rows.tobytes(), format="PPM")
 
     def add_waterfall_row(self, frac):
-        """frac: the displayed bins, 0 (SPECTRUM_DB_FLOOR) to 1 (ceiling).
+        """frac: the displayed bins, 0 (the floor) to 1 (the ceiling).
         Each pixel shows the strongest bin under it, so a narrow CW signal
         isn't averaged away at the wide span."""
         w = self.waterfall_rows.shape[1]
@@ -1728,6 +1752,22 @@ class Panel(tk.Tk):
             c.tag_lower(c.create_rectangle(x1 - 3, y0, x2 + 3, y0 + SCALE_H, fill="#101B22",
                                            outline="", tags="offset"), t)
 
+    def display_floor(self, db):
+        """The level at the bottom of the trace and the darkest waterfall
+        colour: fixed, or with auto floor, just below the band noise."""
+        if not self.auto_floor_var.get():
+            return SPECTRUM_DB_FLOOR
+        noise = float(np.percentile(db, AUTO_FLOOR_PERCENTILE))
+        now = time.monotonic()
+        if self.noise_db is None or abs(noise - self.noise_db) > AUTO_FLOOR_SNAP_DB:
+            self.noise_db = noise
+        else:
+            dt = min(now - self.noise_time, 1.0)
+            self.noise_db += (noise - self.noise_db) * (1.0 - np.exp(-dt / AUTO_FLOOR_SMOOTHING_S))
+        self.noise_time = now
+        return min(self.noise_db - AUTO_FLOOR_BELOW_NOISE_DB,
+                   SPECTRUM_DB_CEILING - AUTO_FLOOR_MIN_RANGE_DB)
+
     def update_peak(self, db):
         """The peak line: each bin's highest level, falling back at
         PEAK_DECAY_DB_PER_S. Starts again on a retune or a span change,
@@ -1771,10 +1811,11 @@ class Panel(tk.Tk):
             db = db[center - half_bins:center + half_bins]
             n = len(db)
             peak_db = float(np.max(db))
+            floor_db = self.display_floor(db)
 
             def to_frac(levels):
-                return (np.clip(levels, SPECTRUM_DB_FLOOR, SPECTRUM_DB_CEILING)
-                        - SPECTRUM_DB_FLOOR) / (SPECTRUM_DB_CEILING - SPECTRUM_DB_FLOOR)
+                return (np.clip(levels, floor_db, SPECTRUM_DB_CEILING)
+                        - floor_db) / (SPECTRUM_DB_CEILING - floor_db)
 
             def trace(levels, color, width):
                 coords = np.empty(n * 2)
@@ -1794,6 +1835,8 @@ class Panel(tk.Tk):
             self.draw_scale(w, half_bins * bin_hz)
             self.draw_offset_marker(w, half_bins * bin_hz, self.rit_hz, "RIT", RIT_GREEN)
             readout = f"peak {peak_db:.0f} dB"
+            if self.noise_db is not None and self.auto_floor_var.get():
+                readout += f"   noise {self.noise_db:.0f} dB"
         if self.status_message and time.monotonic() < self.status_until:
             self.status_label.configure(text=self.status_message)
         else:
