@@ -1,5 +1,6 @@
 // hamlib.c - see hamlib.h for scope.
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -82,6 +83,22 @@ static void send_line(int fd, const char *s)
     send(fd, s, strlen(s), MSG_NOSIGNAL);
 }
 
+// Reads (f, l, u, ...) change nothing, and a client polling them would
+// bury the console, so they print only with MAXIBITX_RIGCTL_TRACE=1 in the
+// environment. Every set, refusal and error prints regardless.
+static int trace_reads = 0;
+
+static void get_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void get_log(const char *fmt, ...)
+{
+    if (!trace_reads)
+        return;
+    va_list ap;
+    va_start(ap, fmt);
+    vprintf(fmt, ap);
+    va_end(ap);
+}
+
 static void send_rprt(int fd, int code)
 {
     char buf[32];
@@ -118,7 +135,7 @@ static int handle_line(int fd, char *line)
         char buf[32];
         snprintf(buf, sizeof(buf), "%d\n", freq_hdr);
         send_line(fd, buf);
-        printf("rigctl: f -> %d Hz\n", freq_hdr);
+        get_log("rigctl: f -> %d Hz\n", freq_hdr);
         return 0;
     }
 
@@ -141,7 +158,7 @@ static int handle_line(int fd, char *line)
         char buf[8];
         snprintf(buf, sizeof(buf), "%d\n", in_tx ? 1 : 0);
         send_line(fd, buf);
-        printf("rigctl: t -> %s\n", in_tx ? "TX" : "RX");
+        get_log("rigctl: t -> %s\n", in_tx ? "TX" : "RX");
         return 0;
     }
 
@@ -177,7 +194,7 @@ static int handle_line(int fd, char *line)
         char buf[16];
         snprintf(buf, sizeof(buf), "%d\n", radio_get_rit());
         send_line(fd, buf);
-        printf("rigctl: j -> %d Hz\n", radio_get_rit());
+        get_log("rigctl: j -> %d Hz\n", radio_get_rit());
         return 0;
     }
 
@@ -202,7 +219,7 @@ static int handle_line(int fd, char *line)
         char buf[16];
         snprintf(buf, sizeof(buf), "%d\n", knobs_get_step());
         send_line(fd, buf);
-        printf("rigctl: n -> %d Hz\n", knobs_get_step());
+        get_log("rigctl: n -> %d Hz\n", knobs_get_step());
         return 0;
     }
 
@@ -226,7 +243,7 @@ static int handle_line(int fd, char *line)
         const char *name = mode_to_name(radio_get_mode());
         snprintf(buf, sizeof(buf), "%s\n%d\n", name, current_passband);
         send_line(fd, buf);
-        printf("rigctl: m -> %s %d\n", name, current_passband);
+        get_log("rigctl: m -> %s %d\n", name, current_passband);
         return 0;
     }
 
@@ -262,13 +279,13 @@ static int handle_line(int fd, char *line)
             char buf[32];
             snprintf(buf, sizeof(buf), "%.6f\n", rx_audio_get_volume() / 100.0);
             send_line(fd, buf);
-            printf("rigctl: l AF -> %d%%\n", rx_audio_get_volume());
+            get_log("rigctl: l AF -> %d%%\n", rx_audio_get_volume());
         } else if (strcmp(level_name, "STRENGTH") == 0) {
             int db = rx_audio_get_strength_db();
             char buf[16];
             snprintf(buf, sizeof(buf), "%d\n", db);
             send_line(fd, buf);
-            printf("rigctl: l STRENGTH -> %d (dB relative to S9)\n", db);
+            get_log("rigctl: l STRENGTH -> %d (dB relative to S9)\n", db);
         } else if (strcmp(level_name, "MICGAIN") == 0) {
             // Extension, not a Hamlib RIG_LEVEL: the raw mic_tx_gain multiplier
             // (sound.h), not 0.0-1.0, since it has no natural 100%. Under l/L
@@ -276,12 +293,12 @@ static int handle_line(int fd, char *line)
             char buf[32];
             snprintf(buf, sizeof(buf), "%.6f\n", sound_get_mic_tx_gain());
             send_line(fd, buf);
-            printf("rigctl: l MICGAIN -> %.6f\n", sound_get_mic_tx_gain());
+            get_log("rigctl: l MICGAIN -> %.6f\n", sound_get_mic_tx_gain());
         } else if (strcmp(level_name, "RFPOWER") == 0) {
             char buf[32];
             snprintf(buf, sizeof(buf), "%.6f\n", sound_get_tx_power());
             send_line(fd, buf);
-            printf("rigctl: l RFPOWER -> %.6f of max_power\n", sound_get_tx_power());
+            get_log("rigctl: l RFPOWER -> %.6f of max_power\n", sound_get_tx_power());
         } else if (strcmp(level_name, "ALC") == 0) {
             // Extension, like MICGAIN: gain reduction in dB rather than
             // Hamlib's 0.0-1.0, because dB is the unit mic gain is set by
@@ -289,7 +306,7 @@ static int handle_line(int fd, char *line)
             char buf[32];
             snprintf(buf, sizeof(buf), "%.2f\n", sound_get_alc_db());
             send_line(fd, buf);
-            printf("rigctl: l ALC -> %.2f dB of gain reduction\n", sound_get_alc_db());
+            get_log("rigctl: l ALC -> %.2f dB of gain reduction\n", sound_get_alc_db());
         } else if (strcmp(level_name, "CWPITCH") == 0) {
             // A real Hamlib RIG_LEVEL, in Hz. Quantized to stage 3's filter
             // bank, and one value for the sidetone, the RX BFO and the
@@ -297,13 +314,13 @@ static int handle_line(int fd, char *line)
             char buf[16];
             snprintf(buf, sizeof(buf), "%d\n", radio_get_cw_pitch());
             send_line(fd, buf);
-            printf("rigctl: l CWPITCH -> %d Hz\n", radio_get_cw_pitch());
+            get_log("rigctl: l CWPITCH -> %d Hz\n", radio_get_cw_pitch());
         } else if (strcmp(level_name, "KEYSPD") == 0) {
             // A real Hamlib RIG_LEVEL: the keyer's speed in WPM.
             char buf[16];
             snprintf(buf, sizeof(buf), "%d\n", keyer_get_wpm());
             send_line(fd, buf);
-            printf("rigctl: l KEYSPD -> %d WPM\n", keyer_get_wpm());
+            get_log("rigctl: l KEYSPD -> %d WPM\n", keyer_get_wpm());
         } else if (strcmp(level_name, "CWWIDTH") == 0) {
             // Extension: Hamlib carries filter width in the m/M passband
             // argument rather than as a level, but that argument is still
@@ -312,13 +329,13 @@ static int handle_line(int fd, char *line)
             char buf[16];
             snprintf(buf, sizeof(buf), "%d\n", rx_audio_get_narrow_width());
             send_line(fd, buf);
-            printf("rigctl: l CWWIDTH -> %d Hz\n", rx_audio_get_narrow_width());
+            get_log("rigctl: l CWWIDTH -> %d Hz\n", rx_audio_get_narrow_width());
         } else if (strcmp(level_name, "XTALCENTER") == 0) {
             // Extension: xtal_filter_center in Hz, for tools/xtal_sweep.py.
             char buf[16];
             snprintf(buf, sizeof(buf), "%d\n", radio_get_xtal_filter_center());
             send_line(fd, buf);
-            printf("rigctl: l XTALCENTER -> %d Hz\n", radio_get_xtal_filter_center());
+            get_log("rigctl: l XTALCENTER -> %d Hz\n", radio_get_xtal_filter_center());
         } else {
             send_rprt(fd, -1);
             printf("rigctl: l %s -> unsupported level\n", level_name);
@@ -405,40 +422,40 @@ static int handle_line(int fd, char *line)
             char buf[8];
             snprintf(buf, sizeof(buf), "%d\n", rx_audio_get_narrow_filter());
             send_line(fd, buf);
-            printf("rigctl: u NARROW -> %s\n",
+            get_log("rigctl: u NARROW -> %s\n",
                    rx_audio_get_narrow_filter() ? "on" : "off");
         } else if (strcmp(func_name, "FFTFILT") == 0) {
             char buf[8];
             snprintf(buf, sizeof(buf), "%d\n", rx_audio_get_narrow_filter_impl());
             send_line(fd, buf);
-            printf("rigctl: u FFTFILT -> %s\n",
+            get_log("rigctl: u FFTFILT -> %s\n",
                    rx_audio_get_narrow_filter_impl() ? "fft" : "elliptic");
         } else if (strcmp(func_name, "TONE") == 0) {
             char buf[8];
             snprintf(buf, sizeof(buf), "%d\n", (int)tone_gen_get_mode());
             send_line(fd, buf);
-            printf("rigctl: u TONE -> %d\n", (int)tone_gen_get_mode());
+            get_log("rigctl: u TONE -> %d\n", (int)tone_gen_get_mode());
         } else if (strcmp(func_name, "PADREV") == 0) {
             char buf[8];
             snprintf(buf, sizeof(buf), "%d\n", key_input_get_reverse());
             send_line(fd, buf);
-            printf("rigctl: u PADREV -> %d\n", key_input_get_reverse());
+            get_log("rigctl: u PADREV -> %d\n", key_input_get_reverse());
         } else if (strcmp(func_name, "KEYER") == 0) {
             char buf[8];
             snprintf(buf, sizeof(buf), "%d\n", (int)keyer_get_mode());
             send_line(fd, buf);
-            printf("rigctl: u KEYER -> %d (%s)\n", (int)keyer_get_mode(),
+            get_log("rigctl: u KEYER -> %d (%s)\n", (int)keyer_get_mode(),
                    keyer_mode_name(keyer_get_mode()));
         } else if (strcmp(func_name, "MORSE") == 0) {
             char buf[8];
             snprintf(buf, sizeof(buf), "%d\n", keyer_text_busy() ? 1 : 0);
             send_line(fd, buf);
-            printf("rigctl: u MORSE -> %d\n", keyer_text_busy() ? 1 : 0);
+            get_log("rigctl: u MORSE -> %d\n", keyer_text_busy() ? 1 : 0);
         } else if (strcmp(func_name, "MUTE") == 0) {
             char buf[8];
             snprintf(buf, sizeof(buf), "%d\n", rx_audio_get_mute());
             send_line(fd, buf);
-            printf("rigctl: u MUTE -> %d\n", rx_audio_get_mute());
+            get_log("rigctl: u MUTE -> %d\n", rx_audio_get_mute());
         } else {
             send_rprt(fd, -1);
             printf("rigctl: u %s -> unsupported function\n", func_name);
@@ -515,7 +532,7 @@ static int handle_line(int fd, char *line)
     if (cmd[0] == 'v' && (cmd[1] == '\0' || cmd[1] == ' ')) {
         // get_vfo - maxibitx has one VFO; always report it
         send_line(fd, "VFOA\n");
-        printf("rigctl: v -> VFOA\n");
+        get_log("rigctl: v -> VFOA\n");
         return 0;
     }
     if (cmd[0] == 'V' && cmd[1] == ' ') {
@@ -567,7 +584,7 @@ static int handle_line(int fd, char *line)
         // Single-VFO radio - report "not in VFO mode" so callers send
         // plain f/F/t/T without needing a VFO argument.
         send_line(fd, "0\n");
-        printf("rigctl: chk_vfo -> 0\n");
+        get_log("rigctl: chk_vfo -> 0\n");
         return 0;
     }
 
@@ -635,7 +652,7 @@ static int handle_line(int fd, char *line)
         send_line(fd, "0x5808\n");                    // has_set_level (AF | CWPITCH | RFPOWER | KEYSPD)
         send_line(fd, "0x0\n");                       // has_get_parm
         send_line(fd, "0x0\n");                       // has_set_parm
-        printf("rigctl: dump_state -> sent\n");
+        get_log("rigctl: dump_state -> sent\n");
         return 0;
     }
 
@@ -740,7 +757,10 @@ int hamlib_init(int port)
         return -1;
     }
     pthread_detach(accept_thread);
-    printf("init: Hamlib/rigctld listening on TCP %d\n", port);
+    const char *t = getenv("MAXIBITX_RIGCTL_TRACE");
+    trace_reads = t && t[0] && strcmp(t, "0") != 0;
+    printf("init: Hamlib/rigctld listening on TCP %d%s\n", port,
+           trace_reads ? ", logging every command (MAXIBITX_RIGCTL_TRACE)" : "");
     return 0;
 }
 
