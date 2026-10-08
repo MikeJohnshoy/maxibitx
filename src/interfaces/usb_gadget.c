@@ -924,6 +924,15 @@ static void cat_log_get(char *last, size_t last_size, const char *new_reply,
   printf("%s", log_line);
 }
 
+// The one RIT/XIT offset a Kenwood has. maxibitx keeps two (rigctld's j
+// and z set them separately); this reports the one in use - RIT's if it's
+// on, else XIT's if that's on, else RIT's.
+static int cat_offset(void) {
+  if (!radio_rit_enabled() && radio_xit_enabled())
+    return radio_get_xit();
+  return radio_get_rit();
+}
+
 static void cat_handle_command(char *cmd) {
   size_t len = strlen(cmd);
   if (len == 0)
@@ -1006,29 +1015,60 @@ static void cat_handle_command(char *cmd) {
     return;
   }
 
-  // --- RC: RIT/XIT clear - real Kenwood rigs zero the offset itself
-  // (not just disable it), so this calls radio_set_rit(0) rather than
-  // radio_set_rit_enabled(0) - same call rigctld's "J 0" makes, which
-  // also implicitly disables (see radio_set_rit()'s comment, radio.h).
-  // No reply, matching TX/RX/TQ-set's bare-command convention above. ---
-  if (len == 2 && strncmp(cmd, "RC", 2) == 0) {
-    radio_set_rit(0);
-    printf("cat: RC -> RIT cleared\n");
+  // --- XT: XIT on/off, as RT is for RIT. A Kenwood has one offset for
+  // both, so turning XIT on with no XIT offset of its own takes RIT's. ---
+  if (len >= 2 && cmd[0] == 'X' && cmd[1] == 'T') {
+    if (len == 2) {
+      static char last[8] = "";
+      char buf[8], log_line[64];
+      snprintf(buf, sizeof(buf), "XT%d;", radio_xit_enabled() ? 1 : 0);
+      cat_send(buf);
+      snprintf(log_line, sizeof(log_line), "cat: XT -> %s (%+d Hz)\n",
+               radio_xit_enabled() ? "on" : "off", radio_get_xit());
+      cat_log_get(last, sizeof(last), buf, log_line);
+    } else {
+      int on = (cmd[2] != '0');
+      if (on && radio_get_xit() == 0)
+        radio_set_xit(radio_get_rit());
+      radio_set_xit_enabled(on);
+      printf("cat: XT%c -> XIT %s (%+d Hz)\n", cmd[2], on ? "on" : "off", radio_get_xit());
+    }
     return;
   }
 
-  // --- RU / RD: step RIT by CAT_RIT_STEP_HZ, clamped to +/-RIT_MAX_HZ.
-  // Kenwood's optional step-count suffix ("RU005") is accepted but ignored
-  // (unverified against a real rig). Enables RIT, like turning a real RIT
-  // knob. ---
+  // --- RC: RIT/XIT clear - real Kenwood rigs zero the offset itself
+  // (not just disable it), so this calls radio_set_rit(0) and
+  // radio_set_xit(0) rather than switching them off - the same calls
+  // rigctld's "J 0" and "Z 0" make, which also disable (radio.h).
+  // No reply, matching TX/RX/TQ-set's bare-command convention above. ---
+  if (len == 2 && strncmp(cmd, "RC", 2) == 0) {
+    radio_set_rit(0);
+    radio_set_xit(0);
+    printf("cat: RC -> RIT and XIT cleared\n");
+    return;
+  }
+
+  // --- RU / RD: step the offset by CAT_RIT_STEP_HZ, clamped to
+  // +/-RIT_MAX_HZ. Kenwood's optional step-count suffix ("RU005") is
+  // accepted but ignored (unverified against a real rig). One offset serves
+  // RIT and XIT on a Kenwood, so both stored offsets move together and each
+  // keeps its on/off - except that with both off, RIT comes on, like turning
+  // a real RIT knob. ---
 #define CAT_RIT_STEP_HZ 10
   if (len >= 2 && cmd[0] == 'R' && (cmd[1] == 'U' || cmd[1] == 'D')) {
     int delta = (cmd[1] == 'U') ? CAT_RIT_STEP_HZ : -CAT_RIT_STEP_HZ;
-    int hz = radio_get_rit() + delta;
+    int rit_on = radio_rit_enabled(), xit_on = radio_xit_enabled();
+    int hz = cat_offset() + delta;
     if (hz > RIT_MAX_HZ) hz = RIT_MAX_HZ;
     if (hz < -RIT_MAX_HZ) hz = -RIT_MAX_HZ;
+    if (!rit_on && !xit_on)
+      rit_on = 1;
     radio_set_rit(hz);
-    printf("cat: R%c -> RIT %+d Hz\n", cmd[1], hz);
+    radio_set_xit(hz);
+    radio_set_rit_enabled(rit_on && hz != 0);
+    radio_set_xit_enabled(xit_on && hz != 0);
+    printf("cat: R%c -> offset %+d Hz (RIT %s, XIT %s)\n", cmd[1], hz,
+           radio_rit_enabled() ? "on" : "off", radio_xit_enabled() ? "on" : "off");
     return;
   }
 
@@ -1122,9 +1162,9 @@ static void cat_handle_command(char *cmd) {
   //    [0..1]   "IF"
   //    [2..12]  frequency, 11 digits
   //    [13..16] frequency step, 4 chars       (we send zeros)
-  //    [17..22] RIT/XIT offset, sign + 5 digits
+  //    [17..22] RIT/XIT offset, sign + 5 digits (cat_offset())
   //    [23]     RIT on/off
-  //    [24]     XIT on/off                    (we have none - '0')
+  //    [24]     XIT on/off
   //    [25]     memory bank                   (none - '0')
   //    [26..27] memory channel                (none - "00")
   //    [28]     RX/TX          <- kenwood_get_ptt() reads exactly here
@@ -1141,18 +1181,21 @@ static void cat_handle_command(char *cmd) {
   // 6-char field can't overflow.
   if (len == 2 && strncmp(cmd, "IF", 2) == 0) {
     static char last[48] = "";
-    char buf[48], log_line[96];
-    int rit = radio_get_rit();
+    char buf[48], log_line[112];
+    int offset = cat_offset();
     int rit_on = radio_rit_enabled();
-    //                       freq      step  RIT   riton xit/bank/memch
-    //                         |         |     |     |    |  txrx mode
-    //                         |         |     |     |    |    |   |  tail
-    snprintf(buf, sizeof(buf), "IF%011d" "0000" "%+06d" "%d" "0000" "%d" "%c" "0000000;",
-             freq_hdr, rit, rit_on ? 1 : 0,
+    int xit_on = radio_xit_enabled();
+    //                       freq      step  offset riton xiton bank/memch
+    //                         |         |     |     |    |    |  txrx mode
+    //                         |         |     |     |    |    |    |   |  tail
+    snprintf(buf, sizeof(buf), "IF%011d" "0000" "%+06d" "%d" "%d" "000" "%d" "%c" "0000000;",
+             freq_hdr, offset, rit_on ? 1 : 0, xit_on ? 1 : 0,
              in_tx ? 1 : 0, mode_to_kenwood_digit(radio_get_mode()));
     cat_send(buf);
-    snprintf(log_line, sizeof(log_line), "cat: IF -> sent (freq %d, RIT %+d%s, %s, mode %c)\n",
-             freq_hdr, rit, rit_on ? " on" : " (off)", in_tx ? "TX" : "RX", mode_to_kenwood_digit(radio_get_mode()));
+    snprintf(log_line, sizeof(log_line),
+             "cat: IF -> sent (freq %d, offset %+d, RIT %s, XIT %s, %s, mode %c)\n", freq_hdr,
+             offset, rit_on ? "on" : "off", xit_on ? "on" : "off", in_tx ? "TX" : "RX",
+             mode_to_kenwood_digit(radio_get_mode()));
     cat_log_get(last, sizeof(last), buf, log_line);
     return;
   }
