@@ -70,7 +70,8 @@ rigctld commands used:
 
 Requires Python 3 with tkinter, and numpy. On Raspberry Pi OS:
 `sudo apt install python3-tk python3-numpy fonts-ibm-plex` (the fonts
-are optional; without them the panel uses DejaVu).
+are optional; without them the panel uses another condensed face, scaled
+to fit the same layout).
 
 Run it:
 
@@ -300,10 +301,31 @@ def field_name(text):
     return re.sub(r"[^A-Z0-9_]", "", text.upper())
 
 
+# UI font sizes are scaled to the face found: IBM Plex Sans Condensed, bold
+# 12, sets UI_SIZE_SAMPLE in UI_SIZE_SAMPLE_PX at 96 dpi; a wider face's
+# sizes shrink in proportion (setup_style()).
+UI_SIZE_SAMPLE = "CWR USB LSB DIGI"
+UI_SIZE_SAMPLE_PX = 140
+UI_SIZE_SCALE = 1.0
+
+
+def usz(points):
+    """A UI font size, scaled for the face in use."""
+    return max(7, round(points * UI_SIZE_SCALE))
+
+
 def pick_family(candidates, fallback):
+    """The first candidate the system has. A name fontconfig only reaches
+    as a style of another family ("DejaVu Sans Condensed" is DejaVu Sans,
+    condensed) isn't in tkfont.families() but still works, so a candidate
+    counts if the font it resolves to belongs to its own family rather
+    than to an unrelated substitute."""
     available = set(tkfont.families())
     for name in candidates:
         if name in available:
+            return name
+        actual = tkfont.Font(family=name, size=12).actual("family")
+        if actual and name.startswith(actual):
             return name
     return fallback
 
@@ -475,17 +497,30 @@ class SpectrumClient:
 def setup_style(root):
     """The ttk 'clam' theme, dark, with controls tall enough for a finger
     (44-48 px). Returns the UI and monospace font families in use."""
+    # Points as at 96 dpi whatever the display reports: the layout is
+    # drawn in pixels for an 800x480 screen, and a display that reports a
+    # higher dpi (the 7-inch one can say ~130) would otherwise grow every
+    # font and push the top row past the screen's edge.
+    root.tk.call("tk", "scaling", 96.0 / 72.0)
+    # Condensed faces first: the top row is sized for one. Piboto
+    # Condensed comes with Raspberry Pi OS.
     ui = pick_family(("IBM Plex Sans Condensed", "Barlow Semi Condensed",
-                      "DejaVu Sans Condensed"), "TkDefaultFont")
+                      "Piboto Condensed", "DejaVu Sans Condensed",
+                      "Liberation Sans Narrow", "Nimbus Sans Narrow"), "TkDefaultFont")
     mono = pick_family(("IBM Plex Mono", "DejaVu Sans Mono"), "TkFixedFont")
+    # A wider face than the layout was drawn with gets its sizes scaled
+    # down to match, so the top row still fits 800 px.
+    global UI_SIZE_SCALE
+    wide = tkfont.Font(family=ui, size=12, weight="bold").measure(UI_SIZE_SAMPLE)
+    UI_SIZE_SCALE = min(1.0, UI_SIZE_SAMPLE_PX / wide) if wide > 0 else 1.0
     s = ttk.Style(root)
     s.theme_use("clam")
-    root.option_add("*TCombobox*Listbox.font", (ui, 14))
+    root.option_add("*TCombobox*Listbox.font", (ui, usz(14)))
     root.option_add("*TCombobox*Listbox.background", TILE)
     root.option_add("*TCombobox*Listbox.foreground", TEXT)
     root.option_add("*TCombobox*Listbox.selectBackground", AMBER)
     root.option_add("*TCombobox*Listbox.selectForeground", INK)
-    s.configure(".", background=GROUND, foreground=TEXT, font=(ui, 12),
+    s.configure(".", background=GROUND, foreground=TEXT, font=(ui, usz(12)),
                 bordercolor=LINE, lightcolor=TILE, darkcolor=TILE,
                 troughcolor=PANEL, fieldbackground=TILE, insertcolor=TEXT,
                 selectbackground=AMBER, selectforeground=INK)
@@ -493,28 +528,29 @@ def setup_style(root):
     s.configure("TFrame", background=GROUND)
     s.configure("Panel.TFrame", background=PANEL)
     s.configure("TLabel", background=GROUND, foreground=TEXT)
-    s.configure("Muted.TLabel", foreground=MUTED, font=(ui, 10))
-    s.configure("MuteOn.TLabel", foreground=AMBER, font=(ui, 10, "bold"))
-    s.configure("Status.TLabel", foreground=MUTED, font=(ui, 10))
-    s.configure("PanelMuted.TLabel", background=PANEL, foreground=MUTED, font=(ui, 10))
+    s.configure("Muted.TLabel", foreground=MUTED, font=(ui, usz(10)))
+    s.configure("MuteOn.TLabel", foreground=AMBER, font=(ui, usz(10), "bold"))
+    s.configure("Status.TLabel", foreground=MUTED, font=(ui, usz(10)))
+    s.configure("PanelMuted.TLabel", background=PANEL, foreground=MUTED, font=(ui, usz(10)))
     s.configure("Mono.TLabel", font=(mono, 13, "bold"))
     s.configure("TLabelframe", background=PANEL, bordercolor=LINE, relief="solid", borderwidth=1)
-    s.configure("TLabelframe.Label", background=PANEL, foreground=MUTED, font=(ui, 10))
+    s.configure("TLabelframe.Label", background=PANEL, foreground=MUTED, font=(ui, usz(10)))
     s.configure("TButton", background=TILE, foreground=TEXT, padding=(6, 10),
-                font=(ui, 12, "bold"), borderwidth=1, focusthickness=0)
+                font=(ui, usz(12), "bold"), borderwidth=1, focusthickness=0)
     s.map("TButton", background=[("disabled", PANEL), ("pressed", AMBER), ("active", TILE_HI)],
           foreground=[("disabled", DIM), ("pressed", INK)])
     s.configure("Accent.TButton", background=AMBER, foreground=INK)
     s.map("Accent.TButton", background=[("disabled", PANEL), ("active", "#FFC060")])
+    s.configure("Macro.TButton", padding=(1, 10))  # ten across: the label gets the width
     s.configure("Step.TButton", font=(mono, 13, "bold"), padding=(2, 10))
     s.configure("Value.TButton", font=(mono, 15, "bold"), background=PANEL, padding=(2, 9))
-    s.configure("RX.TButton", font=(ui, 12, "bold"), foreground=MUTED, padding=(6, 8))
-    s.configure("TX.TButton", font=(ui, 12, "bold"), background=TX_RED, foreground="#FFFFFF",
+    s.configure("RX.TButton", font=(ui, usz(12), "bold"), foreground=MUTED, padding=(6, 8))
+    s.configure("TX.TButton", font=(ui, usz(12), "bold"), background=TX_RED, foreground="#FFFFFF",
                 padding=(6, 8))
     s.map("TX.TButton", background=[("active", TX_RED)])
-    s.configure("Off.TButton", font=(ui, 12, "bold"), foreground=AMBER, padding=(6, 8))
+    s.configure("Off.TButton", font=(ui, usz(12), "bold"), foreground=AMBER, padding=(6, 8))
     s.configure("Toolbutton", background=TILE, foreground=TEXT, padding=(4, 10),
-                font=(ui, 12, "bold"), anchor="center", borderwidth=1)
+                font=(ui, usz(12), "bold"), anchor="center", borderwidth=1)
     s.map("Toolbutton", background=[("disabled", PANEL), ("selected", AMBER), ("active", TILE_HI)],
           foreground=[("disabled", DIM), ("selected", INK)])
     s.configure("TCombobox", padding=(6, 9), arrowsize=18, foreground=TEXT,
@@ -532,7 +568,7 @@ def setup_style(root):
     s.configure("TRadiobutton", background=GROUND)
     s.configure("TNotebook", background=GROUND, borderwidth=0)
     s.configure("TNotebook.Tab", background=TILE, foreground=TEXT, padding=(14, 8),
-                font=(ui, 12, "bold"))
+                font=(ui, usz(12), "bold"))
     s.map("TNotebook.Tab", background=[("selected", AMBER)], foreground=[("selected", INK)])
     return ui, mono
 
@@ -969,7 +1005,7 @@ class Panel(tk.Tk):
         top.grid(row=0, column=0, sticky="ew")
         top.columnconfigure(1, weight=1)
         self.band_combo = ttk.Combobox(top, textvariable=self.band_var, width=5, state="readonly",
-                                       values=[b[0] for b in BANDS], font=(self.ui, 13, "bold"))
+                                       values=[b[0] for b in BANDS], font=(self.ui, usz(13), "bold"))
         self.band_combo.grid(row=0, column=0, padx=(0, 8))
         self.band_combo.bind("<<ComboboxSelected>>", self.on_band_selected)
         f = ttk.Frame(top)
@@ -1062,7 +1098,7 @@ class Panel(tk.Tk):
         ttk.Label(bar, text="SPAN", style="Muted.TLabel").grid(row=0, column=0, padx=(0, 4))
         self.span_combo = ttk.Combobox(bar, textvariable=self.span_var, width=6, state="readonly",
                                        values=[self.span_label(h) for h in SPECTRUM_SPAN_CHOICES_HZ],
-                                       font=(self.ui, 12, "bold"))
+                                       font=(self.ui, usz(12), "bold"))
         self.span_combo.grid(row=0, column=1)
         self.span_combo.bind("<<ComboboxSelected>>", lambda e: self.clear_waterfall())
         self.status_label = ttk.Label(bar, text="", style="Status.TLabel", anchor="center",
@@ -1093,7 +1129,8 @@ class Panel(tk.Tk):
         self.macro_buttons = []
         for i in range(len(DEFAULT_MACROS)):
             cw.columnconfigure(i, weight=1, uniform="m")
-            b = ttk.Button(cw, text="", command=lambda i=i: self.send_macro(i))
+            b = ttk.Button(cw, text="", style="Macro.TButton", width=-1,
+                           command=lambda i=i: self.send_macro(i))
             b.grid(row=0, column=i, sticky="ew", padx=1)
             self.macro_buttons.append(b)
         self.refresh_macro_labels()
@@ -1129,7 +1166,7 @@ class Panel(tk.Tk):
         b.grid(row=4, column=0, sticky="ew")
         b.columnconfigure(3, weight=1)
         self.keyer_combo = ttk.Combobox(b, textvariable=self.keyer_var, values=KEYER_MODES,
-                                        width=8, state="readonly", font=(self.ui, 12, "bold"))
+                                        width=8, state="readonly", font=(self.ui, usz(12), "bold"))
         self.keyer_combo.grid(row=0, column=0, padx=(0, 6))
         self.keyer_combo.bind("<<ComboboxSelected>>", self.on_keyer_selected)
         ttk.Label(b, text="WPM", style="Muted.TLabel").grid(row=0, column=1)
