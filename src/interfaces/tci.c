@@ -66,7 +66,7 @@ struct client {
 
 // State as last sent to the clients.
 struct state {
-  int freq, mode, tx, drive, volume_db, mute, rit_on, rit, tx_enable, wpm;
+  int freq, mode, tx, drive, volume_db, mute, rit_on, rit, xit_on, xit, tx_enable, wpm;
 };
 
 static struct client clients[WS_MAX_CLIENTS];
@@ -161,7 +161,9 @@ static void snapshot(struct state *s) {
   s->mute = percent == 0;
   s->rit_on = radio_rit_enabled() != 0;
   s->rit = radio_get_rit();
-  s->tx_enable = radio_tx_allowed(freq_hdr) != 0;
+  s->xit_on = radio_xit_enabled() != 0;
+  s->xit = radio_get_xit();
+  s->tx_enable = radio_tx_allowed(radio_tx_freq()) != 0;
   s->wpm = keyer_get_wpm();
 }
 
@@ -203,6 +205,14 @@ static void pub_rit(const struct state *s) {
   tci_broadcast("rit_offset:0,%d;", s->rit);
   pub.rit = s->rit;
 }
+static void pub_xit_on(const struct state *s) {
+  tci_broadcast("xit_enable:0,%s;", tf(s->xit_on));
+  pub.xit_on = s->xit_on;
+}
+static void pub_xit(const struct state *s) {
+  tci_broadcast("xit_offset:0,%d;", s->xit);
+  pub.xit = s->xit;
+}
 static void pub_tx_enable(const struct state *s) {
   tci_broadcast("tx_enable:0,%s;", tf(s->tx_enable));
   pub.tx_enable = s->tx_enable;
@@ -235,6 +245,10 @@ static void publish_changes(void) {
     pub_rit_on(&s);
   if (s.rit != pub.rit)
     pub_rit(&s);
+  if (s.xit_on != pub.xit_on)
+    pub_xit_on(&s);
+  if (s.xit != pub.xit)
+    pub_xit(&s);
   if (s.wpm != pub.wpm)
     pub_wpm(&s);
   if (!s.mute)
@@ -308,7 +322,7 @@ static void apply_stream(int slot) { tci_stream_set(slot, &clients[slot].cfg); }
 
 // Replies with a fixed "off" state to a per-receiver switch maxibitx lacks.
 static const char *const fixed_off[] = {
-    "tune",           "xit_enable",    "sql_enable",    "rx_nb_enable", "rx_nr_enable",
+    "tune",           "sql_enable",    "rx_nb_enable",  "rx_nr_enable",
     "rx_anf_enable",  "rx_anc_enable", "rx_bin_enable", "rx_apf_enable", "rx_dse_enable",
     "rx_nf_enable",   "lock",          "vfo_lock"};
 
@@ -427,11 +441,33 @@ static void handle(int slot, char *cmd) {
     } else {
       tci_send_to(slot, "rit_offset:0,%d;", s.rit);
     }
+  } else if (!strcmp(name, "xit_enable") && trx0) {
+    if (argc >= 2 && parse_bool(argv[1], &b))
+      radio_set_xit_enabled(b);
+    snapshot(&s);
+    if (argc >= 2) {
+      pub_xit_on(&s);
+      if (s.tx_enable != pub.tx_enable)
+        pub_tx_enable(&s);
+    } else {
+      tci_send_to(slot, "xit_enable:0,%s;", tf(s.xit_on));
+    }
   } else if (!strcmp(name, "xit_offset") && trx0) {
-    if (argc >= 2)
-      tci_broadcast("xit_offset:0,0;");
-    else
-      tci_send_to(slot, "xit_offset:0,0;");
+    if (argc >= 2 && parse_int(argv[1], &v) && v >= -XIT_MAX_HZ && v <= XIT_MAX_HZ) {
+      int on = radio_xit_enabled(); // as rit_offset: the switch is xit_enable's
+      radio_set_xit((int)v);
+      radio_set_xit_enabled(on);
+    }
+    snapshot(&s);
+    if (argc >= 2) {
+      pub_xit(&s);
+      if (s.xit_on != pub.xit_on)
+        pub_xit_on(&s);
+      if (s.tx_enable != pub.tx_enable)
+        pub_tx_enable(&s);
+    } else {
+      tci_send_to(slot, "xit_offset:0,%d;", s.xit);
+    }
   } else if (!strcmp(name, "split_enable")) {
     // Always off. WSJT-X Improved sets it with no transceiver number.
     int bare_set = argc == 1 && (!strcasecmp(argv[0], "true") || !strcasecmp(argv[0], "false"));
@@ -605,8 +641,8 @@ static void send_init(int slot) {
   tci_send_to(slot, "split_enable:0,false;");
   tci_send_to(slot, "rit_enable:0,%s;", tf(s.rit_on));
   tci_send_to(slot, "rit_offset:0,%d;", s.rit);
-  tci_send_to(slot, "xit_enable:0,false;");
-  tci_send_to(slot, "xit_offset:0,0;");
+  tci_send_to(slot, "xit_enable:0,%s;", tf(s.xit_on));
+  tci_send_to(slot, "xit_offset:0,%d;", s.xit);
   tci_send_to(slot, "volume:%d;", s.volume_db);
   tci_send_to(slot, "mute:%s;", tf(s.mute));
   tci_send_to(slot, "rx_mute:0,%s;", tf(s.mute));
