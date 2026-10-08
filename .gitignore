@@ -15,6 +15,7 @@ test-tci-ws
 test-tci
 test-radio-hw
 test-encoder
+test-radio
 src/*.o
 *.o
 
