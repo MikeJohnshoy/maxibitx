@@ -35,7 +35,7 @@ The screen, top to bottom:
   **FILTER:** the CW filter on or off, its width and its centre (the CW
   pitch). In DIGI the radio holds the filter out of circuit and the
   group says so.
-- **Spectrum:** span (5, 10 or 30 kHz), a status line, the S-meter, then
+- **Spectrum:** span (5, 10 or 25 kHz), a status line, the S-meter, then
   the trace, a frequency scale and the waterfall under it. Each frame
   averages the 6 or so FFTs since the last one, over time and never
   across frequencies, so the noise floor holds steady and signals stay
@@ -43,8 +43,9 @@ The screen, top to bottom:
   highest level and falls back 15 dB a second, which leaves a CW
   station's outline standing between its dits; it can be switched off
   in Settings. With auto floor (on by default), the bottom of the trace
-  and the darkest waterfall colour follow the band's noise, 6 dB below
-  it, so the noise sits just off the bottom on any band and the height
+  and the darkest waterfall colour follow the band's noise (measured
+  within 10 kHz of the centre, clear of the crystal filter's skirts), 6 dB
+  below it, so the noise sits just off the bottom on any band and the height
   above it goes to signals; the status line shows the noise level next
   to the peak. Off, the bottom is fixed at −100 dB. The top stays at
   `SPECTRUM_DB_CEILING`.
