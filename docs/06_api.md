@@ -86,10 +86,11 @@ through any of them is seen by all the others; the last write wins.
 
 | State | Values | Notes |
 |---|---|---|
-| Frequency | Hz, integer | The dial. Changing it clears RIT. |
+| Frequency | Hz, integer | The dial. Changing it clears RIT and XIT. |
 | Mode | CW, CWR, USB, LSB, DIGITAL | Selects both the onboard demodulator and the TX audio source (below). Starts in DIGITAL. CWR is CW-reverse: the other side of the BFO on receive, identical to CW on transmit. |
 | PTT | RX / TX | |
 | RIT | −9999 to +9999 Hz, plus an on/off flag | Receive only; never moves the transmit frequency. Survives TX; cleared by a frequency change. |
+| XIT | −9999 to +9999 Hz, plus an on/off flag | Transmit only: the signal goes out at the dial plus the offset, the receiver stays on the dial. The `[tx_band]` check uses that transmit frequency. A change mid-transmission takes effect at the next one; cleared by a frequency change. |
 | Volume | 0-100 % | The radio's own speaker (log taper). Doesn't affect USB audio. |
 | Narrow filter | on/off, elliptic or FFT | ~300 Hz around the 700 Hz CW pitch, applied to the demodulated audio (speaker and USB). On by default; turn it off outside CW. |
 | Mic gain | 0 to 64, linear multiplier | USB/LSB transmit level. Around 1-5 in practice. |
@@ -150,15 +151,17 @@ unless `MAXIBITX_RIGCTL_TRACE=1` is in maxibitx's environment.
 | Command | Reply | Notes |
 |---|---|---|
 | `f` | `7074000` | Frequency, Hz |
-| `F <Hz>` | `RPRT 0` | Tunes. `RPRT -1` if ≤ 0. Clears RIT. |
+| `F <Hz>` | `RPRT 0` | Tunes. `RPRT -1` if ≤ 0. Clears RIT and XIT. |
 | `m` | `PKTUSB` then `2400` | Mode, then passband (two lines). DIGITAL reads as `PKTUSB`. |
 | `M <mode> <passband>` | `RPRT 0` | Mode: `CW`, `CWR`, `USB`, `LSB`, `PKTUSB` or `DIGITAL`. Passband is stored and echoed by `m` but not applied. Unknown mode: `RPRT -1`. |
 | `t` | `0` or `1` | PTT |
-| `T <0\|1>` | `RPRT 0` | Any nonzero value means TX. Also `RPRT 0` when ignored because the local key holds TX. `RPRT -1` when the dial is outside every `[tx_band]` range - those ranges are enforced, not just advertised - on a board that may not transmit, or while `bfo_freq` and `xtal_filter_center` give no usable TX IF (see `XTALCENTER`). |
+| `T <0\|1>` | `RPRT 0` | Any nonzero value means TX. Also `RPRT 0` when ignored because the local key holds TX. `RPRT -1` when the transmit frequency (the dial, plus XIT) is outside every `[tx_band]` range - those ranges are enforced, not just advertised - on a board that may not transmit, or while `bfo_freq` and `xtal_filter_center` give no usable TX IF (see `XTALCENTER`). |
 | `n` | `10` | Tuning step, Hz: how far one click of the radio's tuning knob moves the dial. A push of that knob changes it too. |
 | `N <Hz>` | `RPRT 0` | 1 to 10,000,000. Out of range: `RPRT -1`. |
 | `j` | `-150` | RIT offset, Hz. The stored value: CAT `RT0;` can switch RIT off without zeroing it. |
 | `J <Hz>` | `RPRT 0` | −9999 to 9999; `J 0` turns RIT off. Out of range: `RPRT -1`. |
+| `z` | `-300` | XIT offset, Hz. The stored value: CAT `XT0;` and TCI `xit_enable` can switch XIT off without zeroing it. |
+| `Z <Hz>` | `RPRT 0` | −9999 to 9999; `Z 0` turns XIT off. The transmitter goes out at the dial plus the offset; the receiver stays on the dial. Takes effect at the next transmission. Out of range: `RPRT -1`. |
 | `l AF` | `0.670000` | Volume, 0.0-1.0 |
 | `L AF <0.0-1.0>` | `RPRT 0` | |
 | `u MUTE` / `U MUTE <0\|1>` | `0` / `RPRT 0` | The local speaker muted; the volume is kept and returns on unmute. A push of the volume knob toggles it, and turning that knob unmutes. A real Hamlib function, not advertised in `dump_state` |
@@ -182,7 +185,7 @@ unless `MAXIBITX_RIGCTL_TRACE=1` is in maxibitx's environment.
 | `u TONE` / `U TONE <0\|1\|2>` | `0` / `RPRT 0` | TX test-tone generator: 0 off, 1 single 1 kHz, 2 two-tone 700 + 1900 Hz. Doesn't key the radio; any PTT does. Off after 30 s in TX. Out of range: `RPRT -1` (extension) |
 | `v` / `V <vfo>` | `VFOA` / `RPRT 0` | Single VFO; any `V` is accepted. |
 | `chk_vfo` | `0` | Not in VFO mode - send commands without a VFO argument. |
-| `dump_state` | capability block | Protocol 0. TX ranges come from `data/hw_settings.ini`'s `[tx_band]` entries at 5 W (1.8-30 MHz if it has none), and there are none on a board that may not transmit; modes CW/USB/LSB/PKTUSB; max RIT 9999. `has_get_level` is `AF\|CWPITCH\|RFPOWER\|KEYSPD\|STRENGTH` (`0x40005808`), `has_set_level` is `AF\|CWPITCH\|RFPOWER\|KEYSPD` (`0x5808`). |
+| `dump_state` | capability block | Protocol 0. TX ranges come from `data/hw_settings.ini`'s `[tx_band]` entries at 5 W (1.8-30 MHz if it has none), and there are none on a board that may not transmit; modes CW/USB/LSB/PKTUSB; max RIT and max XIT 9999. `has_get_level` is `AF\|CWPITCH\|RFPOWER\|KEYSPD\|STRENGTH` (`0x40005808`), `has_set_level` is `AF\|CWPITCH\|RFPOWER\|KEYSPD` (`0x5808`). |
 | `q`, `Q`, `quit` | (connection closes) | |
 
 Anything else replies `RPRT -1`. The extensions (`MICGAIN`, `ALC`,
@@ -304,10 +307,11 @@ commands are silently ignored (Kenwood convention).
 | `TX;` / `RX;` | — | PTT on / off |
 | `TQ;` / `TQ1;` | `TQ0;` / — | PTT get / set |
 | `RT;` / `RT1;` | `RT0;` / — | RIT on/off (offset kept) |
-| `RU;` / `RD;` | — | RIT ±10 Hz per command |
-| `RC;` | — | RIT cleared to 0 and off |
+| `XT;` / `XT1;` | `XT0;` / — | XIT on/off (offset kept; with none of its own, it takes RIT's) |
+| `RU;` / `RD;` | — | The offset ±10 Hz per command: RIT's and XIT's together, as a Kenwood has one |
+| `RC;` | — | RIT and XIT cleared to 0 and off |
 | `AG0;` / `AG0128;` | `AG0171;` / — | Volume, 000-255 |
-| `IF;` | 38-byte status | Frequency, RIT, RIT on, TX/RX, mode, in Hamlib's TS-480 layout |
+| `IF;` | 38-byte status | Frequency, the RIT/XIT offset, RIT on, XIT on, TX/RX, mode, in Hamlib's TS-480 layout |
 | `PS;` | `PS1;` | Always on; a set is ignored |
 | `AI;` | `AI0;` | No auto-information; a set is ignored |
 | `KS;` / `KS025;` | `KS020;` / — | Keyer speed, WPM; clamped to 1-60 (the TS-480's range is 10-60) |
@@ -361,12 +365,13 @@ is ignored. Receiver and transceiver numbers other than 0 are ignored.
 | `volume[:dB];` | Speaker volume, -60 to 0 dB; 0.5 dB per percent of rigctld's `AF`, so -50 dB and below is silent (read as -60). |
 | `mute[:true\|false];`, `rx_mute:0[,…];` | Volume to 0, and back to where it was. |
 | `rit_enable:0[,…];`, `rit_offset:0[,hz];` | RIT, receive only, ±9999 Hz; the offset and the switch are set separately. |
+| `xit_enable:0[,…];`, `xit_offset:0[,hz];` | XIT, transmit only, ±9999 Hz; set separately, as RIT is. `tx_enable` follows if XIT moves the transmit frequency into or out of a band. |
 | `cw_macros_speed[:wpm];`, `cw_keyer_speed[:wpm];` | The keyer's one speed, 1-60 WPM. |
 | `rx_smeter:0,0;` | `rx_smeter:0,0,<dBm>;` - rigctld's `STRENGTH` with S9 = -73 dBm; uncalibrated. |
 | `rx_sensors_enable:true[,ms];` | `rx_sensors:0,<dBm>;` and `rx_channel_sensors:0,0,<dBm>;` every ms (30-1000, default 200), one decimal place. |
 | `tx_sensors_enable:…;` | Accepted; no `tx_sensors` are sent, since a DE board measures no power or SWR. |
 | `start;` | Answered `start;`. `stop;` is ignored: maxibitx has no stopped state. |
-| `split_enable`, `xit_enable`, `xit_offset`, `tune`, `rx_nb_enable`, `rx_nr_enable`, `rx_anf_enable`, `sql_enable`, `lock`, … | Not available: always read false or 0, and a set is answered that way. |
+| `split_enable`, `tune`, `rx_nb_enable`, `rx_nr_enable`, `rx_anf_enable`, `sql_enable`, `lock`, … | Not available: always read false or 0, and a set is answered that way. |
 
 Changes made elsewhere - rigctld, CAT, the panel, the key - reach TCI
 clients within 50 ms. `tx_enable:0,<true|false>;` is sent when the band
