@@ -389,7 +389,8 @@ external interfaces are in `src/interfaces/`.
 - **`morse.c`**: the Morse table, and the translation of each
   interface's text (rigctld, CAT, TCI) into the keyer's one internal
   form, including prosigns and in-text speed changes.
-- **`tone_gen.c`**: the transmit test-tone generator: a 1 kHz tone, or a
+- **`tone_gen.c`**: the transmit test-tone generator: one tone (1 kHz,
+  or the CW pitch in CW and CWR, which puts it on the dial), or a
   700 + 1900 Hz two-tone.
 - **`tx_pipeline.c`**: the transmit pipeline every mode shares: the
   bandpass filter, sideband selection, the shift to the transmit IF,
