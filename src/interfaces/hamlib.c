@@ -178,7 +178,7 @@ static int handle_line(int fd, char *line)
             // respects them never sees this reply.
             send_rprt(fd, -1);
             printf("rigctl: T %ld -> refused, %d Hz is outside the calibrated "
-                   "TX bands\n", v, freq_hdr);
+                   "TX bands\n", v, radio_tx_freq());
             return 0;
         }
         send_rprt(fd, 0);
@@ -210,6 +210,30 @@ static int handle_line(int fd, char *line)
         radio_set_rit((int)hz);
         send_rprt(fd, 0);
         printf("rigctl: J %ld -> RIT %+ld Hz\n", hz, hz);
+        return 0;
+    }
+
+    if (cmd[0] == 'z' && (cmd[1] == '\0' || cmd[1] == ' ')) {
+        // get_xit - the transmit offset, as j is the receive one.
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%d\n", radio_get_xit());
+        send_line(fd, buf);
+        get_log("rigctl: z -> %d Hz\n", radio_get_xit());
+        return 0;
+    }
+
+    if (cmd[0] == 'Z' && (cmd[1] == '\0' || cmd[1] == ' ')) {
+        // set_xit <hz> - TX-only offset, +/-XIT_MAX_HZ; "Z 0" turns XIT
+        // off. Takes effect at the next transmission. Cleared by the next F.
+        long hz = strtol(cmd + 1, NULL, 10);
+        if (hz < -XIT_MAX_HZ || hz > XIT_MAX_HZ) {
+            send_rprt(fd, -1);
+            printf("rigctl: Z %ld -> out of range (+/-%d Hz), ignored\n", hz, XIT_MAX_HZ);
+            return 0;
+        }
+        radio_set_xit((int)hz);
+        send_rprt(fd, 0);
+        printf("rigctl: Z %ld -> XIT %+ld Hz, transmitting on %d Hz\n", hz, hz, radio_tx_freq());
         return 0;
     }
 
@@ -590,8 +614,8 @@ static int handle_line(int fd, char *line)
 
     if (strcmp(cmd, "dump_state") == 0 || strcmp(cmd, "\\dump_state") == 0) {
         // Minimal, spec-shaped dump_state (format checked against Hamlib's
-        // rigctl_parse.c). Advertises only what exists: no XIT/IF shift, no
-        // preamp/attenuator, no filter list; max_rit is real (RIT_MAX_HZ).
+        // rigctl_parse.c). Advertises only what exists: no IF shift, no
+        // preamp/attenuator, no filter list; max_rit and max_xit are real.
         // has_get_level = RIG_LEVEL_AF (1<<3) | RIG_LEVEL_CWPITCH (1<<11) |
         // RIG_LEVEL_RFPOWER (1<<12) | RIG_LEVEL_KEYSPD (1<<14) |
         // RIG_LEVEL_STRENGTH (1<<30) = 0x40005808 (bit numbers from Hamlib
@@ -641,7 +665,11 @@ static int handle_line(int fd, char *line)
             snprintf(buf, sizeof(buf), "%d\n", RIT_MAX_HZ);
             send_line(fd, buf);                        // max_rit
         }
-        send_line(fd, "0\n");                         // max_xit
+        {
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%d\n", XIT_MAX_HZ);
+            send_line(fd, buf);                        // max_xit
+        }
         send_line(fd, "0\n");                         // max_ifshift
         send_line(fd, "0\n");                         // announces
         send_line(fd, "\n");                          // preamp list (empty)
