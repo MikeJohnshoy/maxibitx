@@ -107,11 +107,16 @@ reading `sound.c`.
 - Console reporting: no periodic status line. `status.c`/`status.h` (a
   single-line, redraw-in-place frequency/TX-RX display, once called
   right after the init-complete line) were removed entirely - ongoing
-  operational visibility comes from the `rigctl:`/`hpsdr:` command
-  echoes described in
+  operational visibility comes from the `rigctl:`/`cat:`/`tci:`/`hpsdr:`
+  command echoes described in
   [`04_remote_control_and_iq_output.md`](04_remote_control_and_iq_output.md),
   which report a freq/PTT change at the moment it happens rather than a
-  point-in-time snapshot.
+  point-in-time snapshot. The rule is that the console shows what
+  happens to the radio, not what is asked about it: a client's reads
+  print nothing (rigctld) or only when the answer changes (CAT), and a
+  front-panel knob prints one line once it has been still for half a
+  second (`knobs: tuned to 14060200 Hz`, `knobs: volume 54%`), from the
+  main thread's once-a-second loop, rather than one per click.
 - Failure handling at startup: board selection, GPIO (the outputs and
   the key jack), the HPSDR socket bind and audio capture are fatal -
   `main()` exits if any fails. Everything else is
