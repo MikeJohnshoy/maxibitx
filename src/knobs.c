@@ -31,6 +31,16 @@ static const struct {
 static int64_t last_click_ns = 0;
 static int last_direction = 0;
 
+// For knobs_log_settled(): when each knob last changed something, and
+// whether that change is still to be reported.
+static _Atomic int64_t changed_ns[RADIO_KNOBS];
+static _Atomic int unreported[RADIO_KNOBS];
+
+static void changed(enum radio_knob k, int64_t ts) {
+  atomic_store(&changed_ns[k], ts);
+  atomic_store(&unreported[k], 1);
+}
+
 int knobs_set_step(int hz) {
   if (hz < 1)
     hz = 1;
@@ -63,8 +73,10 @@ static void tune(int detents, int64_t ts) {
     f = KNOBS_FREQ_MIN_HZ;
   if (f > KNOBS_FREQ_MAX_HZ)
     f = KNOBS_FREQ_MAX_HZ;
-  if (f != freq_hdr)
+  if (f != freq_hdr) {
     radio_tune_to((uint32_t)f);
+    changed(RADIO_KNOB_TUNING, ts);
+  }
 }
 
 static void next_step(void) {
@@ -87,6 +99,7 @@ void knobs_turn(enum radio_knob k, int detents, int64_t ts_ns) {
     if (rx_audio_get_mute())
       rx_audio_set_mute(0);
     rx_audio_set_volume(rx_audio_get_volume() + detents * KNOBS_VOLUME_PER_CLICK);
+    changed(RADIO_KNOB_VOLUME, ts_ns);
   }
 }
 
@@ -97,6 +110,22 @@ void knobs_push(enum radio_knob k) {
     rx_audio_set_mute(!rx_audio_get_mute());
     printf("knobs: speaker %s\n", rx_audio_get_mute() ? "muted" : "unmuted");
   }
+}
+
+int knobs_log_settled(int64_t now_ns) {
+  int printed = 0;
+  for (int k = 0; k < RADIO_KNOBS; k++) {
+    if (!atomic_load(&unreported[k]) ||
+        now_ns - atomic_load(&changed_ns[k]) < KNOBS_SETTLED_MS * 1000000LL)
+      continue;
+    atomic_store(&unreported[k], 0);
+    if (k == RADIO_KNOB_TUNING)
+      printf("knobs: tuned to %d Hz\n", freq_hdr);
+    else
+      printf("knobs: volume %d%%\n", rx_audio_get_volume());
+    printed++;
+  }
+  return printed;
 }
 
 int knobs_start(void) { return encoder_start(knobs_turn, knobs_push); }
