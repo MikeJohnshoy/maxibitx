@@ -124,8 +124,8 @@ leave behind rather than a live read of the radio's current state:
 | `LPF_D` | 11 | 7 | 26 | LPF band select (shares SPI0's CE1 pin, unused as SPI here) |
 | `KEY_RING_GPIO` | 7 | 4 | 7 | key jack ring: dash, straight key, mic PTT; pull-up, active low |
 | `KEY_TIP_GPIO` | 21 | 5 | 29 | key jack tip: dot, straight key; pull-up, active low |
-| `ENC1_A` | 13 | 9 | 21 | volume knob, encoder A (shares SPI0's MISO pin, unused as SPI here) |
-| `ENC1_B` | 12 | 10 | 19 | volume knob, encoder B (SPI0's MOSI) |
+| `ENC1_A` | 13 | 9 | 21 | volume knob, read as maxibitx's B (shares SPI0's MISO pin, unused as SPI here) |
+| `ENC1_B` | 12 | 10 | 19 | volume knob, read as maxibitx's A (SPI0's MOSI) |
 | `ENC1_SW` | 14 | 11 | 23 | volume knob's push switch (SPI0's SCLK) |
 | `ENC2_A` | 0 | 17 | 11 | tuning knob, encoder A |
 | `ENC2_B` | 2 | 27 | 13 | tuning knob, encoder B |
