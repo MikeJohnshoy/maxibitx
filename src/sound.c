@@ -1028,13 +1028,16 @@ static void *audio_loop(void *arg) {
 
         if (tone_on) {
           // Test tones replace the mode's own source; the sideband still
-          // follows the mode (tone_gen.h).
+          // follows the mode (tone_gen.h). In CW and CWR the single tone is
+          // the CW pitch, which the CW shift lands on the dial: TUNE puts
+          // its carrier where a key-down would go.
+          int cw_mode = tx_mode == RADIO_MODE_CW || tx_mode == RADIO_MODE_CWR;
+          tone_gen_set_single_hz(cw_mode ? (double)cw_get_pitch() : TONE_GEN_SINGLE_HZ);
           for (int i = 0; i < n; i++)
             tx_audio_buf[i] = tone_gen_sample();
           signal = (tx_mode == RADIO_MODE_LSB) ? TX_PIPELINE_LSB
-                   : (tx_mode == RADIO_MODE_CW || tx_mode == RADIO_MODE_CWR)
-                       ? TX_PIPELINE_CW
-                       : TX_PIPELINE_USB;
+                   : cw_mode                    ? TX_PIPELINE_CW
+                                                : TX_PIPELINE_USB;
         } else if (tx_mode == RADIO_MODE_CW || tx_mode == RADIO_MODE_CWR) {
           // cw_get_sample() owns the envelope advance for this sample -
           // must be called exactly once per real audio sample (its
