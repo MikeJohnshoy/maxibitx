@@ -32,11 +32,14 @@ The trace is the average of the FFTs since the last frame, about six,
 so the noise floor holds steady without signals widening; a dimmer peak
 line behind it falls back 15 dB a second (off in Settings if unwanted).
 
-While RIT is set, a green marker on the spectrum, scale and waterfall
-shows where the receiver is listening. The display stays centred on the
-dial (the transmit frequency), so a signal doesn't move when RIT does;
-an arrow at the edge shows an offset beyond the span. APF, NR and XIT
-are on the screen but disabled: maxibitx has none of them yet.
+RIT and XIT: the two buttons pick which offset the steps and the value
+set (tap the value to clear it), and the group's title says where it
+puts the receiver or the transmitter. The display stays centred on the
+dial, so a signal doesn't move when either does. A green marker shows
+where RIT has the receiver listening, a red "TX" marker where XIT will
+transmit (solid while transmitting); an arrow at the edge shows an
+offset beyond the span. APF and NR are on the screen but disabled:
+maxibitx has neither yet.
 
 TUNE keys the transmitter with the 1 kHz test tone (u TONE 1, then
 T 1), so the carrier is 1 kHz from the dial; maxibitx drops it after
@@ -46,6 +49,7 @@ rigctld commands used:
 
     f / F <hz>              frequency (F clears RIT)
     j / J <hz>              RIT, receive only, +/-9999 Hz
+    z / Z <hz>              XIT, transmit only, +/-9999 Hz
     m / M <mode> <pb>       mode; DIGITAL reads back as PKTUSB
     t / T <0|1>             PTT
     l AF / L AF             volume, 0.0-1.0
@@ -219,7 +223,7 @@ AMBER = "#F4A93B"
 INK = "#1A1206"
 TRACE = "#8FD3F4"
 TX_RED = "#E5484D"
-RIT_GREEN = "#7FE0A0"            # the RIT marker; XIT will want its own colour
+RIT_GREEN = "#7FE0A0"            # the RIT marker; XIT's is TX_RED
 
 
 def s_unit_label(db):
@@ -236,6 +240,11 @@ def waterfall_palette():
     pos = [stop for stop, _ in WATERFALL_STOPS]
     return np.stack([np.interp(x, pos, [rgb[i] for _, rgb in WATERFALL_STOPS])
                      for i in range(3)], axis=1).astype(np.uint8)
+
+
+def dotted_hz(hz):
+    """14058450 -> "14.058.450", as the frequency display groups it."""
+    return f"{hz:,}".replace(",", ".")
 
 
 def band_of(hz):
@@ -859,6 +868,8 @@ class Panel(tk.Tk):
         self.freq_sending = False
         self.rit_hz = 0
         self.rit_hold_until = 0.0
+        self.xit_hz = 0
+        self.xit_hold_until = 0.0
         self.step_hold_until = 0.0
         self.mute_hold_until = 0.0
         self.muted = False
@@ -978,16 +989,17 @@ class Panel(tk.Tk):
         rit.grid(row=0, column=0, sticky="nsw")
         self.rit_frame = rit
         ttk.Radiobutton(rit, text="RIT", value="RIT", variable=self.ritmode_var,
-                        style="Toolbutton", width=-3).grid(row=0, column=0, padx=1)
-        xit = ttk.Radiobutton(rit, text="XIT", value="XIT", variable=self.ritmode_var,
-                              style="Toolbutton", width=-3)
-        xit.grid(row=0, column=1, padx=1)
-        xit.state(["disabled"])    # maxibitx has no XIT yet
+                        style="Toolbutton", width=-3, command=self.show_rit).grid(row=0, column=0,
+                                                                                  padx=1)
+        self.xit_button = ttk.Radiobutton(rit, text="XIT", value="XIT",
+                                          variable=self.ritmode_var, style="Toolbutton",
+                                          width=-3, command=self.show_rit)
+        self.xit_button.grid(row=0, column=1, padx=1)
         for i, (t, d) in enumerate((("−100", -100), ("−10", -10))):
             ttk.Button(rit, text=t, style="Step.TButton", width=4,
                        command=lambda d=d: self.on_rit_step(d)).grid(row=0, column=2 + i, padx=1)
         self.rit_value = ttk.Button(rit, text="0 Hz", style="Value.TButton", width=-7,
-                                    command=lambda: self.send_rit(0))
+                                    command=lambda: self.send_offset(0))
         self.rit_value.grid(row=0, column=4, padx=1, sticky="ns")
         for i, (t, d) in enumerate((("+10", 10), ("+100", 100))):
             ttk.Button(rit, text=t, style="Step.TButton", width=4,
@@ -1275,7 +1287,7 @@ class Panel(tk.Tk):
     # the screen; every control update it makes is handed to the Tk thread
     # with self.after().
 
-    POLL_COMMANDS = ("f", "j", "l AF", "l MICGAIN", "m", "u NARROW", "u FFTFILT", "l CWPITCH",
+    POLL_COMMANDS = ("f", "j", "z", "l AF", "l MICGAIN", "m", "u NARROW", "u FFTFILT", "l CWPITCH",
                      "l CWWIDTH", "l STRENGTH", "u TONE", "t", "l RFPOWER", "l ALC", "u KEYER",
                      "l KEYSPD", "u PADREV", "u MORSE", "n", "u MUTE")
 
@@ -1308,6 +1320,7 @@ class Panel(tk.Tk):
         try:
             self.apply_freq(r["f"])
             self.apply_rit(r["j"])
+            self.apply_xit(r["z"])
             self.apply_float(r["l AF"], lambda v: (self.vol_var.set(v * 100),
                                                    self.vol_label.configure(text=f"{round(v * 100)}")))
             self.apply_float(r["l MICGAIN"], lambda v: (self.micgain_var.set(v),
@@ -1368,8 +1381,11 @@ class Panel(tk.Tk):
             return
         if time.monotonic() < self.freq_hold_until or self.freq_sending:
             return   # a frequency the operator just set is still on its way
+        changed = hz != self.current_freq_hz
         self.current_freq_hz = hz
         self.freq_display.set_hz(hz)
+        if changed:
+            self.show_rit()
         band = band_of(hz)
         self.band_var.set(band[0] if band else "")
 
@@ -1383,8 +1399,32 @@ class Panel(tk.Tk):
         self.rit_hz = hz
         self.show_rit()
 
+    def apply_xit(self, reply):
+        try:
+            hz = int(reply)
+        except ValueError:
+            # A maxibitx without XIT answers RPRT -1.
+            self.xit_button.state(["disabled"])
+            if self.ritmode_var.get() == "XIT":
+                self.ritmode_var.set("RIT")
+                self.show_rit()
+            return
+        self.xit_button.state(["!disabled"])
+        if time.monotonic() < self.xit_hold_until:
+            return
+        self.xit_hz = hz
+        self.show_rit()
+
     def show_rit(self):
-        self.rit_value.configure(text=f"{self.rit_hz:+d} Hz" if self.rit_hz else "0 Hz")
+        """The value shows the offset RIT or XIT selects; the group's title
+        says where that puts the receiver or the transmitter."""
+        xit = self.ritmode_var.get() == "XIT"
+        hz = self.xit_hz if xit else self.rit_hz
+        self.rit_value.configure(text=f"{hz:+d} Hz" if hz else "0 Hz")
+        title = "XIT" if xit else "RIT"
+        if hz and self.current_freq_hz:
+            title += f"  ·  {'TX' if xit else 'RX'} {dotted_hz(self.current_freq_hz + hz)}"
+        self.rit_frame.configure(text=title)
 
     def apply_mode(self, reply):
         # "m" answers two lines, the mode and a passband; only the first
@@ -1447,9 +1487,12 @@ class Panel(tk.Tk):
 
     def on_freq_tuned(self, hz):
         """Frequency changes from the digits arrive faster than they can
-        be sent; only the latest is sent, one at a time, in order."""
+        be sent; only the latest is sent, one at a time, in order.
+        maxibitx clears RIT and XIT on a retune, so the panel does too."""
         self.current_freq_hz = hz
         self.freq_hold_until = time.monotonic() + 1.5
+        self.rit_hz = self.xit_hz = 0
+        self.show_rit()
         band = band_of(hz)
         self.band_var.set(band[0] if band else "")
         self.freq_target = hz
@@ -1517,7 +1560,23 @@ class Panel(tk.Tk):
         self.query_async(f"M {'DIGITAL' if name == 'DIGI' else name} 2400")
 
     def on_rit_step(self, delta):
-        self.send_rit(self.rit_hz + delta)
+        if self.ritmode_var.get() == "XIT":
+            self.send_xit(self.xit_hz + delta)
+        else:
+            self.send_rit(self.rit_hz + delta)
+
+    def send_offset(self, hz):
+        if self.ritmode_var.get() == "XIT":
+            self.send_xit(hz)
+        else:
+            self.send_rit(hz)
+
+    def send_xit(self, hz):
+        hz = max(-RIT_MAX_HZ, min(RIT_MAX_HZ, hz))
+        self.xit_hz = hz
+        self.xit_hold_until = time.monotonic() + 1.5
+        self.show_rit()
+        self.query_async(f"Z {hz}")
 
     def send_rit(self, hz):
         hz = max(-RIT_MAX_HZ, min(RIT_MAX_HZ, hz))
@@ -1720,40 +1779,42 @@ class Panel(tk.Tk):
         c.create_polygon(w / 2 - 4, y0, w / 2 + 4, y0, w / 2, y0 + 5, fill=AMBER, outline="",
                          tags="scale")
 
-    def draw_offset_marker(self, w, span_hz, hz, label, color):
-        """Where an offset from the dial (RIT now, XIT later) lands: a
-        dashed line through the trace and waterfall, a triangle and label
-        on the scale. Off the display, an arrow at the edge it's past."""
+    def draw_offset_marker(self, w, span_hz, hz, tag, label, color, label_y, solid=False):
+        """Where an offset from the dial lands - RIT's receiver, XIT's
+        transmitter: a dashed line through the trace and waterfall (solid
+        if asked), a triangle on the scale, and the label at label_y. Off
+        the display, an arrow at the edge it's past, at label_y too."""
         c = self.canvas
-        c.delete("offset")
+        c.delete(tag)
         if not hz:
             return
+        tags = ("offset", tag)
         y0 = TRACE_H
         x = w / 2 + hz / (2.0 * span_hz) * w
         if 0 <= x <= w:
             # Sparse dashes, like the dial's, so the line doesn't hide the
             # signal it's been put on.
-            c.create_line(x, 0, x, y0, fill=color, dash=(4, 3), width=1.5, tags="offset")
-            c.create_line(x, y0 + SCALE_H, x, self.canvas_h, fill=color, dash=(2, 6),
-                          tags="offset")
+            c.create_line(x, 0, x, y0, fill=color, dash=() if solid else (4, 3), width=1.5,
+                          tags=tags)
+            c.create_line(x, y0 + SCALE_H, x, self.canvas_h, fill=color,
+                          dash=() if solid else (2, 6), tags=tags)
             c.create_polygon(x - 5, y0 + SCALE_H, x + 5, y0 + SCALE_H, x, y0 + SCALE_H - 7,
-                             fill=color, outline="", tags="offset")
+                             fill=color, outline="", tags=tags)
             right = x < w - 40
-            c.create_text(x + (7 if right else -7), 2, text=label, fill=color,
-                          font=(self.mono, 9, "bold"), anchor="nw" if right else "ne",
-                          tags="offset")
+            c.create_text(x + (7 if right else -7), label_y, text=label, fill=color,
+                          font=(self.mono, 9, "bold"), anchor="nw" if right else "ne", tags=tags)
         else:
             edge = w - 2 if x > w else 2
             point = 1 if x > w else -1
-            ym = y0 + SCALE_H / 2
+            ym = label_y + 6
             c.create_polygon(edge, ym, edge - point * 9, ym - 6, edge - point * 9, ym + 6,
-                             fill=color, outline="", tags="offset")
+                             fill=color, outline="", tags=tags)
             t = c.create_text(edge - point * 12, ym, text=f"{label} {hz:+d}", fill=color,
                               font=(self.mono, 9, "bold"), anchor="e" if x > w else "w",
-                              tags="offset")
+                              tags=tags)
             x1, y1, x2, y2 = c.bbox(t)
-            c.tag_lower(c.create_rectangle(x1 - 3, y0, x2 + 3, y0 + SCALE_H, fill="#101B22",
-                                           outline="", tags="offset"), t)
+            c.tag_lower(c.create_rectangle(x1 - 3, ym - 8, x2 + 3, ym + 8, fill="#101B22",
+                                           outline="", tags=tags), t)
 
     def display_floor(self, db, bin_hz):
         """The level at the bottom of the trace and the darkest waterfall
@@ -1839,7 +1900,12 @@ class Panel(tk.Tk):
                 c.create_text(w - 4, 8, text="over scale", anchor="e", fill=AMBER,
                               font=(self.mono, 8), tags="trace")
             self.draw_scale(w, half_bins * bin_hz)
-            self.draw_offset_marker(w, half_bins * bin_hz, self.rit_hz, "RIT", RIT_GREEN)
+            span = half_bins * bin_hz
+            self.draw_offset_marker(w, span, self.rit_hz, "rit", "RIT", RIT_GREEN, 2)
+            # XIT's label sits a line lower, clear of RIT's; the line goes
+            # solid while transmitting, when it is where the signal is.
+            self.draw_offset_marker(w, span, self.xit_hz, "xit", "TX", TX_RED, 16,
+                                    solid=self.ptt_var.get())
             readout = f"peak {peak_db:.0f} dB"
             if self.noise_db is not None and self.auto_floor_var.get():
                 readout += f"   noise {self.noise_db:.0f} dB"
