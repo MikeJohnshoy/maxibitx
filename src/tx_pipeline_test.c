@@ -241,11 +241,26 @@ static float limiter_ref[TONE_GEN_MEASURE_BLOCKS * TX_PIPELINE_BLOCK_LEN];
 // mic_tx_gain - which is how a real signal comes to exceed full scale
 // and give the limiter something to do. *alc_db receives the
 // gain-reduction meter after the measured blocks.
+// measure_tone_gen() on a pipeline the caller has set up (and frees).
+static void measure_tone_gen_on(struct tx_pipeline *p, enum tone_gen_mode m,
+                                enum tx_pipeline_signal sig, float ceiling, float in_gain,
+                                const double *hz, double *mags, int n, double *peak,
+                                double *alc_db);
+
 static void measure_tone_gen(enum tone_gen_mode m, enum tx_pipeline_signal sig,
                              float ceiling, float in_gain, const double *hz,
                              double *mags, int n, double *peak, double *alc_db)
 {
 	struct tx_pipeline *p = tx_pipeline_new();
+	measure_tone_gen_on(p, m, sig, ceiling, in_gain, hz, mags, n, peak, alc_db);
+	tx_pipeline_free(p);
+}
+
+static void measure_tone_gen_on(struct tx_pipeline *p, enum tone_gen_mode m,
+                                enum tx_pipeline_signal sig, float ceiling, float in_gain,
+                                const double *hz, double *mags, int n, double *peak,
+                                double *alc_db)
+{
 	float in[TX_PIPELINE_BLOCK_LEN], out[TX_PIPELINE_BLOCK_LEN];
 	const int len = TONE_GEN_MEASURE_BLOCKS * TX_PIPELINE_BLOCK_LEN;
 
@@ -266,7 +281,6 @@ static void measure_tone_gen(enum tone_gen_mode m, enum tx_pipeline_signal sig,
 	}
 	tone_gen_set_mode(TONE_GEN_OFF);
 	*alc_db = tx_pipeline_alc_db(p);
-	tx_pipeline_free(p);
 
 	for (int k = 0; k < n; k++) {
 		double re = 0, im = 0, wsum = 0;
@@ -682,6 +696,42 @@ int main(void)
 			fprintf(stderr, "   FAIL: the carrier moves with pitch by more than "
 			                "a full bin\n");
 			fails++;
+		}
+		if (fails)
+			return 1;
+	}
+
+	// --- Case I: TUNE in CW lands on the dial -----------------------------
+	// sound.c sets the single test tone to the CW pitch in CW and CWR, so
+	// the CW shift - which places a tone at the pitch on the dial - puts
+	// TUNE's carrier where a key-down goes. A 1 kHz tone there would land
+	// 1000 - pitch Hz above the dial instead.
+	{
+		const int pitches[] = { 600, 700, 900 };
+		int fails = 0;
+		printf("\nI. TUNE in CW: the single tone at the CW pitch\n");
+		for (unsigned i = 0; i < sizeof(pitches) / sizeof(pitches[0]); i++) {
+			int pitch = pitches[i];
+			struct tx_pipeline *p = tx_pipeline_new();
+			tx_pipeline_set_if_placement(p, TX_PIPELINE_BENCH_BFO_FREQ_HZ,
+			                             TX_PIPELINE_BENCH_XTAL_CENTER_HZ, pitch);
+			double shift_hz = (double)p->cw_shift_bins * TX_PIPELINE_BIN_HZ;
+			double dial = shift_hz + pitch; // where a key-down lands
+			double hz[2] = { dial, shift_hz + TONE_GEN_SINGLE_HZ };
+			double m[2], peak, alc;
+			tone_gen_set_single_hz(pitch);
+			measure_tone_gen_on(p, TONE_GEN_SINGLE, TX_PIPELINE_CW, 1.0f, 1.0f, hz, m, 2,
+			                    &peak, &alc);
+			tone_gen_set_single_hz(TONE_GEN_SINGLE_HZ);
+			tx_pipeline_free(p);
+			double at_dial = to_db(m[0], 1.0), off_dial = to_db(m[1], 1.0);
+			printf("   pitch %4d: %+6.2f dB on the dial, %7.1f dB at dial %+5d Hz\n", pitch,
+			       at_dial, off_dial, (int)TONE_GEN_SINGLE_HZ - pitch);
+			if (at_dial < -1.0 || off_dial > -60.0) {
+				fprintf(stderr, "   FAIL: TUNE's carrier is not on the dial at pitch %d\n",
+				        pitch);
+				fails++;
+			}
 		}
 		if (fails)
 			return 1;
