@@ -42,7 +42,12 @@ The screen, top to bottom:
   narrow. A dimmer peak line behind the trace holds each frequency's
   highest level and falls back 15 dB a second, which leaves a CW
   station's outline standing between its dits; it can be switched off
-  in Settings.
+  in Settings. With auto floor (on by default), the bottom of the trace
+  and the darkest waterfall colour follow the band's noise, 6 dB below
+  it, so the noise sits just off the bottom on any band and the height
+  above it goes to signals; the status line shows the noise level next
+  to the peak. Off, the bottom is fixed at −100 dB. The top stays at
+  `SPECTRUM_DB_CEILING`.
 - **By mode:** in CW, ten macro buttons; in USB/LSB, mic gain and the ALC
   meter; in DIGI, a note that the digital-mode program has the audio.
 - **Bottom row:** keyer type, WPM, the CW text field, Send and Stop,
@@ -65,7 +70,7 @@ does. A maxibitx without knob support simply doesn't answer `n` or
 `u MUTE`, and the panel carries on without them.
 
 **Settings** open from the gear at the top right (or the RX/TX button):
-the connection, the peak line, paddle reversal, the CW filter type (FFT
+the connection, the peak line and auto floor, paddle reversal, the CW filter type (FFT
 or elliptic), the TX test tones with their Transmit switch, the ten
 macros (a button label and the text sent), and the macro fields. A field
 is a name and a value: MYCALL and PARK to start with, and up to eight of
