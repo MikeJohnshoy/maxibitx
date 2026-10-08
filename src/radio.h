@@ -20,13 +20,14 @@ extern struct vfo lo;   // software LO for RX quadrature mixing
 
 #define RX_IF_FREQ_HZ 24000
 
-// RIT range, +/-9.999kHz as on common Icom/Kenwood rigs - a protocol
-// bound, not a hardware limit. Callers range-check against it;
-// radio_set_rit() doesn't.
+// RIT and XIT range, +/-9.999kHz as on common Icom/Kenwood rigs - a
+// protocol bound, not a hardware limit. Callers range-check against it;
+// radio_set_rit() and radio_set_xit() don't.
 #define RIT_MAX_HZ 9999
+#define XIT_MAX_HZ RIT_MAX_HZ
 
 // Tunes to f (Hz): sets the si5351, restarts the software RX LO, selects
-// the band's LPF, and clears RIT (an offset dialed in on the old
+// the band's LPF, and clears RIT and XIT (an offset dialed in on the old
 // frequency means nothing on the new one).
 void radio_tune_to(uint32_t f);
 
@@ -46,8 +47,9 @@ void radio_tune_to(uint32_t f);
 // tx_on = 0 is never refused: stopping transmitting must always work.
 int radio_set_tx(int tx_on);
 
-// 1 if radio_set_tx(1) would be accepted with the dial at freq_hz: the
-// same three checks, for an interface that reports whether TX is possible.
+// 1 if radio_set_tx(1) would be accepted transmitting on freq_hz: the
+// same three checks, for an interface that reports whether TX is possible
+// (pass radio_tx_freq()).
 int radio_tx_allowed(int freq_hz);
 
 enum radio_tx_refusal {
@@ -87,6 +89,22 @@ void radio_set_rit_enabled(int on);
 
 // Whether RIT is currently applied (see radio_set_rit_enabled()).
 int radio_rit_enabled(void);
+
+// XIT, RIT's transmit-side twin: an offset (Hz) added to TX's clk2 only, so
+// the receiver stays where it is and the signal goes out at the dial plus
+// the offset. Same conventions as RIT: a nonzero value turns it on and 0
+// off; radio_set_xit_enabled() switches it without changing the stored
+// offset; radio_tune_to() resets both. A change made while transmitting
+// takes effect at the next transmission, never part-way through one.
+void radio_set_xit(int hz);
+int radio_get_xit(void);
+void radio_set_xit_enabled(int on);
+int radio_xit_enabled(void);
+
+// Where the radio transmits: the dial plus XIT when it's on. Every
+// transmit check (radio_tx_allowed()'s [tx_band] ranges) and the TX power
+// scale use this, not the dial.
+int radio_tx_freq(void);
 
 // Operating mode. hamlib.c and usb_gadget.c translate to and from their
 // own protocol's names/digits (mode_to_name()/name_to_mode(),
