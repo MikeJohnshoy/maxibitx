@@ -50,6 +50,22 @@ static int rit_applied_hz(void) {
   return rit_enabled ? rit_offset : 0;
 }
 
+// XIT: the same pair for TX's clk2 (radio.h). Read when a transmission
+// starts, so a change mid-transmission waits for the next one.
+static int xit_offset = 0;
+static int xit_enabled = 0;
+
+// The frequency of the transmission in progress, fixed by radio_set_tx(1)
+// before in_tx goes up, so the clocks, the LPF and sound.c's power scale
+// all use the one value however XIT moves meanwhile.
+static volatile int tx_freq_now = 0;
+
+int radio_tx_freq(void) {
+  if (in_tx)
+    return tx_freq_now;
+  return freq_hdr + (xit_enabled ? xit_offset : 0);
+}
+
 // 'Master' RIGHT channel level during TX - the exciter feed
 // (sound_set_tx_drive()); LEFT is the local speaker and is never touched
 // here. Why 95: docs/03_tx_processing_pipeline.md, TX_MASTER_VOL.
@@ -57,10 +73,12 @@ static int rit_applied_hz(void) {
 
 void radio_tune_to(uint32_t f) {
   freq_hdr = f;
-  // Clear RIT: an offset from the old frequency means nothing here.
-  // (Keeping it across a retune would be equally valid; this rig doesn't.)
+  // Clear RIT and XIT: an offset from the old frequency means nothing here.
+  // (Keeping them across a retune would be equally valid; this rig doesn't.)
   rit_offset = 0;
   rit_enabled = 0;
+  xit_offset = 0;
+  xit_enabled = 0;
   // clk2 puts f at the crystal filter center. clk1 isn't touched: it's set
   // at startup and changed only by radio_tx_apply().
   si5351bx_setfreq(2, f + xtal_filter_center);
@@ -93,6 +111,23 @@ void radio_set_rit_enabled(int on) {
 
 int radio_rit_enabled(void) {
   return rit_enabled;
+}
+
+void radio_set_xit(int hz) {
+  xit_offset = hz;
+  xit_enabled = (hz != 0);
+}
+
+int radio_get_xit(void) {
+  return xit_offset;
+}
+
+void radio_set_xit_enabled(int on) {
+  xit_enabled = on ? 1 : 0;
+}
+
+int radio_xit_enabled(void) {
+  return xit_enabled;
 }
 
 // RADIO_STARTUP_MODE from the start; maxibitx.c's radio_set_mode() call
@@ -257,18 +292,19 @@ static void radio_tx_apply(int tx_on) {
   if (tx_on) {
     // Mute RX capture first - before PTT, the relay or the clocks, i.e.
     // before any TX RF exists (see sound_set_rx_capture()). Then clk1 ->
-    // bfo_freq and clk2 -> freq_hdr + xtal_filter_center, with no correction
-    // term: tx_pipeline.c already aims the TX waveform at the filter center
-    // (ARCHITECTURE.md §10 step 4). Every TX path - straight key via cw.c,
+    // bfo_freq and clk2 -> the TX frequency (the dial, plus XIT) +
+    // xtal_filter_center, with no correction term: tx_pipeline.c already
+    // aims the TX waveform at the filter center (ARCHITECTURE.md §10 step 4). Every TX path - straight key via cw.c,
     // CAT/network MOX - comes through here.
+    int tx_freq = radio_tx_freq();
     sound_set_rx_capture(0);
     si5351bx_setfreq(1, bfo_freq);
-    si5351bx_setfreq(2, freq_hdr + xtal_filter_center);
+    si5351bx_setfreq(2, tx_freq + xtal_filter_center);
     // The board's relays and their settling waits (radio_hw.c). A board
     // that cannot transmit refuses here too, behind radio_set_tx()'s own
     // check: nothing has been switched, so put the clocks and capture back
     // and stay in receive.
-    if (radio_hw_relays_tx(1, freq_hdr) < 0) {
+    if (radio_hw_relays_tx(1, tx_freq) < 0) {
       printf("radio: TX refused by the %s's T/R sequence - staying in receive\n",
              radio_hw_board_name());
       in_tx = 0;
@@ -284,7 +320,7 @@ static void radio_tx_apply(int tx_on) {
       tr_timing_report(monotonic_ns());
   } else {
     sound_set_tx_drive(0);     // mute the exciter feed before the relays move
-    radio_hw_relays_tx(0, freq_hdr); // the board's relays back to receive
+    radio_hw_relays_tx(0, radio_tx_freq()); // the board's relays back to receive
     // Restore the RX clocks - needed for the straight-key path, which has
     // no radio_tune_to() of its own afterwards. RIT survives TX bursts (only
     // radio_tune_to() clears it), so clk2 re-adds it.
@@ -348,12 +384,16 @@ static enum radio_tx_refusal tx_refusal_reason(int freq_hz) {
 
 // switch between RX and TX
 int radio_set_tx(int tx_on) {
-  // Only transmitting is gated; returning to receive always proceeds.
-  if (tx_on && !radio_tx_allowed(freq_hdr)) {
-    tx_refused_hz = freq_hdr;
-    atomic_store(&tx_refused_why, tx_refusal_reason(freq_hdr));
+  // Only transmitting is gated, on where it would transmit (the dial plus
+  // XIT); returning to receive always proceeds.
+  int tx_freq = radio_tx_freq();
+  if (tx_on && !radio_tx_allowed(tx_freq)) {
+    tx_refused_hz = tx_freq;
+    atomic_store(&tx_refused_why, tx_refusal_reason(tx_freq));
     return -1;
   }
+  if (tx_on && !in_tx)
+    tx_freq_now = tx_freq; // before in_tx, which makes radio_tx_freq() return it
 
   pthread_once(&tx_worker_once, radio_tx_worker_start);
 
