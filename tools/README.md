@@ -106,8 +106,12 @@ panel opens full screen with no title bar, so all of it fits; on a larger
 one it opens as an 800x480 window. F11 switches between the two, and
 Escape leaves full screen.
 
-**Requirements:** Python 3 with `tkinter`, and `numpy`. The IBM Plex
-fonts are used when installed, DejaVu otherwise. On Raspberry Pi OS:
+**Requirements:** Python 3 with `tkinter`, and `numpy`. The layout is
+drawn for IBM Plex Sans Condensed; without it the panel uses another
+condensed face (Piboto Condensed, DejaVu Sans Condensed, ...) with its
+sizes scaled down to fit the same space, so installing the IBM Plex fonts
+gives the intended look. Sizes are fixed at 96 dpi whatever the screen
+reports, so the 7-inch display doesn't enlarge them. On Raspberry Pi OS:
 
 ```
 sudo apt install python3-tk python3-numpy fonts-ibm-plex
