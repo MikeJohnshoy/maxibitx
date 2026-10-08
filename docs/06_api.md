@@ -103,7 +103,7 @@ source is fixed by the mode:
 | CW / CWR | The radio's straight key (700 Hz tone, shaped) | The key only (either contact of the key jack) |
 | USB / LSB | The radio's mic jack | The mic PTT switch (the key jack's ring line) |
 | DIGITAL | USB gadget audio from the host (WSJT-X) | Any: rigctld `T`, CAT `TX`, HPSDR MOX |
-| Any, with the test-tone generator on | 1 kHz tone, or 700 + 1900 Hz two-tone | Any |
+| Any, with the test-tone generator on | One tone (1 kHz from the dial; in CW and CWR, the CW pitch, on the dial), or 700 + 1900 Hz two-tone | Any |
 
 Remote PTT in CW, CWR, USB or LSB switches the radio to transmit but sends
 silence - there is no network or USB audio path in those modes - unless
@@ -182,7 +182,7 @@ unless `MAXIBITX_RIGCTL_TRACE=1` is in maxibitx's environment.
 | `\stop_morse` | `RPRT 0` | Stops text: the element being sent completes, the rest is dropped |
 | `u MORSE` | `1` | 1 while text is queued or being sent (extension, read-only) |
 | `u PADREV` / `U PADREV <0\|1>` | `0` / `RPRT 0` | Paddle reversal: 0 tip = dot, ring = dash (the default); 1 swaps them. No effect on a straight key, which keys from either contact (extension) |
-| `u TONE` / `U TONE <0\|1\|2>` | `0` / `RPRT 0` | TX test-tone generator: 0 off, 1 single 1 kHz, 2 two-tone 700 + 1900 Hz. Doesn't key the radio; any PTT does. Off after 30 s in TX. Out of range: `RPRT -1` (extension) |
+| `u TONE` / `U TONE <0\|1\|2>` | `0` / `RPRT 0` | TX test-tone generator: 0 off, 1 single tone (1 kHz from the dial; in CW and CWR at the CW pitch, so the carrier is on the dial), 2 two-tone 700 + 1900 Hz. Doesn't key the radio; any PTT does. Off after 30 s in TX. Out of range: `RPRT -1` (extension) |
 | `v` / `V <vfo>` | `VFOA` / `RPRT 0` | Single VFO; any `V` is accepted. |
 | `chk_vfo` | `0` | Not in VFO mode - send commands without a VFO argument. |
 | `dump_state` | capability block | Protocol 0. TX ranges come from `data/hw_settings.ini`'s `[tx_band]` entries at 5 W (1.8-30 MHz if it has none), and there are none on a board that may not transmit; modes CW/USB/LSB/PKTUSB; max RIT and max XIT 9999. `has_get_level` is `AF\|CWPITCH\|RFPOWER\|KEYSPD\|STRENGTH` (`0x40005808`), `has_set_level` is `AF\|CWPITCH\|RFPOWER\|KEYSPD` (`0x5808`). |
