@@ -12,7 +12,7 @@ docs/06_api.md describes both.
 The screen, top to bottom:
 
     band menu, frequency, mode (CW CWR USB LSB DIGI), RX/TX, volume, gear
-    RIT and its steps          |  FILTER: on, width, centre, APF, NR
+    RIT and its steps          |  FILTER: on, width, centre, NR
     span                                   status              S-meter
     spectrum, frequency scale, waterfall
     CW: ten macros  |  USB/LSB: mic gain and ALC  |  DIGI: a note
@@ -38,8 +38,8 @@ puts the receiver or the transmitter. The display stays centred on the
 dial, so a signal doesn't move when either does. A green marker shows
 where RIT has the receiver listening, a red "TX" marker where XIT will
 transmit (solid while transmitting); an arrow at the edge shows an
-offset beyond the span. APF and NR are on the screen but disabled:
-maxibitx has neither yet.
+offset beyond the span. NR is on the screen but disabled: maxibitx
+has none yet.
 
 TUNE keys the transmitter with the single test tone (u TONE 1, then T
 1): in CW and CWR the carrier is on the dial (plus XIT), in the other
@@ -909,7 +909,6 @@ class Panel(tk.Tk):
         self.fftfilt_var = tk.BooleanVar(value=True)
         self.pitch_var = tk.StringVar(value="700")
         self.width_var = tk.StringVar(value="300")
-        self.apf_var = tk.BooleanVar(value=False)
         self.nr_var = tk.BooleanVar(value=False)
         self.span_var = tk.StringVar(value=self.span_label(SPECTRUM_DEFAULT_HALF_SPAN_HZ))
         self.micgain_var = tk.DoubleVar(value=1.0)
@@ -1022,15 +1021,10 @@ class Panel(tk.Tk):
                                         width=4, state="readonly", font=(self.mono, 13))
         self.pitch_combo.grid(row=0, column=4, padx=(3, 4))
         self.pitch_combo.bind("<<ComboboxSelected>>", self.on_pitch_selected)
-        self.apf_check = ttk.Checkbutton(flt, text="APF", variable=self.apf_var,
-                                         style="Toolbutton", width=-3)
-        self.apf_check.grid(row=0, column=5, padx=(0, 4))
         self.nr_check = ttk.Checkbutton(flt, text="NR", variable=self.nr_var,
                                         style="Toolbutton", width=-3)
-        self.nr_check.grid(row=0, column=6)
-        # maxibitx has no APF or NR yet
-        self.apf_check.state(["disabled"])
-        self.nr_check.state(["disabled"])
+        self.nr_check.grid(row=0, column=5)
+        self.nr_check.state(["disabled"])  # maxibitx has no NR yet
 
     def build_spectrum(self):
         spec = ttk.Frame(self, padding=(6, 6, 6, 0))
