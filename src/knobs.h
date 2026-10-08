@@ -39,4 +39,11 @@ int knobs_get_step(void);
 void knobs_turn(enum radio_knob k, int detents, int64_t ts_ns);
 void knobs_push(enum radio_knob k);
 
+// A turn prints nothing click by click. Called from the main loop (about
+// once a second) with CLOCK_MONOTONIC now: for each knob that has moved the
+// dial or the volume and then been still for KNOBS_SETTLED_MS, prints one
+// line saying where it ended. Returns the number of lines printed.
+#define KNOBS_SETTLED_MS 500
+int knobs_log_settled(int64_t now_ns);
+
 #endif /* KNOBS_H */
