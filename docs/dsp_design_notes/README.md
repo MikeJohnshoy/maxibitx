@@ -303,3 +303,21 @@ already used in `antialias_filter_design.md`.
   dominates the receive cost) and the 15 m LPF assignment as the things
   to settle, and plans a receive-only first step. Status: step 1
   (receive only) built and bench-tested, not yet run on a zBitx.
+- [`rx_cw_noise_reduction_study.md`](rx_cw_noise_reduction_study.md) —
+  whether, where and how to add noise reduction to the local CW audio,
+  measured with `tools/nr_study/` (keyed CW in white noise through a model
+  of stage 3 and each candidate). NR buys comfort, not copy: at −9 dB the
+  best variants make the gaps 12–13 dB quieter for about 5 dB of signal,
+  and no spectral NR decodes more dit slots than the filter alone. The 150
+  Hz filter is the copy tool (errors 7.8% → 3.2% at 20 WPM, 13.2% → 7.0% at
+  35 WPM). NR can't go inside stage 3's FFT: per-bin gains there alias
+  (−13 dB, measured). It goes in its own 6 kHz stage between stage 3 and
+  the AGC's gain multiply, with the gain delayed to match and `uac_out`,
+  the S-meter and DIGITAL untouched. The sbitx's DSP and ANR are modelled
+  line for line: each cuts the signal nearly as much as the noise, and ANR
+  amplitude-modulates every block by 2.3 dB. A line enhancer copies well on
+  one signal but costs a weaker second station in the passband (0.8% → 5.0%
+  errors). Recommends listening to the WAVs first, then, if wanted, a
+  CW-tuned MMSE-LSA spectral NR, 128-point at 6 kHz (≈ 22.5 ms latency,
+  ≈ 4% of stage 1), off by default. Status: **proposed** - a study, nothing
+  built.
