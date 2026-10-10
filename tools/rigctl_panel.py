@@ -496,7 +496,9 @@ class SpectrumClient:
 
 def setup_style(root):
     """The ttk 'clam' theme, dark, with controls tall enough for a finger
-    (44-48 px). Returns the UI and monospace font families in use."""
+    (44-48 px). Returns the font family in use, for everything: numbers
+    included, since IBM Plex Sans Condensed's figures are all one width (no
+    jitter as a value changes) and its zero is plain."""
     # Points as at 96 dpi whatever the display reports: the layout is
     # drawn in pixels for an 800x480 screen, and a display that reports a
     # higher dpi (the 7-inch one can say ~130) would otherwise grow every
@@ -507,7 +509,6 @@ def setup_style(root):
     ui = pick_family(("IBM Plex Sans Condensed", "Barlow Semi Condensed",
                       "Piboto Condensed", "DejaVu Sans Condensed",
                       "Liberation Sans Narrow", "Nimbus Sans Narrow"), "TkDefaultFont")
-    mono = pick_family(("IBM Plex Mono", "DejaVu Sans Mono"), "TkFixedFont")
     # A wider face than the layout was drawn with gets its sizes scaled
     # down to match, so the top row still fits 800 px.
     global UI_SIZE_SCALE
@@ -532,7 +533,7 @@ def setup_style(root):
     s.configure("MuteOn.TLabel", foreground=AMBER, font=(ui, usz(10), "bold"))
     s.configure("Status.TLabel", foreground=MUTED, font=(ui, usz(10)))
     s.configure("PanelMuted.TLabel", background=PANEL, foreground=MUTED, font=(ui, usz(10)))
-    s.configure("Mono.TLabel", font=(mono, 13, "bold"))
+    s.configure("Readout.TLabel", font=(ui, usz(13), "bold"))
     s.configure("TLabelframe", background=PANEL, bordercolor=LINE, relief="solid", borderwidth=1)
     s.configure("TLabelframe.Label", background=PANEL, foreground=MUTED, font=(ui, usz(10)))
     s.configure("TButton", background=TILE, foreground=TEXT, padding=(6, 10),
@@ -542,8 +543,8 @@ def setup_style(root):
     s.configure("Accent.TButton", background=AMBER, foreground=INK)
     s.map("Accent.TButton", background=[("disabled", PANEL), ("active", "#FFC060")])
     s.configure("Macro.TButton", padding=(1, 10))  # ten across: the label gets the width
-    s.configure("Step.TButton", font=(mono, 13, "bold"), padding=(2, 10))
-    s.configure("Value.TButton", font=(mono, 15, "bold"), background=PANEL, padding=(2, 9))
+    s.configure("Step.TButton", font=(ui, usz(13), "bold"), padding=(2, 10))
+    s.configure("Value.TButton", font=(ui, usz(15), "bold"), background=PANEL, padding=(2, 9))
     s.configure("RX.TButton", font=(ui, usz(12), "bold"), foreground=MUTED, padding=(6, 8))
     s.configure("TX.TButton", font=(ui, usz(12), "bold"), background=TX_RED, foreground="#FFFFFF",
                 padding=(6, 8))
@@ -570,11 +571,14 @@ def setup_style(root):
     s.configure("TNotebook.Tab", background=TILE, foreground=TEXT, padding=(14, 8),
                 font=(ui, usz(12), "bold"))
     s.map("TNotebook.Tab", background=[("selected", AMBER)], foreground=[("selected", INK)])
-    return ui, mono
+    return ui
 
 
 class FreqDisplay(tk.Canvas):
-    """The frequency, tunable digit by digit.
+    """The frequency, tunable digit by digit, in the UI face (a plain zero;
+    IBM Plex Sans Condensed's figures are all one width). Each digit sits
+    in a slot as wide as the face's widest digit, so a face with
+    proportional figures still lines up.
 
     Tap a digit to make it the tuning step (amber, underlined). The mouse
     wheel over a digit, a vertical drag on it, or the Up and Down keys
@@ -584,14 +588,26 @@ class FreqDisplay(tk.Canvas):
     new step, on_type() for the double-click.
     """
 
-    DIGIT_W = 20
-    SEP_W = 10
+    DIGIT_GAP = 2       # px between neighbouring digit slots
+    # The widest a digit slot may be: IBM Plex Sans Condensed's, bold 24 at
+    # 96 dpi (17 px) plus the gap. The top row has no room to spare, so a
+    # wider face is drawn smaller rather than pushing "MHz" off the row.
+    DIGIT_W_MAX = 19
     DRAG_STEP_PX = 14
 
-    def __init__(self, parent, mono, on_tune, on_type, on_step=None, **kw):
+    def __init__(self, parent, family, on_tune, on_type, on_step=None, **kw):
         super().__init__(parent, width=200, height=44, bg=GROUND, highlightthickness=0,
                          takefocus=1, **kw)
-        self.font = (mono, 24, "bold")
+        size = 24
+        while True:
+            f = tkfont.Font(family=family, size=size, weight="bold")
+            widest = max(f.measure(d) for d in "0123456789")
+            if widest + self.DIGIT_GAP <= self.DIGIT_W_MAX or size <= 14:
+                break
+            size -= 1
+        self.font = (family, size, "bold")
+        self.digit_w = widest + self.DIGIT_GAP
+        self.sep_w = f.measure(".") + self.DIGIT_GAP
         self.on_tune = on_tune
         self.on_type = on_type
         self.on_step = on_step
@@ -637,28 +653,28 @@ class FreqDisplay(tk.Canvas):
             x = 2
             for i, ch in enumerate(text):
                 if i > 0 and (len(text) - i) % 3 == 0:
-                    self.create_text(x + self.SEP_W / 2, 38, text=".", fill=DIM,
+                    self.create_text(x + self.sep_w / 2, 38, text=".", fill=DIM,
                                      font=self.font, anchor="s")
-                    x += self.SEP_W
-                self.create_text(x + self.DIGIT_W / 2, 38, text=ch, fill=DIM, font=self.font,
+                    x += self.sep_w
+                self.create_text(x + self.digit_w / 2, 38, text=ch, fill=DIM, font=self.font,
                                  anchor="s")
-                x += self.DIGIT_W
+                x += self.digit_w
             self.configure(width=x + 4)
             return
         x = 2
         for i, ch in enumerate(text):
             place = 10 ** (len(text) - 1 - i)
             if i > 0 and (len(text) - i) % 3 == 0:
-                self.create_text(x + self.SEP_W / 2, 38, text=".", fill=MUTED,
+                self.create_text(x + self.sep_w / 2, 38, text=".", fill=MUTED,
                                  font=self.font, anchor="s")
-                x += self.SEP_W
+                x += self.sep_w
             sel = place == self.step
-            self.create_text(x + self.DIGIT_W / 2, 38, text=ch, fill=AMBER if sel else TEXT,
+            self.create_text(x + self.digit_w / 2, 38, text=ch, fill=AMBER if sel else TEXT,
                              font=self.font, anchor="s")
             if sel:
-                self.create_rectangle(x + 2, 40, x + self.DIGIT_W - 2, 43, fill=AMBER, outline="")
-            self.slots.append((x, x + self.DIGIT_W, place))
-            x += self.DIGIT_W
+                self.create_rectangle(x + 2, 40, x + self.digit_w - 2, 43, fill=AMBER, outline="")
+            self.slots.append((x, x + self.digit_w, place))
+            x += self.digit_w
         self.configure(width=x + 4)
 
     def _place_at(self, x):
@@ -894,7 +910,7 @@ class Panel(tk.Tk):
         super().__init__()
         self.title("maxibitx")
         self.configure(bg=GROUND)
-        self.ui, self.mono = setup_style(self)
+        self.ui = setup_style(self)
         # Full screen on a screen no bigger than the panel (the sBitx's
         # 800x480), where a title bar would push the bottom row off it, or
         # when asked; a window otherwise. F11 switches, Escape leaves.
@@ -1010,7 +1026,7 @@ class Panel(tk.Tk):
         self.band_combo.bind("<<ComboboxSelected>>", self.on_band_selected)
         f = ttk.Frame(top)
         f.grid(row=0, column=1, sticky="w")
-        self.freq_display = FreqDisplay(f, self.mono, self.on_freq_tuned, self.on_freq_type,
+        self.freq_display = FreqDisplay(f, self.ui, self.on_freq_tuned, self.on_freq_type,
                                         self.on_step_picked)
         self.freq_display.grid(row=0, column=0)
         ttk.Label(f, text="MHz", style="Muted.TLabel").grid(row=0, column=1, sticky="s", pady=(0, 6))
@@ -1037,7 +1053,7 @@ class Panel(tk.Tk):
                                        text=f"{round(float(v))}"))
         self.vol_scale.grid(row=0, column=1)
         self.vol_scale.bind("<ButtonRelease-1>", self.on_volume_released)
-        self.vol_label = ttk.Label(vol, text="--", style="Mono.TLabel", width=3)
+        self.vol_label = ttk.Label(vol, text="--", style="Readout.TLabel", width=3)
         self.vol_label.grid(row=0, column=2, padx=(4, 0))
         GearButton(top, self.open_settings).grid(row=0, column=5, padx=(4, 0))
 
@@ -1056,13 +1072,13 @@ class Panel(tk.Tk):
                                           width=-3, command=self.show_rit)
         self.xit_button.grid(row=0, column=1, padx=1)
         for i, (t, d) in enumerate((("−100", -100), ("−10", -10))):
-            ttk.Button(rit, text=t, style="Step.TButton", width=4,
+            ttk.Button(rit, text=t, style="Step.TButton", width=-4,
                        command=lambda d=d: self.on_rit_step(d)).grid(row=0, column=2 + i, padx=1)
         self.rit_value = ttk.Button(rit, text="0 Hz", style="Value.TButton", width=-7,
                                     command=lambda: self.send_offset(0))
         self.rit_value.grid(row=0, column=4, padx=1, sticky="ns")
         for i, (t, d) in enumerate((("+10", 10), ("+100", 100))):
-            ttk.Button(rit, text=t, style="Step.TButton", width=4,
+            ttk.Button(rit, text=t, style="Step.TButton", width=-4,
                        command=lambda d=d: self.on_rit_step(d)).grid(row=0, column=5 + i, padx=1)
 
         flt = ttk.LabelFrame(row, text="FILTER", padding=(4, 0, 4, 4))
@@ -1074,12 +1090,12 @@ class Panel(tk.Tk):
         self.narrow_check.grid(row=0, column=0, padx=(0, 4))
         ttk.Label(flt, text="WIDTH", style="PanelMuted.TLabel").grid(row=0, column=1)
         self.width_combo = ttk.Combobox(flt, textvariable=self.width_var, values=CW_WIDTHS,
-                                        width=3, state="readonly", font=(self.mono, 13))
+                                        width=3, state="readonly", font=(self.ui, usz(13)))
         self.width_combo.grid(row=0, column=2, padx=(3, 4))
         self.width_combo.bind("<<ComboboxSelected>>", self.on_width_selected)
         ttk.Label(flt, text="CENTER", style="PanelMuted.TLabel").grid(row=0, column=3)
         self.pitch_combo = ttk.Combobox(flt, textvariable=self.pitch_var, values=CW_PITCHES,
-                                        width=4, state="readonly", font=(self.mono, 13))
+                                        width=4, state="readonly", font=(self.ui, usz(13)))
         self.pitch_combo.grid(row=0, column=4, padx=(3, 4))
         self.pitch_combo.bind("<<ComboboxSelected>>", self.on_pitch_selected)
         self.nr_check = ttk.Checkbutton(flt, text="NR", variable=self.nr_var,
@@ -1107,7 +1123,7 @@ class Panel(tk.Tk):
         ttk.Label(bar, text="SIGNAL", style="Muted.TLabel").grid(row=0, column=3)
         self.smeter = tk.Canvas(bar, width=152, height=14, bg=GROUND, highlightthickness=0)
         self.smeter.grid(row=0, column=4, padx=6)
-        self.smeter_label = ttk.Label(bar, text="--", style="Mono.TLabel", width=5, anchor="e")
+        self.smeter_label = ttk.Label(bar, text="--", style="Readout.TLabel", width=6, anchor="e")
         self.smeter_label.grid(row=0, column=5)
         self.draw_smeter(None)
 
@@ -1145,13 +1161,13 @@ class Panel(tk.Tk):
                                            text=f"{float(v):.1f}×"))
         self.micgain_scale.grid(row=0, column=1, sticky="ew")
         self.micgain_scale.bind("<ButtonRelease-1>", self.on_micgain_released)
-        self.micgain_label = ttk.Label(voice, text="--", style="Mono.TLabel", width=5)
+        self.micgain_label = ttk.Label(voice, text="--", style="Readout.TLabel", width=5)
         self.micgain_label.grid(row=0, column=2, padx=(4, 12))
         ttk.Label(voice, text="ALC", style="Muted.TLabel").grid(row=0, column=3, padx=(0, 4))
         self.alc_bar = ttk.Progressbar(voice, orient="horizontal", mode="determinate",
                                        maximum=ALC_METER_MAX_DB)
         self.alc_bar.grid(row=0, column=4, sticky="ew", ipady=8)
-        self.alc_label = ttk.Label(voice, text="--", style="Mono.TLabel", width=7, anchor="e")
+        self.alc_label = ttk.Label(voice, text="--", style="Readout.TLabel", width=7, anchor="e")
         self.alc_label.grid(row=0, column=5, padx=(4, 0), ipady=10)
         self.mode_rows["voice"] = voice
 
@@ -1171,12 +1187,12 @@ class Panel(tk.Tk):
         self.keyer_combo.bind("<<ComboboxSelected>>", self.on_keyer_selected)
         ttk.Label(b, text="WPM", style="Muted.TLabel").grid(row=0, column=1)
         self.wpm_spin = ttk.Spinbox(b, from_=1, to=60, width=2, textvariable=self.wpm_var,
-                                    font=(self.mono, 13, "bold"), command=self.on_wpm_changed)
+                                    font=(self.ui, usz(13), "bold"), command=self.on_wpm_changed)
         self.wpm_spin.grid(row=0, column=2, padx=(3, 6))
         self.wpm_spin.bind("<Return>", lambda e: self.on_wpm_changed())
         self.wpm_spin.bind("<FocusIn>", lambda e: setattr(self, "wpm_focused", True))
         self.wpm_spin.bind("<FocusOut>", self.on_wpm_focus_out)
-        self.cw_entry = ttk.Entry(b, textvariable=self.cw_text_var, font=(self.mono, 13))
+        self.cw_entry = ttk.Entry(b, textvariable=self.cw_text_var, font=(self.ui, usz(13)))
         self.cw_entry.grid(row=0, column=3, sticky="ew", padx=(0, 6))
         self.cw_entry.bind("<Return>", lambda e: self.on_cw_send())
         self.send_button = ttk.Button(b, text="SEND", style="Accent.TButton", width=5,
@@ -1190,7 +1206,7 @@ class Panel(tk.Tk):
                                          text=f"{round(float(v))}"))
         self.power_scale.grid(row=0, column=7, padx=3)
         self.power_scale.bind("<ButtonRelease-1>", self.on_power_released)
-        self.power_label = ttk.Label(b, text="--", style="Mono.TLabel", width=3)
+        self.power_label = ttk.Label(b, text="--", style="Readout.TLabel", width=3)
         self.power_label.grid(row=0, column=8, padx=(0, 6))
         ttk.Checkbutton(b, text="TUNE", variable=self.tune_var, style="Toolbutton", width=-5,
                         command=self.on_tune_toggled).grid(row=0, column=9)
@@ -1582,7 +1598,7 @@ class Panel(tk.Tk):
         var = tk.StringVar(value=str(self.current_freq_hz or ""))
         ttk.Label(top, text="Frequency: 14058.2 (kHz), 14.0582 (MHz) or 14058200 (Hz)",
                   style="Muted.TLabel").pack(padx=10, pady=(10, 4))
-        entry = ttk.Entry(top, textvariable=var, font=(self.mono, 16))
+        entry = ttk.Entry(top, textvariable=var, font=(self.ui, usz(16)))
         entry.pack(fill="x", padx=10)
         msg = ttk.Label(top, text="", style="Muted.TLabel")
         msg.pack(padx=10, pady=4)
@@ -1839,7 +1855,7 @@ class Panel(tk.Tk):
                           fill=MUTED if is_major else "#3A4A51", tags="scale")
             if is_major and 24 < x < w - 24:
                 c.create_text(x, y0 + SCALE_H - 1, text=f"{k / 1e6:.3f}", fill=MUTED,
-                              font=(self.mono, 9), anchor="s", tags="scale")
+                              font=(self.ui, usz(9)), anchor="s", tags="scale")
             k += minor
         c.create_polygon(w / 2 - 4, y0, w / 2 + 4, y0, w / 2, y0 + 5, fill=AMBER, outline="",
                          tags="scale")
@@ -1867,7 +1883,7 @@ class Panel(tk.Tk):
                              fill=color, outline="", tags=tags)
             right = x < w - 40
             c.create_text(x + (7 if right else -7), label_y, text=label, fill=color,
-                          font=(self.mono, 9, "bold"), anchor="nw" if right else "ne", tags=tags)
+                          font=(self.ui, usz(9), "bold"), anchor="nw" if right else "ne", tags=tags)
         else:
             edge = w - 2 if x > w else 2
             point = 1 if x > w else -1
@@ -1875,7 +1891,7 @@ class Panel(tk.Tk):
             c.create_polygon(edge, ym, edge - point * 9, ym - 6, edge - point * 9, ym + 6,
                              fill=color, outline="", tags=tags)
             t = c.create_text(edge - point * 12, ym, text=f"{label} {hz:+d}", fill=color,
-                              font=(self.mono, 9, "bold"), anchor="e" if x > w else "w",
+                              font=(self.ui, usz(9), "bold"), anchor="e" if x > w else "w",
                               tags=tags)
             x1, y1, x2, y2 = c.bbox(t)
             c.tag_lower(c.create_rectangle(x1 - 3, ym - 8, x2 + 3, ym + 8, fill="#101B22",
@@ -1963,7 +1979,7 @@ class Panel(tk.Tk):
             c.create_line(w / 2, 0, w / 2, TRACE_H, fill=AMBER, width=1.5, tags="trace")
             if peak_db >= SPECTRUM_DB_CEILING:
                 c.create_text(w - 4, 8, text="over scale", anchor="e", fill=AMBER,
-                              font=(self.mono, 8), tags="trace")
+                              font=(self.ui, usz(8)), tags="trace")
             self.draw_scale(w, half_bins * bin_hz)
             span = half_bins * bin_hz
             self.draw_offset_marker(w, span, self.rit_hz, "rit", "RIT", RIT_GREEN, 2)
