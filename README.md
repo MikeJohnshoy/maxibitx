@@ -1,6 +1,6 @@
 # maxibitx
 
-NOTE: ONY THIS **EXPERIMENTAL** BRANCH RUNS ON BOTH ZBITX AND SBITX HARDWARE
+NOTE: ONLY THIS **EXPERIMENTAL** BRANCH RUNS ON BOTH ZBITX AND SBITX HARDWARE
 
 A headless, all-mode (CW, USB, LSB, DIGITAL) radio daemon for the
 Raspberry Pi inside an [sBitx](https://github.com/afarhan/sbitx). It
