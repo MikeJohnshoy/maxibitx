@@ -260,28 +260,113 @@ in the ordinary case and over two seconds in the worst one. A bit-banged
 bus is a busy-wait holding a lock, which is precisely what a real-time
 audio thread cannot afford to be behind.
 
-### Could maxibitx be adapted to work on zbitx hardware?
+### How does maxibitx run on both the sBitx and the zBitx?
 
-Probably, and the structure is on your side, but it is a real port
-rather than a recompile. The honest answer has three parts.
+By keeping every difference between the boards in one file,
+`radio_hw.c`, so that nothing else has to know which board it is on.
 
-What helps: the hardware-specific code is confined to `radio_hw.c`,
-`gpio.c`, `i2c.c`, `si5351v2.c` and `hw_settings.c`, and everything
-above those files works in samples rather than in hardware. The
-si5351 and the codec bring-up would likely carry over with changed
-constants.
+**The boards are mostly the same radio.** Both have the same WM8731
+codec, run at the same 96 kHz in the same 1024-frame blocks. Both have
+an si5351 with the same clock roles, the key jack on BCM 4 and 5, and
+four LPF relays on BCM 24, 25, 8 and 7. So the DSP, the keyer, the
+clocks and all the external interfaces run unchanged on either. What
+differs:
 
-What would need real work: the pin map, which was derived from a
-`gpio readall` on sBitx v2 hardware and must be re-derived the same way
-rather than assumed; any difference in the IF chain, since the crystal
-filter centre and BFO frequency are baked into both the tuning
-arithmetic and — at present — into `tx_pipeline.h` as compiled-in
-constants (a known limitation); and the per-band power calibration,
-which is per-board data.
+| | sBitx (DE, v2, v3) | zBitx |
+|---|---|---|
+| `sbitx_version` in `hw_settings.ini` | `SBITX_V3` | `SBITX_V4` |
+| si5351's I2C bus | 22 (the RTC's bus) | 3, shared with the RP2040 front panel |
+| LPFs | in the receive path too: the band's filter follows the dial | switched only for transmit; 15 m on LPF B, not A |
+| T/R lines | TX_LINE (BCM 23), and EXT_PTT (BCM 12) for an external amplifier | TX_LINE, which also powers the PA, and RX_LINE (BCM 15), which connects the receiver; BCM 12 held low |
+| Front-panel knobs | two encoders, read by the Pi | on the RP2040 panel, not read |
+| Transmit | yes | refused for now (below) |
 
-What is genuinely unknown: CPU headroom. maxibitx runs FFTW at 96 kHz
-on a Pi 4. Nobody has measured it on a Pi Zero 2W, and that measurement
-should come before any porting work, not after.
+**`hw_settings.ini` names the board, and there is no default.** At
+start-up, `sbitx_version` selects one profile from the `boards[]` table
+in `radio_hw.c`. Without that line, maxibitx stops before touching any
+pin, because driving one board's pins as another's could key a
+transmitter. A profile is mostly data:
+
+- which pin does what;
+- the LPF band plan, and whether the LPFs are in the receive path;
+- the I2C bus;
+- the knobs;
+- whether the board may transmit;
+- one function for the board's relay switching between receive and
+  transmit.
+
+**The rest of the code calls operations that mean the same on every
+board**, declared in `radio_hw.h`:
+
+- `radio_hw_gpio_init()` claims the board's pins in their receive state.
+- `radio_hw_tune()` is called on every retune. On the sBitx it selects
+  the band's LPF. On the zBitx it does nothing, because the LPFs are
+  switched at transmit.
+- `radio_hw_relays_tx()` is the board's half of the T/R sequence.
+- `radio_hw_tx_permitted()`, `radio_hw_tx_settle_ms()`,
+  `radio_hw_i2c_bus()` and `radio_hw_knob()` answer the questions other
+  files need answered.
+
+The T/R switch shows the split. `radio.c` does the part that is the
+same on every board:
+
+1. Mute receive capture.
+2. Set the clocks for transmit.
+3. Call `radio_hw_relays_tx(1)`.
+4. Raise the exciter feed.
+
+Going back to receive is the reverse. What happens inside step 3 is the
+board's:
+
+- **sBitx:** raise EXT_PTT, wait `ext_ptt_delay_ms` for an external
+  amplifier, then raise TX_LINE.
+- **zBitx**, as its own software does it: drop RX_LINE, select the LPF
+  for the transmit frequency, wait 10 ms, then power the PA. That half
+  isn't written yet (below).
+
+`radio.c` doesn't know either sequence, and doesn't need to.
+
+**Two kinds of difference, kept apart.** The board type decides what
+is wired where, and that is in `radio_hw.c`. A radio's calibration
+differs from one radio to the next, even between two of the same board,
+and that stays in `hw_settings.ini`:
+
+- the reference frequency (`cal`);
+- `bfo_freq` and `xtal_filter_center`;
+- the per-band power scale.
+
+Where a radio's crystal filter sits is one such value, its
+`xtal_filter_center`, not code. It can be measured on the radio with
+rigctld's `L XTALCENTER` and `tools/xtal_sweep.py`
+([`zbitx_port_study.md`](dsp_design_notes/zbitx_port_study.md) §11). On
+the zBitx measured so far, the filter turned out to be centred where
+the sBitx's default puts it.
+
+**Where the zBitx stands:**
+
+- **Receive works** on a zBitx with its Pi Zero 2W.
+- **Transmit is refused**, by the profile and again by its relay
+  function, until the zBitx's T/R sequence is written and the board is
+  calibrated. While transmit is refused, rigctld lists no transmit
+  ranges and TCI reports transmit as unavailable.
+- **The CPU is not a concern.** With stage 1 vectorized, processing on
+  the Zero 2W averages 4.3 ms of each 10.67 ms block and peaks at 6 ms
+  (study §10).
+- **Still open:** whether anything about the RP2040 front panel matters
+  when nothing talks to it (study §3.7).
+
+**Adding a board** means adding a profile to `boards[]`, plus a relay
+function if its T/R sequence differs from both existing ones.
+`make test-radio-hw` checks each profile:
+
+- the pins it claims, and their levels;
+- its LPF selection;
+- the order of its relays;
+- that a board without transmit can never raise TX_LINE.
+
+The pin numbers have to come from the new board itself, by reading its
+wiring or its own software's pin map, converted to BCM numbering. They
+can't be assumed from either existing profile.
 
 ## Audio and real time
 
@@ -655,5 +740,4 @@ daemon; remote element keying absent (CW text works, over TCI too);
 TCI's audio and CW text not yet tried on the air (its I/Q is, with
 sdrOxide); carrier placement a
 few Hz low from whole-bin rotation (6.25 Hz on SSB, 9.4 Hz on CW); and
-the pipeline carrying about a block of the previous transmission in its
-overlap-save history, with nothing resetting it between bursts.
+transmit on the zBitx, whose T/R sequence is not yet written.
