@@ -601,14 +601,13 @@ would be good at.
 
 ### How do I know a change hasn't broken the DSP?
 
-Run the bench tests — `make test-fft-filter`, `test-tx-pipeline`,
-`test-rx-filter`, `test-rx-audio`, `test-upsample48k`, `test-cw`,
-`test-key-input`, `test-keyer`, for the TCI server `test-tci-ws` and
-`test-tci`, and for the board layer `test-radio-hw`. They link the DSP
-files without any hardware code (`test-radio-hw` links `radio_hw.c`
-with GPIO and I2C stubbed), so they run anywhere, and they print
-measured numbers against expected ones rather than just passing or
-failing. `make check-comments` flags comments that have drifted into
+Run `make test`. It builds and runs every bench test, one line each,
+and exits non-zero if any fails; each test can also be run on its own
+(`make test-fft-filter && ./test-fft-filter`, and so on, listed in
+`00_intro.md` §8). They link the DSP files without any hardware code
+(`test-radio-hw` links `radio_hw.c` with GPIO and I2C stubbed), so they
+run anywhere, and besides passing or failing they print the measured
+numbers next to the expected ones. `make check-comments` flags comments that have drifted into
 narrating history, and errors outright if a source file's header names a
 different file — the signature of a file uploaded under the wrong name,
 which has happened twice and broken the build both times.
