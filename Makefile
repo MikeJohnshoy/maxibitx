@@ -84,10 +84,42 @@ check-comments-all:
 check-filters:
 	python3 tools/gen_narrow_filters.py --check
 
+# Every bench harness, built and run, one line each, with a summary; exits
+# non-zero if any fails. First it links the daemon with each keyer, so a
+# change to keyer.h that one keyer no longer meets is caught too. Each
+# harness's output goes to test-logs/<name>.log, and a failure prints the
+# end of its log. Run it before uploading a change; `make` itself doesn't.
+TESTS := test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse \
+	test-upsample48k test-cw test-key-input test-radio test-encoder test-keyer \
+	test-keyer-straight test-radio-hw test-tci-ws test-tci
+KEYERS := keyer keyer_straight
+OBJ_NO_KEYER := $(filter-out src/$(KEYER).o,$(OBJ))
+
+.PHONY: test
+test:
+	@$(MAKE) --no-print-directory -s $(TESTS) $(OBJ_NO_KEYER) $(KEYERS:%=src/%.o)
+	@mkdir -p test-logs; fail=0; \
+	for k in $(KEYERS); do \
+		if $(CC) $(OBJ_NO_KEYER) src/$$k.o -o test-logs/maxibitx-$$k $(LDFLAGS) \
+			> test-logs/link-$$k.log 2>&1; then r=PASS; else r=FAIL; fail=$$((fail + 1)); fi; \
+		printf '  %s  %-24s\n' $$r "link with $$k"; \
+		if [ $$r = FAIL ]; then tail -n 15 test-logs/link-$$k.log | sed 's/^/        /'; fi; \
+	done; \
+	for t in $(TESTS); do \
+		start=$$(date +%s%N); \
+		if ./$$t > test-logs/$$t.log 2>&1; then r=PASS; else r=FAIL; fail=$$((fail + 1)); fi; \
+		tenths=$$(( ($$(date +%s%N) - start) / 100000000 )); \
+		printf '  %s  %-24s %3d.%d s\n' $$r $$t $$((tenths / 10)) $$((tenths % 10)); \
+		if [ $$r = FAIL ]; then tail -n 15 test-logs/$$t.log | sed 's/^/        /'; fi; \
+	done; \
+	if [ $$fail -eq 0 ]; then echo "all passed"; else echo "$$fail FAILED - see test-logs/"; exit 1; fi
+
 clean:
 	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw test-key-input test-keyer test-keyer-straight test-tci-ws test-tci test-radio-hw test-encoder test-radio \
 		src/fft_filter.o src/fft_filter_test.o src/tx_pipeline.o src/tx_pipeline_test.o \
-		src/rx_filter.o src/rx_filter_test.o src/rx_audio_test.o src/rx_audio_impulse_test.o src/upsample48k_test.o
+		src/rx_filter.o src/rx_filter_test.o src/rx_audio_test.o src/rx_audio_impulse_test.o src/upsample48k_test.o \
+		$(KEYERS:%=src/%.o)
+	rm -rf test-logs
 
 # docs/ARCHITECTURE.md step 2: fft_filter.c/.h's own standalone bench
 # harness (fft_filter_test.c) against synthetic tones - fft_filter.c
