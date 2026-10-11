@@ -47,6 +47,7 @@ applications to maxibitx.
 | USB audio rate conversion | `decim48k.c`, `upsample48k.c` |
 | External interfaces | `interfaces/hamlib.c` (rigctld), `interfaces/hpsdr_p1.c` (HPSDR Protocol 1), `interfaces/usb_gadget.c` (USB audio + Kenwood CAT), `interfaces/iq_stream.c` (I/Q for the control panel), `interfaces/tci.c`, `tci_cw.c`, `tci_stream.c`, `tci_ws.c` (TCI: control, audio, I/Q and CW text over a WebSocket) |
 
+`make test` runs every bench test below and says which, if any, failed.
 The DSP is bench-tested on its own (`make test-fft-filter`,
 `test-tx-pipeline`, `test-rx-filter`, `test-rx-audio`,
 `test-rx-audio-impulse`, `test-upsample48k`, `test-cw`, `test-key-input`,
