@@ -1314,6 +1314,14 @@ it tests (none touch the hardware) and drives them with synthetic
 signals or scripted clients, checking the results against numeric
 targets. Each prints its cases and exits non-zero on a failure.
 
+`make test` builds and runs all of them, one line each, and exits
+non-zero if any fails. It first links the daemon with each keyer
+(`keyer.c` and `keyer_straight.c`), so a change to `keyer.h` that one of
+them no longer meets is caught too. Each harness's output goes to
+`test-logs/`, and a failure prints the end of its log. It takes under a
+minute; most of that is `test-tci`, which paces its scripted clients in
+real time. Run it before uploading a change.
+
 | Target | What it checks |
 |---|---|
 | `make test-fft-filter` | `fft_filter.c`: synthetic tones through the overlap-save filter, against passband and stopband targets in dB |
