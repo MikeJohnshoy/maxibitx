@@ -347,8 +347,9 @@ the sBitx's default puts it.
 - **Transmit works**, calibrated to 2 W on every band into a dummy load.
   Those scales are in `data/hw_settings_zbitx.ini` as conservative
   defaults; the PA has more in it, but it hasn't been measured further
-  (study §12). A remote receiver puts it on frequency, DIGITAL over TCI
-  transmits, and CW's first element arrives with 16 ms or more to spare.
+  (study §12). A remote receiver puts it on frequency, with USB and LSB
+  on the right sideband; DIGITAL over TCI transmits; and CW's first
+  element arrives with 16 ms or more to spare.
 - **The CPU is not a concern.** With stage 1 vectorized, processing on
   the Zero 2W averages 4.3 ms of each 10.67 ms block and peaks at 6 ms
   (study §10).
@@ -740,5 +741,5 @@ daemon; remote element keying absent (CW text works, over TCI too);
 TCI's CW text not yet tried on the air (its I/Q is, with sdrOxide, and
 its audio both ways, with WSJT-X on a zBitx); carrier placement a
 few Hz low from whole-bin rotation (6.25 Hz on SSB, 9.4 Hz on CW); and
-on the zBitx, SSB from the microphone, the opposite sideband on a
-remote receiver, and anything for the RP2040 front panel.
+on the zBitx, SSB from the microphone and anything for the RP2040 front
+panel.
