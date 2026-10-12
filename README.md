@@ -83,7 +83,7 @@ make
 
 `data/hw_settings.ini` must name the radio board, on a line above its
 first `[section]`: `sbitx_version = SBITX_V3` for an sBitx DE, v2 or
-v3, or `sbitx_version = SBITX_V4` for a zBitx (receive only for now).
+v3, or `sbitx_version = SBITX_V4` for a zBitx.
 Without it maxibitx prints the valid lines and exits, before touching
 any hardware. Run it from the repository root, where it finds
 `data/hw_settings.ini`.
