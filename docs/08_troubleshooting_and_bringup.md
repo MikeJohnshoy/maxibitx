@@ -41,8 +41,7 @@ found`; `... has a key "..." that maxibitx doesn't read - a misspelling
 of sbitx_version?`; `... has zbitx's hw= key, which maxibitx doesn't
 read`; or `sbitx_version in ... is inside a [section], so it is
 ignored`. Add the right line above the first `[section]`. There is no
-default; on a zBitx the startup log then says `init: radio board: zBitx
-- receive only, transmit is not enabled on this board`.
+default; on a zBitx the startup log then says `init: radio board: zBitx`.
 
 **On a zBitx, GPIO setup fails on BCM 15.** `gpio: cannot request BCM15
 ('maxibitx-rx_line'): ...` (typically `Device or resource busy`), then
