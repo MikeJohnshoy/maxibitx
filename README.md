@@ -71,8 +71,8 @@ server (`test-tci-ws`, `test-tci`, over loopback) and the board layer
   50001) carries control, receive and transmit audio and I/Q over one
   network connection for JTDX, WSJT-X Improved, loggers and Hamlib's TCI
   backend; it is bench-tested, including against Hamlib's own TCI client,
-  and its I/Q is confirmed on the air with sdrOxide; the audio paths and
-  CW text are not yet tried on the air.
+  its I/Q is confirmed on the air with sdrOxide, and its audio both ways
+  with WSJT-X on a zBitx; CW text is not yet tried on the air.
 
 ## Building and running
 
@@ -90,9 +90,18 @@ any hardware. Run it from the repository root, where it finds
 
 Needs `libasound` and single-precision FFTW (`libfftw3f`); see
 `Makefile`. `make` also grants the binary real-time scheduling and the
-permission the USB gadget needs (`setcap`). The USB gadget needs a
-device-mode USB port and a few kernel options - see
-[`docs/07_build_and_deployment.md`](docs/07_build_and_deployment.md).
+permission the USB gadget needs (`setcap`). `make test` builds and runs
+every bench test. `./update` stashes local changes and pulls the latest;
+then `make` again.
+
+The Pi needs the codec's overlay (`dtoverlay=audioinjector-wm8731-audio`),
+the si5351's I2C bus (on an sBitx, the `i2c-rtc-gpio` overlay it shares
+with the RTC), and the user in the `gpio` group; see
+[`docs/01_hardware_init_and_control.md`](docs/01_hardware_init_and_control.md).
+A zBitx also needs the UART off
+([`docs/08_troubleshooting_and_bringup.md`](docs/08_troubleshooting_and_bringup.md)).
+The USB gadget needs a device-mode USB port and a few kernel options:
+[`docs/dsp_design_notes/usb_gadget_OS_setup.md`](docs/dsp_design_notes/usb_gadget_OS_setup.md).
 
 ## Documentation
 
@@ -106,10 +115,8 @@ device-mode USB port and a few kernel options - see
 | [`docs/04_remote_control_and_iq_output.md`](docs/04_remote_control_and_iq_output.md) | How the external interfaces are implemented |
 | [`docs/05_process_and_threading_model.md`](docs/05_process_and_threading_model.md) | Startup sequence, threads, and a map for reading `sound.c` |
 | [`docs/06_api.md`](docs/06_api.md) | The external interfaces - rigctld, I/Q streams, USB audio and CAT, TCI - for building an app on maxibitx, plus WSJT-X setup |
-| [`docs/07_build_and_deployment.md`](docs/07_build_and_deployment.md) | Build, kernel/overlay dependencies, deployment |
 | [`docs/08_troubleshooting_and_bringup.md`](docs/08_troubleshooting_and_bringup.md) | Hardware bring-up gotchas |
 | [`docs/09_faq.md`](docs/09_faq.md) | Common questions: where it came from, why the design is the way it is, ALC, the interfaces, what's not done |
-| [`docs/12_simple_cw_transceiver.md`](docs/12_simple_cw_transceiver.md) | A simple CW transceiver around maxibitx |
 | [`docs/dsp_design_notes/`](docs/dsp_design_notes/) | Measurements, derivations and debugging history for the DSP |
 | [`docs/code_comments.md`](docs/code_comments.md) | Comment policy: code says what's true now, docs say how it got there |
 
