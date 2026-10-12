@@ -50,6 +50,16 @@ ifeq ($(shell uname -m),armv7l)
 CFLAGS += -mfpu=neon-vfpv4
 endif
 LDFLAGS := -lm -lasound -lpthread -ldl -lfftw3f
+# 32-bit ARM: a 64-bit _Atomic (radio.c, knobs.c, sound.c) compiles to
+# inline instructions only when the target is ARMv7 or later. The daemon
+# gets that from -march=native; the test harnesses build without it, and
+# Raspberry Pi OS's 32-bit gcc defaults to ARMv6, where those become calls
+# into libatomic. Linking it costs nothing where it isn't needed.
+TEST_LIBS :=
+ifeq ($(shell uname -m),armv7l)
+LDFLAGS += -latomic
+TEST_LIBS += -latomic
+endif
 SRC := src/maxibitx.c src/radio.c src/radio_hw.c src/interfaces/hpsdr_p1.c src/interfaces/usb_gadget.c src/i2c.c \
      src/si5351v2.c src/sound.c src/vfo.c src/interfaces/hamlib.c src/hw_settings.c src/antialias.c src/decim48k.c src/cw.c \
      src/rx_audio.c src/gpio.c src/interfaces/iq_stream.c src/fft_filter.c src/tx_pipeline.c src/rx_filter.c src/upsample48k.c src/tone_gen.c \
@@ -129,7 +139,7 @@ clean:
 # describes for test_rx_audio.c: a verification tool, not something the
 # shipped maxibitx binary links.
 test-fft-filter: src/fft_filter.c src/fft_filter_test.c src/fft_filter.h
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/fft_filter.c src/fft_filter_test.c -o $@ -lfftw3f -lm
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/fft_filter.c src/fft_filter_test.c -o $@ -lfftw3f -lm $(TEST_LIBS)
 
 # docs/ARCHITECTURE.md step 4: tx_pipeline.c/.h's own standalone bench
 # harness (tx_pipeline_test.c) against a synthetic stand-in for cw.c's
@@ -140,7 +150,7 @@ test-fft-filter: src/fft_filter.c src/fft_filter_test.c src/fft_filter.h
 # (step 2) and cw.h (CW_PITCH_HZ only - NOT cw.c itself, see
 # tx_pipeline_test.c's header comment for why).
 test-tx-pipeline: src/tx_pipeline.c src/tx_pipeline_test.c src/tx_pipeline.h src/fft_filter.c src/fft_filter.h src/cw.h src/tone_gen.c src/tone_gen.h
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/fft_filter.c src/tx_pipeline.c src/tone_gen.c src/tx_pipeline_test.c -o $@ -lfftw3f -lm
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/fft_filter.c src/tx_pipeline.c src/tone_gen.c src/tx_pipeline_test.c -o $@ -lfftw3f -lm $(TEST_LIBS)
 
 # docs/ARCHITECTURE.md step 6: rx_filter.c/.h's own standalone bench
 # harness (rx_filter_test.c) against synthetic tones, standing in for
@@ -153,7 +163,7 @@ test-tx-pipeline: src/tx_pipeline.c src/tx_pipeline_test.c src/tx_pipeline.h src
 # rx_audio.c themselves, same "no hardware deps in a bench test"
 # precedent).
 test-rx-filter: src/rx_filter.c src/rx_filter_test.c src/rx_filter.h src/fft_filter.c src/fft_filter.h src/cw.h
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/fft_filter.c src/rx_filter.c src/rx_filter_test.c -o $@ -lfftw3f -lm
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/fft_filter.c src/rx_filter.c src/rx_filter_test.c -o $@ -lfftw3f -lm $(TEST_LIBS)
 
 # docs/ARCHITECTURE.md step 7: rx_audio_test.c - an integration smoke
 # test for rx_audio.c's OWN new wiring (the implementation selector, the
@@ -164,7 +174,7 @@ test-rx-filter: src/rx_filter.c src/rx_filter_test.c src/rx_filter.h src/fft_fil
 # rx_audio.c/fft_filter.c/rx_filter.c; cw.h is header-only here too
 # (CW_PITCH_HZ), same as the other harnesses.
 test-rx-audio: src/rx_audio.c src/rx_audio_test.c src/rx_audio.h src/vfo.c src/vfo.h src/fft_filter.c src/rx_filter.c src/cw.h
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/rx_audio.c src/vfo.c src/fft_filter.c src/rx_filter.c src/rx_audio_test.c -o $@ -lfftw3f -lm
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/rx_audio.c src/vfo.c src/fft_filter.c src/rx_filter.c src/rx_audio_test.c -o $@ -lfftw3f -lm $(TEST_LIBS)
 
 # Stage 3 and stage 4 together, which neither test-rx-filter (the filter
 # alone) nor test-rx-audio (the plumbing) can see: rx_audio.c derives its AGC
@@ -174,7 +184,7 @@ test-rx-audio: src/rx_audio.c src/rx_audio_test.c src/rx_audio.h src/vfo.c src/v
 # interferer the filter removes, and to a keyed CW element's own onset. See
 # docs/dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md.
 test-rx-audio-impulse: src/rx_audio.c src/rx_audio_impulse_test.c src/rx_audio.h src/vfo.c src/vfo.h src/fft_filter.c src/rx_filter.c src/cw.h
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/rx_audio.c src/vfo.c src/fft_filter.c src/rx_filter.c src/rx_audio_impulse_test.c -o $@ -lfftw3f -lm
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/rx_audio.c src/vfo.c src/fft_filter.c src/rx_filter.c src/rx_audio_impulse_test.c -o $@ -lfftw3f -lm $(TEST_LIBS)
 
 # WSJT-X TX audio bridge: upsample48k.c/.h's own standalone bench harness
 # (upsample48k_test.c) against synthetic tones, the interpolation-side
@@ -186,7 +196,7 @@ test-rx-audio-impulse: src/rx_audio.c src/rx_audio_impulse_test.c src/rx_audio.h
 # "not part of the build" convention as the other test- targets above.
 # No dependencies beyond upsample48k.c/.h itself - no hardware, no FFTW.
 test-upsample48k: src/upsample48k.c src/upsample48k_test.c src/upsample48k.h
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/upsample48k.c src/upsample48k_test.c -o $@ -lm
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/upsample48k.c src/upsample48k_test.c -o $@ -lm $(TEST_LIBS)
 
 # cw.c's keying envelope and its 1:1 weighting correction, with the key's
 # edges arriving the way they do on the radio: through key_input.c's queue
@@ -198,14 +208,14 @@ test-upsample48k: src/upsample48k.c src/upsample48k_test.c src/upsample48k.h
 # the build" convention as the other test- targets above. See
 # docs/dsp_design_notes/cw_keyer_design_study.md §16 and §17.
 test-cw: src/cw.c src/cw.h src/cw_envelope_test.c src/key_input.c src/key_input.h src/keyer.c src/keyer.h src/morse.c src/morse.h src/gpio.c src/vfo.c src/vfo.h
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/cw.c src/key_input.c src/keyer.c src/morse.c src/gpio.c src/vfo.c src/cw_envelope_test.c -o $@ -lm -lpthread
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/cw.c src/key_input.c src/keyer.c src/morse.c src/gpio.c src/vfo.c src/cw_envelope_test.c -o $@ -lm -lpthread $(TEST_LIBS)
 
 # key_input.c's input logic without the GPIO: synthetic edges, bounce and
 # plug scenarios fed to the same steps its thread runs, checking debounce,
 # mono-plug detection, paddle reversal, the TX-request hook, and how
 # key_input_take() places edges in a block. See key_input_test.c.
 test-key-input: src/key_input.c src/key_input.h src/key_input_test.c src/gpio.c
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/key_input.c src/gpio.c src/key_input_test.c -o $@ -lpthread
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/key_input.c src/gpio.c src/key_input_test.c -o $@ -lpthread $(TEST_LIBS)
 
 # radio.c's RIT and XIT: what each puts on the si5351's clk2 in receive and
 # in transmit, a change mid-transmission, a retune clearing both, and the
@@ -213,7 +223,7 @@ test-key-input: src/key_input.c src/key_input.h src/key_input_test.c src/gpio.c
 # generator, the board, the codec and the band table stubbed, and the TX
 # worker thread running for real. See radio_test.c.
 test-radio: src/radio.c src/radio.h src/radio_test.c src/vfo.c src/vfo.h
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces src/radio.c src/vfo.c src/radio_test.c -o $@ -lm -lpthread
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces src/radio.c src/vfo.c src/radio_test.c -o $@ -lm -lpthread $(TEST_LIBS)
 
 # The front-panel knobs: encoder.c's decoding fed synthetic edges - clicks,
 # contact bounce, presses and their debounce - and knobs.c's handlers with
@@ -221,7 +231,7 @@ test-radio: src/radio.c src/radio.h src/radio_test.c src/vfo.c src/vfo.h
 # push through the steps, no tuning in TX, volume and mute. gpio.c is
 # linked but never called. See encoder_test.c.
 test-encoder: src/encoder.c src/encoder.h src/knobs.c src/knobs.h src/encoder_test.c src/gpio.c src/radio_hw.h
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/encoder.c src/knobs.c src/gpio.c src/encoder_test.c -o $@ -lpthread
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/encoder.c src/knobs.c src/gpio.c src/encoder_test.c -o $@ -lpthread $(TEST_LIBS)
 
 # keyer.h, twice: test-keyer against keyer.c - the design study's golden
 # cases, random paddle input checked sample for sample against the
@@ -230,10 +240,10 @@ test-encoder: src/encoder.c src/encoder.h src/knobs.c src/knobs.h src/encoder_te
 # test-keyer-straight against keyer_straight.c, which must pass every case it
 # offers and refuse the rest. See keyer_test.c.
 test-keyer: src/keyer.c src/keyer.h src/morse.c src/morse.h src/keyer_test.c src/key_input.h tools/keyer_study/keyer_spec_model.c
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Itools/keyer_study src/keyer.c src/morse.c src/keyer_test.c -o $@ -lpthread
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Itools/keyer_study src/keyer.c src/morse.c src/keyer_test.c -o $@ -lpthread $(TEST_LIBS)
 
 test-keyer-straight: src/keyer_straight.c src/keyer.h src/morse.c src/morse.h src/keyer_test.c src/key_input.h tools/keyer_study/keyer_spec_model.c
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Itools/keyer_study src/keyer_straight.c src/morse.c src/keyer_test.c -o $@ -lpthread
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Itools/keyer_study src/keyer_straight.c src/morse.c src/keyer_test.c -o $@ -lpthread $(TEST_LIBS)
 
 # The TCI server, twice, over loopback with no radio. test-tci-ws: tci_ws.c's
 # WebSocket server alone - the RFC 6455 accept vector, handshake, framing,
@@ -250,12 +260,12 @@ test-keyer-straight: src/keyer_straight.c src/keyer.h src/morse.c src/morse.h sr
 # zBitx cannot transmit - with gpio.c and i2c.c stubbed. See
 # docs/dsp_design_notes/zbitx_port_study.md §5.
 test-radio-hw: src/radio_hw.c src/radio_hw.h src/hw_settings.c src/hw_settings.h src/radio_hw_test.c
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces src/radio_hw.c src/hw_settings.c src/radio_hw_test.c -o $@ -lm
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces src/radio_hw.c src/hw_settings.c src/radio_hw_test.c -o $@ -lm $(TEST_LIBS)
 
 TCI_TEST_HDRS := src/interfaces/tci.h src/interfaces/tci_ws.h src/interfaces/tci_stream.h src/interfaces/ws_test_client.h
 
 test-tci-ws: src/interfaces/tci_ws.c src/interfaces/tci_ws_test.c $(TCI_TEST_HDRS)
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces src/interfaces/tci_ws.c src/interfaces/tci_ws_test.c -o $@ -lpthread
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces src/interfaces/tci_ws.c src/interfaces/tci_ws_test.c -o $@ -lpthread $(TEST_LIBS)
 
 test-tci: src/interfaces/tci.c src/interfaces/tci_stream.c src/interfaces/tci_ws.c src/interfaces/tci_cw.c src/interfaces/tci_test.c src/keyer.c src/morse.c src/keyer.h src/morse.h src/interfaces/tci_cw.h $(TCI_TEST_HDRS)
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces src/interfaces/tci.c src/interfaces/tci_stream.c src/interfaces/tci_ws.c src/interfaces/tci_cw.c src/keyer.c src/morse.c src/interfaces/tci_test.c -o $@ -lpthread -lm
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces src/interfaces/tci.c src/interfaces/tci_stream.c src/interfaces/tci_ws.c src/interfaces/tci_cw.c src/keyer.c src/morse.c src/interfaces/tci_test.c -o $@ -lpthread -lm $(TEST_LIBS)
