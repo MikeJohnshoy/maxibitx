@@ -2,8 +2,9 @@
 
 Status: **step 1 built** (receive only, §7) on the `zmax` branch and
 receiving on a zBitx; **step 2 built**: the zBitx transmits into a dummy
-load, calibrated to 2 W on every band (§12); the checks on the air are
-still to do. Written before any
+load, calibrated to 2 W on every band, on frequency, with DIGITAL over
+TCI and CW's T/R timing checked (§12); SSB and the opposite sideband
+still to check. Written before any
 code; §9 records the decisions taken on it, §10 step 1 as built, §11 how
 to measure the crystal filter's centre, and §12 step 2 as built.
 
@@ -220,6 +221,10 @@ What is not known:
 
 These are worth asking Jesse, and are checked by running the receive
 step (§7) on the real radio.
+
+**Found on the radio:** left alone, the panel freezes on the last screen
+zbitx drew, and nothing about it affects receive or transmit (§12). The
+power button and what it reports are still to look at.
 
 ### 3.8 Calibration
 
@@ -835,10 +840,20 @@ wanting more power raises both values together and re-checks each band
 on a wattmeter; the PA has not been run above 2.6 W, so where it begins
 to compress is not known.
 
-**Still to do on the radio:** CW keying with
-`MAXIBITX_TR_TIMING`; the signal on a remote receiver, on frequency and
-with the opposite sideband down; SSB from the microphone; DIGITAL over
-TCI; and whether the RP2040 front panel does anything during transmit
-(§3.7). clk1 leaking through the crystal filter would appear
+**First checks on the radio (2026-10-12):**
+
+- **T/R timing**, `MAXIBITX_TR_TIMING=1`, CW on 40 m, four key-downs from
+  receive: the drive is up 18.2 to 18.4 ms after the request (the
+  clocks, then the 10 ms LPF settle), and the first TX sample reaches
+  the DAC 34.5 to 40.1 ms after it, behind a 26 ms playback queue. That
+  leaves 16.2 to 21.7 ms spare: no part of the first element is lost.
+- **On frequency**, on a remote receiver.
+- **DIGITAL over TCI** transmits.
+- **The RP2040 front panel** keeps showing the last screen zbitx drew,
+  frozen, since nothing talks to it. Receive and transmit are
+  unaffected.
+
+**Still to do:** the opposite sideband on a remote receiver; SSB from
+the microphone; and anything for the front panel (§3.7, step 3). clk1 leaking through the crystal filter would appear
 `bfo_freq − xtal_filter_center` below the dial, 35.6 kHz with this
 board's values, beyond the filter's −60 dB point (§11).
