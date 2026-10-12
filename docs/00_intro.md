@@ -1368,12 +1368,8 @@ to use it.
 | [`04_remote_control_and_iq_output.md`](04_remote_control_and_iq_output.md) | how each external interface is implemented |
 | [`05_process_and_threading_model.md`](05_process_and_threading_model.md) | startup, the threads, and a map for reading `sound.c` |
 | [`06_api.md`](06_api.md) | the reference for external software: every interface's commands and formats, the radio model, WSJT-X setup, what is not available yet |
-| [`07_build_and_deployment.md`](07_build_and_deployment.md) | building, kernel and overlay dependencies, deployment |
 | [`08_troubleshooting_and_bringup.md`](08_troubleshooting_and_bringup.md) | hardware bring-up and troubleshooting |
 | [`09_faq.md`](09_faq.md) | common questions, each pointing to the document with the full story |
-| [`10_external_digital_modes_wsjtx.md`](10_external_digital_modes_wsjtx.md) | using maxibitx with WSJT-X and other digital-mode applications |
-| [`11_general_coverage_sdr_receiver.md`](11_general_coverage_sdr_receiver.md) | using maxibitx with an SDR application as a receiver (stub) |
-| [`12_simple_cw_transceiver.md`](12_simple_cw_transceiver.md) | a simple CW transceiver around maxibitx (stub) |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | the design decisions and the order the system was built in, with measurements at each step |
 | [`code_comments.md`](code_comments.md) | the comment policy |
 | [`dsp_design_notes/`](dsp_design_notes/) | design studies, derivations, measurements and debugging history for the DSP, the keyer and the interfaces |
