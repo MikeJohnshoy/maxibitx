@@ -7,11 +7,12 @@ reading `sound.c`.
 ## Scope
 
 - `main()`'s startup sequence in `maxibitx.c`: board calibration
-  (`hw_settings_load()`, `data/hw_settings.ini`) → GPIO → si5351 (clk1
-  at its RX value) → board revision/INA260 → software VFO and initial
-  tune → CW tone (`cw_init()`) → key jack and its input thread
+  (`hw_settings_load()`, `data/hw_settings.ini`) → board selection
+  (`radio_hw_select_board()`, from the file's `sbitx_version` line) →
+  GPIO → si5351 on the board's I2C bus (clk1 at its RX value) → INA260 →
+  software VFO and initial tune → CW tone (`cw_init()`) → key jack and its input thread
   (`key_input_start()`) → RX demodulator (`rx_audio_init()`) →
-  Hamlib/rigctld → TCI server (`tci_init()`) → HPSDR → I/Q telemetry stream (`iq_stream.c`) → USB
+  front-panel knobs (`knobs_start()`) → Hamlib/rigctld → TCI server (`tci_init()`) → HPSDR → I/Q telemetry stream (`iq_stream.c`) → USB
   gadget (`uac_init()`) → Kenwood CAT on the gadget's serial port
   (`cat_init()`) → audio codec → audio thread. See
   [`01_hardware_init_and_control.md`](01_hardware_init_and_control.md)
@@ -36,6 +37,11 @@ reading `sound.c`.
     thread holds it, it is starting TX, and the audio thread has nothing to
     do that block. Releasing TX after the hang time stays with the audio
     thread, and it won't release while an edge is still queued;
+  - on a board with front-panel knobs, the knob thread (`encoder.c`),
+    asleep in `ppoll()` on the knobs' edge events, at ordinary priority.
+    It calls `knobs.c`'s handlers itself: a turn of the tuning knob calls
+    `radio_tune_to()`, as a rigctld or CAT client's thread does, and the
+    volume knob sets `rx_audio.c`'s volume and mute;
   - HPSDR's listener and pacer threads (`hpsdr_p1.c`);
   - the I/Q telemetry stream's listener and pacer threads
     (`iq_stream.c`);
@@ -101,18 +107,27 @@ reading `sound.c`.
 - Console reporting: no periodic status line. `status.c`/`status.h` (a
   single-line, redraw-in-place frequency/TX-RX display, once called
   right after the init-complete line) were removed entirely - ongoing
-  operational visibility comes from the `rigctl:`/`hpsdr:` command
-  echoes described in
+  operational visibility comes from the `rigctl:`/`cat:`/`tci:`/`hpsdr:`
+  command echoes described in
   [`04_remote_control_and_iq_output.md`](04_remote_control_and_iq_output.md),
   which report a freq/PTT change at the moment it happens rather than a
-  point-in-time snapshot.
-- Failure handling at startup: GPIO (the outputs and the key jack), the
-  HPSDR socket bind and audio capture are fatal - `main()` exits if any fails. Everything else is
+  point-in-time snapshot. The rule is that the console shows what
+  happens to the radio, not what is asked about it: a client's reads
+  print nothing (rigctld) or only when the answer changes (CAT), and a
+  front-panel knob prints one line once it has been still for half a
+  second (`knobs: tuned to 14060200 Hz`, `knobs: volume 54%`), from the
+  main thread's once-a-second loop, rather than one per click.
+- Failure handling at startup: board selection, GPIO (the outputs and
+  the key jack), the HPSDR socket bind and audio capture are fatal -
+  `main()` exits if any fails. Everything else is
   best-effort and logs that it's continuing without it: Hamlib/rigctld,
   the TCI server, the I/Q telemetry stream, the USB gadget (and its TX audio direction
   separately), Kenwood CAT, the INA260 power monitor, and audio
-  playback (without it there's no local audio and no TX). A missing
-  `hw_settings.ini` falls back to compiled-in defaults.
+  playback (without it there's no local audio and no TX). A key
+  `hw_settings.ini` leaves out takes its compiled-in default, except
+  `sbitx_version`: with it missing, misspelt or unknown, or the file
+  itself missing, board selection fails, maxibitx prints the valid lines
+  and exits (status 1) before it touches a GPIO line or clock.
 
 ## Reading sound.c
 

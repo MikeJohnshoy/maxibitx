@@ -80,13 +80,14 @@ at 7030000 as it flows from the antenna through to I&Q output. We'll
 follow a second signal alongside it, 500 Hz higher at 7030500, to show
 where each one lands relative to the dial.
 
-**LPF bank.** `radio_hw.c`'s `set_lpf_40mhz(frequency)` selects one of
-four low-pass filter relays (`LPF_A`–`LPF_D`) based on the tuned
-frequency — under 5.5 MHz, under 10.5 MHz, under 18.5 MHz, or under 30
-MHz — and is a no-op if the frequency falls in the same band as the last
-call. At 30 MHz and above none is selected. Pure analog front-end
-filtering; nothing here talks to either si5351 clock. (Full relay
-init/idle-state details are in
+**LPF bank.** On the sBitx, `radio_hw.c`'s `radio_hw_tune(frequency)`
+selects one of four low-pass filter relays (`LPF_A`–`LPF_D`) based on
+the tuned frequency — under 5.5 MHz, under 10.5 MHz, under 18.5 MHz, or
+under 30 MHz — and is a no-op if the frequency falls in the same band as
+the last call. At 30 MHz and above none is selected. On the zBitx the
+LPFs are not in the receive path, and `radio_hw_tune()` does nothing.
+Pure analog front-end filtering; nothing here talks to either si5351
+clock. (Full relay init/idle-state details and both boards' plans are in
 [`01_hardware_init_and_control.md`](01_hardware_init_and_control.md).)
 
 **Mixer 1 — the RX LO (clk2), which sweeps with tuning.**
@@ -124,6 +125,10 @@ channel filtering, and `rx_audio.c` does its own for the audio it
 produces. (Measured filter response and the anti-alias filter designed
 against it live in
 [`dsp_design_notes/antialias_filter_design.md`](dsp_design_notes/antialias_filter_design.md).)
+Where the filter actually sits differs from board to board;
+[`tools/xtal_sweep.py`](../tools/README.md) measures it by moving
+`xtal_filter_center` with the dial held still
+([`dsp_design_notes/zbitx_port_study.md`](dsp_design_notes/zbitx_port_study.md) §11).
 
 **Mixer 2 — clk1, fixed while receiving.** This mixer brings the
 crystal-filter output (centered at `xtal_filter_center`) down to a low
@@ -139,7 +144,8 @@ one fixed offset. It is, however, *not* fixed for the entire life of
 the process: while transmitting, `radio_tx_apply()` retunes it to
 `bfo_freq` instead - a deliberately different, off-center value used
 only for TX image suppression - and restores this RX value the moment
-TX ends. See
+TX ends. rigctld's `L XTALCENTER` moves it too, with clk2, for measuring
+the filter. See
 [`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md) for why
 TX needs its own value here rather than reusing this one.
 
@@ -305,7 +311,8 @@ has, and decodes on par with SparkSDR on the same I/Q.
 
 `radio_tune_to(f)` in `radio.c` is how the dial frequency changes. It
 sets `freq_hdr`, clears RIT, moves `clk2` (Mixer 1's LO), restarts the
-software VFO at its same fixed frequency, and selects the LPF. It does
+software VFO at its same fixed frequency, and calls `radio_hw_tune()`,
+which selects the LPF on a board whose LPFs are in the receive path. It does
 **not** touch `clk1` and does **not** change the software VFO's
 frequency — the software VFO stays at `RX_IF_FREQ_HZ` for the life of
 the process. The only other thing that moves the receive frequency is

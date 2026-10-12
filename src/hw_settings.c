@@ -5,7 +5,9 @@
 // 'scale' table carry over. 'xtal_filter_center' is new here (not read
 // by real sbitx), added alongside bfo_freq for the same reason - all of
 // them are board-specific measurements, not source-code constants.
-// Without the file, the compiled-in defaults apply.
+// 'sbitx_version' names the radio board, and is required: maxibitx.c
+// will not start without it (radio_hw_select_board()). Other keys the
+// file leaves out take their compiled-in defaults.
 
 #include "hw_settings.h"
 #include "si5351.h" // si5351_set_calibration() - the "cal" key below
@@ -28,6 +30,8 @@ int key_debounce_ms = HW_DEFAULT_KEY_DEBOUNCE_MS;
 int tci_port = TCI_DEFAULT_PORT;
 int tci_max_clients = TCI_DEFAULT_MAX_CLIENTS;
 char tci_bind[64] = "";
+char sbitx_version[32] = "";
+int hw_i2c_bus = -1;
 
 // Section state while scanning the file - only [tx_band] sections are
 // acted on today; [tcxo] and any others are recognized (so their key=value
@@ -40,7 +44,8 @@ enum hw_section { HW_SECTION_TOP, HW_SECTION_TCXO, HW_SECTION_TX_BAND, HW_SECTIO
 static int is_top_level_key(const char *key) {
   static const char *const keys[] = { "bfo_freq", "xtal_filter_center", "full_scale_power",
                                       "max_power", "ext_ptt_delay_ms", "key_debounce_ms",
-                                      "tci_port", "tci_max_clients", "tci_bind" };
+                                      "tci_port", "tci_max_clients", "tci_bind",
+                                      "sbitx_version", "i2c_bus" };
   for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
     if (!strcmp(key, keys[i]))
       return 1;
@@ -58,10 +63,12 @@ double hw_settings_power_ratio(void) {
 
 void hw_settings_load(void) {
   tx_band_scale_count = 0;
+  sbitx_version[0] = '\0';
+  hw_i2c_bus = -1;
 
   FILE *f = fopen(HW_SETTINGS_PATH, "r");
   if (!f) {
-    printf("init: %s not found, using compiled-in defaults\n", HW_SETTINGS_PATH);
+    printf("init: %s not found\n", HW_SETTINGS_PATH);
     return;
   }
   printf("init: %s found, reading calibration settings\n", HW_SETTINGS_PATH);
@@ -101,16 +108,31 @@ void hw_settings_load(void) {
     char key[64];
     long value;
     char text[64];
-    // tci_bind is the one key whose value isn't a number
-    if (sscanf(p, " %63[^= \t] = %63s", key, text) == 2 && !strcmp(key, "tci_bind")) {
-      if (section == HW_SECTION_TOP) {
+    // tci_bind and sbitx_version are the keys whose values aren't numbers
+    if (sscanf(p, " %63[^= \t] = %63s", key, text) == 2 &&
+        (!strcmp(key, "tci_bind") || !strcmp(key, "sbitx_version"))) {
+      if (section != HW_SECTION_TOP) {
+        printf("init: %s in %s is inside a [section], so it is ignored - move it above "
+               "the first [section]\n", key, HW_SETTINGS_PATH);
+      } else if (!strcmp(key, "tci_bind")) {
         memcpy(tci_bind, text, sizeof(tci_bind));
         printf("init: tci_bind loaded from %s: %s\n", HW_SETTINGS_PATH, tci_bind);
       } else {
-        printf("init: tci_bind in %s is inside a [section], so it is ignored - move it above "
-               "the first [section]\n", HW_SETTINGS_PATH);
+        memcpy(sbitx_version, text, sizeof(sbitx_version) - 1); // text is NUL-terminated
+        sbitx_version[sizeof(sbitx_version) - 1] = '\0';
+        printf("init: sbitx_version loaded from %s: %s\n", HW_SETTINGS_PATH, sbitx_version);
       }
       continue;
+    }
+    // Lines that look like an attempt at naming the board, for the message
+    // maxibitx.c prints when sbitx_version is missing.
+    if (sscanf(p, " %63[^= \t] =", key) == 1 && section == HW_SECTION_TOP) {
+      if (!strcmp(key, "hw"))
+        printf("init: %s has zbitx's hw= key, which maxibitx doesn't read - it needs an "
+               "sbitx_version line\n", HW_SETTINGS_PATH);
+      else if (strstr(key, "version") || strstr(key, "sbitx"))
+        printf("init: %s has a key \"%s\" that maxibitx doesn't read - a misspelling of "
+               "sbitx_version?\n", HW_SETTINGS_PATH, key);
     }
     if (sscanf(p, "%63[^=]=%ld", key, &value) != 2)
       continue;
@@ -150,8 +172,8 @@ void hw_settings_load(void) {
           printf("init: ext_ptt_delay_ms=%ld in %s is outside 0-%d - using %ld ms\n", value,
                  HW_SETTINGS_PATH, HW_MAX_EXT_PTT_DELAY_MS, ms);
         else if (ms == 0)
-          printf("init: ext_ptt_delay_ms loaded from %s: 0 ms - no settling time for an "
-                 "amplifier on EXT_PTT, only safe with nothing connected there\n",
+          printf("init: ext_ptt_delay_ms loaded from %s: 0 ms - on an sBitx, no settling "
+                 "time for an amplifier on EXT_PTT, only safe with nothing connected there\n",
                  HW_SETTINGS_PATH);
         else
           printf("init: ext_ptt_delay_ms loaded from %s: %ld ms\n", HW_SETTINGS_PATH, ms);
@@ -167,6 +189,14 @@ void hw_settings_load(void) {
                  HW_SETTINGS_PATH, HW_MAX_KEY_DEBOUNCE_MS, ms);
         else
           printf("init: key_debounce_ms loaded from %s: %ld ms\n", HW_SETTINGS_PATH, ms);
+      } else if (!strcmp(key, "i2c_bus")) {
+        if (value >= 0 && value < 256) {
+          hw_i2c_bus = (int)value;
+          printf("init: i2c_bus loaded from %s: %d\n", HW_SETTINGS_PATH, hw_i2c_bus);
+        } else {
+          printf("init: i2c_bus=%ld in %s isn't a bus number - using the board's\n", value,
+                 HW_SETTINGS_PATH);
+        }
       } else if (!strcmp(key, "tci_port")) {
         if (value >= 0 && value <= 65535) {
           tci_port = (int)value;

@@ -43,11 +43,17 @@ CC      := gcc
 # switching.
 KEYER   ?= keyer
 CFLAGS  := -O3 -march=native -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces
+# A 32-bit ARM OS (armv7l: a Pi 2, 3, 4 or Zero 2W running 32-bit) leaves
+# NEON off by default. Every such Pi has NEON-VFPv4, which rx_audio.c's
+# stage-1 filter needs to vectorize (docs/dsp_design_notes/zbitx_port_study.md §10).
+ifeq ($(shell uname -m),armv7l)
+CFLAGS += -mfpu=neon-vfpv4
+endif
 LDFLAGS := -lm -lasound -lpthread -ldl -lfftw3f
 SRC := src/maxibitx.c src/radio.c src/radio_hw.c src/interfaces/hpsdr_p1.c src/interfaces/usb_gadget.c src/i2c.c \
      src/si5351v2.c src/sound.c src/vfo.c src/interfaces/hamlib.c src/hw_settings.c src/antialias.c src/decim48k.c src/cw.c \
      src/rx_audio.c src/gpio.c src/interfaces/iq_stream.c src/fft_filter.c src/tx_pipeline.c src/rx_filter.c src/upsample48k.c src/tone_gen.c \
-     src/key_input.c src/$(KEYER).c src/morse.c src/interfaces/tci.c src/interfaces/tci_stream.c \
+     src/key_input.c src/encoder.c src/knobs.c src/$(KEYER).c src/morse.c src/interfaces/tci.c src/interfaces/tci_stream.c \
      src/interfaces/tci_ws.c src/interfaces/tci_cw.c
 OBJ := $(SRC:.c=.o)
 
@@ -78,10 +84,42 @@ check-comments-all:
 check-filters:
 	python3 tools/gen_narrow_filters.py --check
 
+# Every bench harness, built and run, one line each, with a summary; exits
+# non-zero if any fails. First it links the daemon with each keyer, so a
+# change to keyer.h that one keyer no longer meets is caught too. Each
+# harness's output goes to test-logs/<name>.log, and a failure prints the
+# end of its log. Run it before uploading a change; `make` itself doesn't.
+TESTS := test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse \
+	test-upsample48k test-cw test-key-input test-radio test-encoder test-keyer \
+	test-keyer-straight test-radio-hw test-tci-ws test-tci
+KEYERS := keyer keyer_straight
+OBJ_NO_KEYER := $(filter-out src/$(KEYER).o,$(OBJ))
+
+.PHONY: test
+test:
+	@$(MAKE) --no-print-directory -s $(TESTS) $(OBJ_NO_KEYER) $(KEYERS:%=src/%.o)
+	@mkdir -p test-logs; fail=0; \
+	for k in $(KEYERS); do \
+		if $(CC) $(OBJ_NO_KEYER) src/$$k.o -o test-logs/maxibitx-$$k $(LDFLAGS) \
+			> test-logs/link-$$k.log 2>&1; then r=PASS; else r=FAIL; fail=$$((fail + 1)); fi; \
+		printf '  %s  %-24s\n' $$r "link with $$k"; \
+		if [ $$r = FAIL ]; then tail -n 15 test-logs/link-$$k.log | sed 's/^/        /'; fi; \
+	done; \
+	for t in $(TESTS); do \
+		start=$$(date +%s%N); \
+		if ./$$t > test-logs/$$t.log 2>&1; then r=PASS; else r=FAIL; fail=$$((fail + 1)); fi; \
+		tenths=$$(( ($$(date +%s%N) - start) / 100000000 )); \
+		printf '  %s  %-24s %3d.%d s\n' $$r $$t $$((tenths / 10)) $$((tenths % 10)); \
+		if [ $$r = FAIL ]; then tail -n 15 test-logs/$$t.log | sed 's/^/        /'; fi; \
+	done; \
+	if [ $$fail -eq 0 ]; then echo "all passed"; else echo "$$fail FAILED - see test-logs/"; exit 1; fi
+
 clean:
-	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw test-key-input test-keyer test-keyer-straight test-tci-ws test-tci \
+	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw test-key-input test-keyer test-keyer-straight test-tci-ws test-tci test-radio-hw test-encoder test-radio \
 		src/fft_filter.o src/fft_filter_test.o src/tx_pipeline.o src/tx_pipeline_test.o \
-		src/rx_filter.o src/rx_filter_test.o src/rx_audio_test.o src/rx_audio_impulse_test.o src/upsample48k_test.o
+		src/rx_filter.o src/rx_filter_test.o src/rx_audio_test.o src/rx_audio_impulse_test.o src/upsample48k_test.o \
+		$(KEYERS:%=src/%.o)
+	rm -rf test-logs
 
 # docs/ARCHITECTURE.md step 2: fft_filter.c/.h's own standalone bench
 # harness (fft_filter_test.c) against synthetic tones - fft_filter.c
@@ -169,6 +207,22 @@ test-cw: src/cw.c src/cw.h src/cw_envelope_test.c src/key_input.c src/key_input.
 test-key-input: src/key_input.c src/key_input.h src/key_input_test.c src/gpio.c
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/key_input.c src/gpio.c src/key_input_test.c -o $@ -lpthread
 
+# radio.c's RIT and XIT: what each puts on the si5351's clk2 in receive and
+# in transmit, a change mid-transmission, a retune clearing both, and the
+# [tx_band] check and the LPF taking the transmit frequency - with the clock
+# generator, the board, the codec and the band table stubbed, and the TX
+# worker thread running for real. See radio_test.c.
+test-radio: src/radio.c src/radio.h src/radio_test.c src/vfo.c src/vfo.h
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces src/radio.c src/vfo.c src/radio_test.c -o $@ -lm -lpthread
+
+# The front-panel knobs: encoder.c's decoding fed synthetic edges - clicks,
+# contact bounce, presses and their debounce - and knobs.c's handlers with
+# the radio and the speaker stubbed: the tuning step, the speed-up, the
+# push through the steps, no tuning in TX, volume and mute. gpio.c is
+# linked but never called. See encoder_test.c.
+test-encoder: src/encoder.c src/encoder.h src/knobs.c src/knobs.h src/encoder_test.c src/gpio.c src/radio_hw.h
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/encoder.c src/knobs.c src/gpio.c src/encoder_test.c -o $@ -lpthread
+
 # keyer.h, twice: test-keyer against keyer.c - the design study's golden
 # cases, random paddle input checked sample for sample against the
 # specification model (tools/keyer_study/keyer_spec_model.c, compiled into
@@ -190,6 +244,14 @@ test-keyer-straight: src/keyer_straight.c src/keyer.h src/morse.c src/morse.h sr
 # the keyer keys). `./test-tci --serve [port]` runs that stubbed server
 # with a test tone, for trying a client without a radio. See
 # docs/dsp_design_notes/tci_design_study.md §13.
+# The board layer: hw_settings.c's sbitx_version and i2c_bus keys, and
+# radio_hw.c's board profiles - which pins each board claims and at what
+# level, LPF selection, the relay half of the T/R sequence, and that the
+# zBitx cannot transmit - with gpio.c and i2c.c stubbed. See
+# docs/dsp_design_notes/zbitx_port_study.md §5.
+test-radio-hw: src/radio_hw.c src/radio_hw.h src/hw_settings.c src/hw_settings.h src/radio_hw_test.c
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces src/radio_hw.c src/hw_settings.c src/radio_hw_test.c -o $@ -lm
+
 TCI_TEST_HDRS := src/interfaces/tci.h src/interfaces/tci_ws.h src/interfaces/tci_stream.h src/interfaces/ws_test_client.h
 
 test-tci-ws: src/interfaces/tci_ws.c src/interfaces/tci_ws_test.c $(TCI_TEST_HDRS)

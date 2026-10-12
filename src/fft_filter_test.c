@@ -149,6 +149,17 @@ static float to_db(float measured, float reference)
 	return 20.0f * log10f(measured / reference);
 }
 
+// Each case's "want" is checked as well as printed, so the exit status
+// means something to `make test`.
+static int failures = 0;
+static void check(int ok, const char *what)
+{
+	if (!ok) {
+		fprintf(stderr, "   FAIL: %s\n", what);
+		failures++;
+	}
+}
+
 int main(void)
 {
 	printf("fft_filter.c bench - Fs=%.0f Hz, L=%d, M=%d, N=%d (docs/ARCHITECTURE.md step 2)\n\n",
@@ -162,6 +173,7 @@ int main(void)
 		tone_init(&t, 1500.0f); // dead center of a 300-3000Hz passband
 		float out = steady_state_output(f, &t, 4, 0);
 		printf("A. Passband (1500 Hz in a 300-3000 Hz band):  %.2f dB (want ~0 dB)\n", to_db(out, 1.0f));
+		check(fabsf(to_db(out, 1.0f)) <= 0.1f, "passband gain not within 0.1 dB of 0");
 		filter_free(f);
 	}
 
@@ -174,6 +186,7 @@ int main(void)
 		float out = steady_state_output(f, &t, 4, 0);
 		printf("B. Stopband (6000 Hz, same 300-3000 Hz band): %.2f dB (want <= ~-54 dB, beta=%.1f)\n",
 		       to_db(out, 1.0f), KAISER_BETA);
+		check(to_db(out, 1.0f) <= -54.0f, "stopband above -54 dB");
 		filter_free(f);
 	}
 
@@ -219,6 +232,10 @@ int main(void)
 		       to_db(wanted_no_zero, 1.0f), to_db(unwanted_no_zero, 1.0f));
 		printf("   with    bin-zero: wanted %.2f dB, unwanted %.2f dB (want: wanted ~0 dB, unwanted << B's filter-alone number)\n",
 		       to_db(wanted_zeroed, 1.0f), to_db(unwanted_zeroed, 1.0f));
+		check(fabsf(to_db(wanted_no_zero, 1.0f) - to_db(unwanted_no_zero, 1.0f)) <= 0.5f,
+		      "without bin-zero, the two sides differ by more than 0.5 dB");
+		check(fabsf(to_db(wanted_zeroed, 1.0f)) <= 0.1f, "bin-zero moved the wanted side");
+		check(to_db(unwanted_zeroed, 1.0f) <= -100.0f, "bin-zero left the unwanted side above -100 dB");
 		filter_free(f);
 	}
 
@@ -226,15 +243,26 @@ int main(void)
 	{
 		struct filter *f = filter_new(BLOCK_LEN, IMPULSE_LEN);
 		filter_tune(f, 300.0f / FS, 3000.0f / FS, KAISER_BETA);
-		printf("D. Transition sweep above the 3000 Hz edge (want ~-54 dB by ~+300 Hz, i.e. ~3300 Hz):\n");
+		printf("D. Transition sweep above the 3000 Hz edge (want: falling all the way, <= -54 dB from 3350 Hz):\n");
+		float prev_db = 1.0f;
+		int rising = 0, shallow = 0;
 		for (float hz = 3000.0f; hz <= 3500.0f; hz += 50.0f) {
 			struct tone t;
 			tone_init(&t, hz);
 			float out = steady_state_output(f, &t, 4, 0);
-			printf("   %6.0f Hz: %7.2f dB\n", hz, to_db(out, 1.0f));
+			float db = to_db(out, 1.0f);
+			printf("   %6.0f Hz: %7.2f dB\n", hz, db);
+			if (db >= prev_db)
+				rising = 1;
+			if (hz >= 3350.0f && db > -54.0f)
+				shallow = 1;
+			prev_db = db;
 		}
+		check(!rising, "the transition rises somewhere");
+		check(!shallow, "above -54 dB at or past 3350 Hz");
 		filter_free(f);
 	}
 
-	return 0;
+	printf("\n%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);
+	return failures ? 1 : 0;
 }

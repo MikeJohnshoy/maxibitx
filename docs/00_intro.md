@@ -110,8 +110,8 @@ flowchart TD
 ### The radio model
 
 There is one radio state, owned by `radio.c` and shared by every
-interface: one VFO frequency, one mode, a receive-only RIT offset, and a
-transmit flag. A change made through any interface is the change; the
+interface: one VFO frequency, one mode, a receive-only RIT offset, a
+transmit-only XIT offset, and a transmit flag. A change made through any interface is the change; the
 next read through any other interface sees it. The mode selects both the
 onboard demodulator and the transmit source:
 
@@ -138,7 +138,7 @@ radio's controls, in different forms, so there are five interfaces:
 
 | Interface | Transport | Carries |
 |---|---|---|
-| rigctld | TCP 4532, text | tuning, mode, PTT, RIT, levels, S-meter, keyer, CW text |
+| rigctld | TCP 4532, text | tuning, mode, PTT, RIT, XIT, levels, S-meter, keyer, CW text |
 | iq_stream | UDP 4536 | raw 96 kHz I/Q in a minimal format, up to 4 subscribers |
 | HPSDR Protocol 1 | UDP 1024 | I/Q, tuning and MOX for existing SDR applications, one client |
 | USB gadget | the Pi's USB-C port | 48 kHz audio in and out, Kenwood TS-480 CAT |
@@ -155,18 +155,21 @@ network.
 `maxibitx.c` starts things in dependency order, each step printing an
 `init:` line:
 
-1. Read `data/hw_settings.ini`: the crystal filter centre, BFO,
-   oscillator calibration, per-band transmit scale, power limits, PTT
-   delay, key debounce and TCI settings.
-2. Claim the GPIO output lines and park them in the receive-safe state,
-   with the T/R relay and PTT low.
-3. Start the si5351, with clk1 at its receive frequency.
-4. Detect the board revision, and configure the INA260 power monitor if
-   one answers.
+1. Read `data/hw_settings.ini`: the radio board, the crystal filter
+   centre, BFO, oscillator calibration, per-band transmit scale, power
+   limits, PTT delay, key debounce and TCI settings.
+2. Select the board named by the file's `sbitx_version` line. Without
+   that line, or with a value maxibitx does not know, it prints the
+   valid lines and exits before touching any GPIO line or clock.
+3. Claim the board's GPIO output lines and park them in the
+   receive-safe state, with the T/R relay and PTT low.
+4. Start the si5351 on the board's I2C bus, with clk1 at its receive
+   frequency, and configure the INA260 power monitor if one answers.
 5. Build the software oscillator's table and tune to the startup
-   frequency (7.030 MHz, CW).
+   frequency (7.030 MHz).
 6. Initialise the CW tone generator and start the key input thread.
-7. Initialise the receive demodulator.
+7. Initialise the receive demodulator, and select the startup mode,
+   DIGITAL, since most clients are remote SDR and digital-mode programs.
 8. Start rigctld, TCI, HPSDR, iq_stream, the USB gadget and its CAT
    port.
 9. Configure the codec's mixer and start the audio thread.
@@ -264,8 +267,9 @@ its push-to-talk in USB and LSB.
 
 ### A control panel that doubles as an example
 
-`tools/rigctl_panel.py` is a small desktop control panel, written in
-Python with Tk. It was built early in development and grew with it. It
+`tools/rigctl_panel.py` is a control panel written in Python with Tk,
+laid out for the sBitx's 7-inch touchscreen and usable in a window on
+any computer. It
 uses only maxibitx's public interfaces (rigctld for control, iq_stream
 for a live spectrum and waterfall), so it works on the Pi itself or from
 any computer on the network. It exercises nearly everything the radio
@@ -305,31 +309,36 @@ external interfaces are in `src/interfaces/`.
 ### Radio state
 
 - **`radio.c`**: the single owner of radio state: frequency, mode, RIT,
-  CW pitch and the transmit flag. `radio_tune_to()` sets the first
+  XIT, CW pitch and the transmit flag. `radio_tune_to()` sets the first
   oscillator and the band filter. `radio_set_mode()` points the
   demodulator at the mode, and holds the narrow filter out in DIGITAL.
-  `radio_set_tx()` checks the band, then hands the change to the TX
-  worker thread, which runs the T/R sequence described in
+  `radio_set_tx()` checks that the board may transmit and that the dial
+  is in a transmit band, then hands the change to the TX worker thread, which runs the T/R sequence described in
   [§7](#7-transmit-source-to-antenna).
 
 ### Hardware
 
-- **`radio_hw.c`**: the board's control lines: claiming the GPIO
-  outputs at boot, the band low-pass filter relays, the T/R relay and
-  external PTT lines, board revision detection, and the INA260 monitor.
+- **`radio_hw.c`**: the radio board. Every difference between the
+  boards maxibitx runs on is here, as one profile per board, selected by
+  `hw_settings.ini`'s `sbitx_version` line: claiming the GPIO outputs at
+  boot, the band low-pass filter relays, the relay half of the T/R
+  sequence, whether the board may transmit, the si5351's I2C bus, the
+  front-panel knobs' pins, and the INA260 monitor.
 - **`gpio.c`**: a thin layer over the kernel's GPIO character-device
   interface (line requests and edge events), used for the outputs here
-  and for the key jack in `key_input.c`.
+  and for the key jack in `key_input.c` and the knobs in `encoder.c`.
 - **`i2c.c`**: a thin layer over the kernel's I2C driver, used by the
-  si5351, the board probe and the INA260.
+  si5351 and the INA260.
 - **`si5351v2.c`**: the si5351 clock generator: computes PLL and
   divider settings for a frequency against the calibrated TCXO
   frequency, and sets clk1 and clk2.
 - **`hw_settings.c`**: reads `data/hw_settings.ini`, the per-board
-  calibration file shared with the sBitx software: crystal filter
+  calibration file shared with the sBitx software: the radio board
+  (`sbitx_version`, required) and optionally its I2C bus, crystal filter
   centre, BFO, oscillator calibration, the per-band transmit scale
   table, power limits, external PTT delay, key debounce and the TCI
-  server settings. Without the file, compiled-in defaults apply.
+  server settings. A key the file leaves out takes its compiled-in
+  default, except `sbitx_version`, which has none.
 
 ### Real-time audio thread and codec
 
@@ -367,6 +376,12 @@ external interfaces are in `src/interfaces/`.
   kernel-timestamped edges on a real-time thread, debounces them,
   detects a mono plug at startup, applies paddle reversal, and queues the edges
   for the audio thread.
+- **`encoder.c`**: the front-panel knobs on the sBitx, tuning and
+  volume. Reads their encoders and push switches as edge events on a
+  thread of its own, and reports whole clicks and presses.
+- **`knobs.c`**: what the knobs do: the tuning knob moves the dial by the
+  tuning step (rigctld `n`/`N`), faster when turned fast, and a push
+  changes the step; the volume knob sets the volume, and a push mutes.
 - **`keyer.c`**: the keyer: straight, bug, ultimatic, iambic A and B,
   1 to 60 WPM, and queued text sent with correct letter and word
   spacing. **`keyer_straight.c`** is a straight-key-only replacement,
@@ -374,7 +389,8 @@ external interfaces are in `src/interfaces/`.
 - **`morse.c`**: the Morse table, and the translation of each
   interface's text (rigctld, CAT, TCI) into the keyer's one internal
   form, including prosigns and in-text speed changes.
-- **`tone_gen.c`**: the transmit test-tone generator: a 1 kHz tone, or a
+- **`tone_gen.c`**: the transmit test-tone generator: one tone (1 kHz,
+  or the CW pitch in CW and CWR, which puts it on the dial), or a
   700 + 1900 Hz two-tone.
 - **`tx_pipeline.c`**: the transmit pipeline every mode shares: the
   bandpass filter, sideband selection, the shift to the transmit IF,
@@ -439,22 +455,31 @@ Both signal chains pass through the same analog hardware, in opposite
 directions. This section describes those parts and the settings
 maxibitx gives them. The frequencies are those of the author's board;
 each board's crystal filter centre is measured and set in
-`data/hw_settings.ini`.
+`data/hw_settings.ini`, which also names the board: `sbitx_version =
+SBITX_V3` for an sBitx DE, v2 or v3.
+
+maxibitx also has a profile for the zBitx (`sbitx_version =
+SBITX_V4`), which shares this signal chain but has its own pins, LPF
+plan, I2C bus and T/R switching. Its LPFs carry only the transmitter,
+so the band's filter is switched in at each transmission rather than on
+each retune. See
+[zbitx_port_study.md](dsp_design_notes/zbitx_port_study.md) §5 and §9.
 
 ### Band low-pass filters
 
 Four relay-selected low-pass filters sit between the antenna and the
 first mixer. They protect the receiver from strong signals far above
-the band, and strip harmonics from the transmitter. `set_lpf_40mhz()`
-in `radio_hw.c` selects one each time the radio is tuned:
+the band, and strip harmonics from the transmitter. `radio_hw_tune()`
+in `radio_hw.c` selects one from the board's plan each time the radio is
+tuned:
 
-| Tuned frequency | Filter |
-|---|---|
-| below 5.5 MHz | LPF_D |
-| 5.5 to 10.5 MHz | LPF_C |
-| 10.5 to 18.5 MHz | LPF_B |
-| 18.5 to 30 MHz | LPF_A |
-| 30 MHz and above | none |
+| Tuned frequency | Bands | Filter |
+|---|---|---|
+| below 5.5 MHz | 80, 60 m | LPF_D |
+| 5.5 to 10.5 MHz | 40, 30 m | LPF_C |
+| 10.5 to 18.5 MHz | 20, 17 m | LPF_B |
+| 18.5 to 30 MHz | 15, 12, 10 m | LPF_A |
+| 30 MHz and above | | none |
 
 ### The two mixers and the si5351
 
@@ -479,7 +504,8 @@ transmit, a higher audio IF goes out at a higher RF.
 
 The si5351 runs from a TCXO whose actual frequency, measured on the
 bench, is the `cal` value in `hw_settings.ini` (nominally 25 MHz). It
-sits on the Pi's I2C bus 22, at address 0x60. Every clock change is an
+sits at address 0x60 on the board's I2C bus: bus 22 on the sBitx, or
+the bus `hw_settings.ini`'s `i2c_bus` key names. Every clock change is an
 I2C transaction, which is one reason clock changes stay off the audio
 thread.
 
@@ -533,10 +559,9 @@ the log.
 The PA has a fixed gain: output power is set entirely by the level of
 the exciter feed from the codec. Two GPIO lines control the switching.
 **TX_LINE** (BCM 23) operates the T/R relay, and **EXT_PTT** (BCM 12)
-is the PTT line for an external amplifier or accessory. The board
-revision (the original sBitx DE, or v2 and later with a power/SWR
-bridge) is detected by probing the I2C bus. The INA260 supply monitor is
-configured if present, but its readings are not used yet.
+is the PTT line for an external amplifier or accessory. The INA260
+supply monitor is configured if present, but its readings are not used
+yet.
 
 ### The key jack
 
@@ -555,7 +580,7 @@ and a second one 500 Hz higher, at 7,030,500 Hz.
 
 ```mermaid
 flowchart TD
-    ANT["Antenna"] --> LPF["Band LPF, one of four relays<br/>chosen by set_lpf_40mhz()"]
+    ANT["Antenna"] --> LPF["Band LPF, one of four relays<br/>chosen by radio_hw_tune()"]
     LPF --> M1["Mixer 1"]
     CLK2["clk2 = dial + xtal_filter_center + RIT<br/>47,042,400 Hz at 7.030 MHz"] --> M1
     M1 -->|"dial lands on 40,012,400 Hz<br/>spectrum inverted"| XF["Crystal filter<br/>about 35 kHz wide at -3 dB"]
@@ -572,7 +597,7 @@ flowchart TD
 
 ### Band filter and Mixer 1
 
-The antenna feeds the band low-pass filter that `set_lpf_40mhz()` chose
+The antenna feeds the band low-pass filter that `radio_hw_tune()` chose
 for the dial frequency; at 7.030 MHz that is LPF_C. The filtered signal
 goes to Mixer 1, whose oscillator clk2 is set by `radio_tune_to()` to
 the dial frequency plus the crystal filter centre:
@@ -760,6 +785,12 @@ only a few dB right at 0 Hz, where +0 and −0 cannot be told apart,
 about 10 dB at −200 Hz, and 40 to 75 dB from about −400 Hz outward. Its
 delay is 163 samples, 1.7 ms.
 
+This filter is nearly all of the receive chain's processing time, so it
+runs in single precision, four taps at a time on the Pi's NEON vector
+unit. Against the same filter in double precision, its response differs
+by under 0.001 dB, and its rounding noise is 160 dB below full scale,
+about 70 dB under the codec's own noise.
+
 This filter sets both the SSB and digital receive bandwidth and the
 opposite-sideband rejection of every mode.
 
@@ -900,7 +931,7 @@ flowchart TD
     BFO["clk1 = bfo_freq<br/>40,035,000 Hz"] --> M2
     M2 -->|"wanted product on the filter centre<br/>other 45 kHz above, rejected"| XF["Crystal filter"]
     XF --> M1["Mixer 1"]
-    CLK2["clk2 = dial + xtal_filter_center<br/>no RIT"] --> M1
+    CLK2["clk2 = dial + XIT + xtal_filter_center<br/>no RIT"] --> M1
     M1 --> PA["PA, fixed gain"] --> LPF["Band LPF"] --> ANT["Antenna"]
 ```
 
@@ -918,8 +949,9 @@ flowchart TD
 Four rules apply to all of them:
 
 - **The band check.** `radio_set_tx()` refuses to transmit outside every
-  `[tx_band]` range in `hw_settings.ini` (when it has any). The main
-  thread logs a refusal at most once a second.
+  `[tx_band]` range in `hw_settings.ini` (when it has any), and on a
+  board that may not transmit at all. The main thread logs a refusal at
+  most once a second.
 - **The local key wins.** While the key or the mic PTT holds the
   transmitter, PTT commands from every interface are ignored. Among TCI
   clients, the one that keyed the transmitter owns it until it
@@ -942,7 +974,7 @@ runs `radio_tx_apply()`.
 1. Mute the receive input (the codec's line-input mute, left channel),
    before any transmit RF exists.
 2. Set clk1 to `bfo_freq` (40,035,000 Hz), and clk2 to the dial plus
-   the crystal filter centre, without RIT.
+   the crystal filter centre, without RIT and with XIT.
 3. Raise EXT_PTT, for an external amplifier.
 4. Wait `ext_ptt_delay_ms` (20 ms by default, settable from 0 to 100 in
    `hw_settings.ini`), so an amplifier's relay has closed before RF
@@ -1276,12 +1308,20 @@ off and drops PTT, unless the local key is holding the transmitter.
 
 ## 8. Testing
 
-The DSP and the TCI server are tested on the bench, on any Linux
-machine, without radio hardware. Each harness is a separate make
-target, built outside the normal build, that links only the modules it
-tests (none touch the hardware) and drives them with synthetic
+The DSP, the TCI server and the board layer are tested on the bench, on
+any Linux machine, without radio hardware. Each harness is a separate
+make target, built outside the normal build, that links only the modules
+it tests (none touch the hardware) and drives them with synthetic
 signals or scripted clients, checking the results against numeric
 targets. Each prints its cases and exits non-zero on a failure.
+
+`make test` builds and runs all of them, one line each, and exits
+non-zero if any fails. It first links the daemon with each keyer
+(`keyer.c` and `keyer_straight.c`), so a change to `keyer.h` that one of
+them no longer meets is caught too. Each harness's output goes to
+`test-logs/`, and a failure prints the end of its log. It takes under a
+minute; most of that is `test-tci`, which paces its scripted clients in
+real time. Run it before uploading a change.
 
 | Target | What it checks |
 |---|---|
@@ -1293,10 +1333,13 @@ targets. Each prints its cases and exits non-zero on a failure.
 | `make test-upsample48k` | `upsample48k.c`: passband gain and rejection of the image the zero-stuffing creates |
 | `make test-cw` | `cw.c`: the keying envelope and its weighting, with key edges arriving through `key_input.c` at their own timestamps, including late capture reads and a codec clock 300 ppm off |
 | `make test-key-input` | `key_input.c`: debounce, bounce trains and glitches, mono-plug detection, paddle reversal, and placing edges in blocks |
+| `make test-radio` | `radio.c`'s RIT and XIT: the receive and transmit clocks each moves, a change mid-transmission, a retune clearing both, and the band check at the transmit frequency |
+| `make test-encoder` | `encoder.c` and `knobs.c`: clicks each way through contact bounce, presses and their debounce, the tuning step, speed-up and push, no tuning in TX, volume and mute |
 | `make test-keyer` | `keyer.c`: exact element timing in samples for golden cases, and random paddle input in every mode checked against a sample-by-sample specification model; text, spacing and speed changes |
 | `make test-keyer-straight` | the same tests against `keyer_straight.c`, which must refuse what it does not offer |
 | `make test-tci-ws` | `tci_ws.c` over loopback: the WebSocket handshake and its refusals, every frame length encoding, fragmentation, close, oversize and malformed frames, the client limit, and the send queue's drop policy |
 | `make test-tci` | the TCI server over loopback, with the radio stubbed: a JTDX-style start-up, state echoes, PTT rules, receive audio in every format and rate, I/Q at both rates, transmit audio paced by `TX_CHRONO`, and CW text read back from what the real keyer keys |
+| `make test-radio-hw` | `hw_settings.c`'s `sbitx_version` and `i2c_bus` keys and `radio_hw.c`'s board profiles, with GPIO and I2C stubbed: the pins each board claims and their levels, LPF selection, the order of the T/R relay sequence, the zBitx's LPF chosen at the transmit frequency and no transmit where there is no LPF, and each board's knob pins, clear of every other pin in use |
 
 `make check-comments` runs `tools/check_comments.py` over the sources,
 enforcing the comment policy: comments state what the code does now,

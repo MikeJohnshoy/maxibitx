@@ -15,62 +15,107 @@ each source file's header names the file itself. Run it with
 
 ## `rigctl_panel.py`
 
-A small desktop GUI: a frequency readout/entry (with quick +/- step
-buttons), a volume slider, and a live spectrum display with a waterfall
-(about 8 s of history) under it. Talks the same
-plain-text rigctld protocol WSJT-X/Thetis/etc. already use against
-minibitx's built-in server (`hamlib.c`, default TCP 4532) - see
-[`../docs/04_remote_control_and_iq_output.md`](../docs/04_remote_control_and_iq_output.md)
-for the full command set. Volume relies on the `l`/`L AF` level commands
-added alongside this tool - a minibitx build from before that change
-will still connect and show frequency, but volume will read/set nothing.
+A touch-friendly control panel, laid out for the sBitx's 7-inch 800×480
+screen and just as usable in a window on a laptop. It is a client like
+any other: control over rigctld (`hamlib.c`, TCP 4532) and the spectrum
+over the I/Q stream (`iq_stream.c`, UDP 4536), so it runs on the Pi
+itself or anywhere on the network
+([`../docs/06_api.md`](../docs/06_api.md)).
 
-The spectrum is fed by a second, independent connection - UDP to
-`src/interfaces/iq_stream.c`'s lightweight I/Q telemetry stream (port 4536) - kept
-deliberately separate from both the HPSDR Protocol 1 link WSJT-X/Thetis
-use for their own I/Q (`hpsdr_p1.c`, single-client - a second client
-there would silently steal the stream from whichever SDR app connected
-first) and the CAT/audio USB gadget (`usb_gadget.c`). See
-[`../docs/dsp_design_notes/iq_stream_design.md`](../docs/dsp_design_notes/iq_stream_design.md)
-for the full design and bench verification. A minibitx build from before
-`iq_stream.c` existed will still connect for frequency/volume; the
-spectrum panel will just say it's waiting for data that never arrives.
+The screen, top to bottom:
 
-Run it on a laptop, or on the Pi's own desktop if it has one - it's a
-separate process from `minibitx`, connecting over TCP (rigctld) and UDP
-(spectrum) like any other client, so it works either locally
-(`127.0.0.1`) or from anywhere on the network that can reach the Pi.
+- **Top bar:** band menu, the frequency, mode (CW, CWR, USB, LSB, DIGI),
+  the RX/TX light, volume, and the settings gear. The band menu remembers the last
+  frequency used on each band.
+- **RIT / XIT:** RIT or XIT picks which offset −100, −10, +10 and +100
+  change; the value between them is that offset (tap it to clear it), and
+  the group's title says where it puts you, e.g. `XIT · TX 14.057.000`.
+  RIT moves only the receiver, XIT only the transmitter. A green marker
+  on the spectrum, scale and waterfall shows where RIT has the receiver
+  listening, a red `TX` marker where XIT will transmit, solid while
+  transmitting. The display stays centred on the dial, so a signal
+  doesn't move when either does. An offset past the span shows as an
+  arrow at that edge. Retuning clears both.
+  **FILTER:** the CW filter on or off, its width and its centre (the CW
+  pitch). In DIGI the radio holds the filter out of circuit and the
+  group says so.
+- **Spectrum:** span (5, 10 or 25 kHz), a status line, the S-meter, then
+  the trace, a frequency scale and the waterfall under it. Each frame
+  averages the 6 or so FFTs since the last one, over time and never
+  across frequencies, so the noise floor holds steady and signals stay
+  narrow. A dimmer peak line behind the trace holds each frequency's
+  highest level and falls back 15 dB a second, which leaves a CW
+  station's outline standing between its dits; it can be switched off
+  in Settings. With auto floor (on by default), the bottom of the trace
+  and the darkest waterfall colour follow the band's noise (measured
+  within 10 kHz of the centre, clear of the crystal filter's skirts), 6 dB
+  below it, so the noise sits just off the bottom on any band and the height
+  above it goes to signals; the status line shows the noise level next
+  to the peak. Off, the bottom is fixed at −100 dB. The top stays at
+  `SPECTRUM_DB_CEILING`.
+- **By mode:** in CW, ten macro buttons; in USB/LSB, mic gain and the ALC
+  meter; in DIGI, a note that the digital-mode program has the audio.
+- **Bottom row:** keyer type, WPM, the CW text field, Send and Stop,
+  power, and Tune.
 
-**Requirements:** Python 3's standard library, `tkinter`, and `numpy`
-(for the spectrum's FFT - the plot itself is drawn on a plain Tkinter
-Canvas, no plotting library needed). `tkinter` usually ships with Python
-on Windows/macOS, but is a separate package on Debian/Raspberry Pi OS:
+**Tuning digit by digit.** Tap a digit of the frequency to make it the
+tuning step (it turns amber and underlined). Then the mouse wheel over a
+digit, a drag up or down on it, or the Up and Down keys change it; Left
+and Right move the step. Double-click the frequency to type one in:
+`14058.2` (kHz), `14.0582` (MHz) or `14058200` (Hz).
+
+**The sBitx's knobs.** The step tapped is also the radio's tuning step
+(rigctld `N`), so the sBitx's tuning knob moves the dial by that digit,
+and a push of the knob, which moves the step on, moves the underline
+too. The panel reads the frequency four times a second, so a turn of the
+knob shows at once. A push of the volume knob mutes the speaker and the
+VOL caption reads MUTE in amber; tap the caption to mute or unmute from
+the panel, and moving the volume slider unmutes, as turning the knob
+does. A maxibitx without knob support simply doesn't answer `n` or
+`u MUTE`, and the panel carries on without them.
+
+**Settings** open from the gear at the top right (or the RX/TX button):
+the connection, the peak line and auto floor, paddle reversal, the CW filter type (FFT
+or elliptic), the TX test tones with their Transmit switch, the ten
+macros (a button label and the text sent), and the macro fields. A field
+is a name and a value: MYCALL and PARK to start with, and up to eight of
+your own (NAME, QTH, RIG...). A macro's `{NAME}` is replaced by that
+field's value, and a macro naming a field with no value isn't sent, so a
+CQ never goes out without your call. Settings, the last host and the
+band memory are kept in `~/.maxibitx_panel.json`.
+
+**Tune** keys the transmitter with the single test tone at the power set
+beside it. In CW and CWR the carrier is on the dial (plus XIT), where a
+key-down goes; in USB and DIGI it is 1 kHz above the dial, in LSB 1 kHz
+below; maxibitx drops it after 30 s. **NR** is on the screen but
+disabled: maxibitx doesn't have it yet.
+
+The panel connects at start-up to the last host used (127.0.0.1 the first
+time, which is right on the Pi) and keeps trying every 5 s while it
+isn't connected, so it comes back on its own when maxibitx restarts.
 
 ```
-sudo apt install python3-tk
-pip install numpy   # or: sudo apt install python3-numpy
+python3 tools/rigctl_panel.py                   # last host
+python3 tools/rigctl_panel.py --fullscreen      # full screen on any screen
+python3 tools/rigctl_panel.py --window          # a window on any screen
+python3 tools/rigctl_panel.py --host sbitx.local
 ```
 
-**Run:**
+On a screen no bigger than 800x480, like the sBitx's 7-inch display, the
+panel opens full screen with no title bar, so all of it fits; on a larger
+one it opens as an 800x480 window. F11 switches between the two, and
+Escape leaves full screen.
+
+**Requirements:** Python 3 with `tkinter`, and `numpy`. The layout is
+drawn for IBM Plex Sans Condensed; without it the panel uses another
+condensed face (Piboto Condensed, DejaVu Sans Condensed, ...) with its
+sizes scaled down to fit the same space, so installing the IBM Plex fonts
+gives the intended look. Sizes are fixed at 96 dpi whatever the screen
+reports, so the 7-inch display doesn't enlarge them. On Raspberry Pi OS:
 
 ```
-python3 tools/rigctl_panel.py
+sudo apt install python3-tk python3-numpy fonts-ibm-plex
 ```
-
-Enter the Pi's hostname or IP and the rigctld port (4532 by default),
-click Connect. The panel remembers the last host/port used
-(`~/.maxibitx_panel.json`; if that doesn't exist yet it reads the older
-`~/.minibitx_panel.json`) so subsequent launches don't need retyping
-them. Frequency and volume both poll once a second while connected, so
-the panel stays current even if something else (another rigctld client,
-FLRig's CAT, an HPSDR app's MOX) changes state in the meantime - except
-the frequency entry box itself, which is left alone while it has focus
-so a poll tick can't overwrite what you're mid-way through typing. The
-spectrum starts/stops with the same Connect/Disconnect button, spans the
-full ±48kHz native-96kHz baseband range around dial center (see
-`iq_stream_design.md` for what actually limits how much of that is real,
-undistorted signal vs. crystal-filter skirt), and updates at roughly
-15fps regardless of how much faster the underlying FFT itself runs.
 
 ## `tci_client.py`
 
@@ -88,3 +133,61 @@ mode: `-c "cw_macros:0,cq test |ar|;"` or `-c "cw_msg:0,tu,kb2ml,5nn;"`
 (these key the transmitter too). `./test-tci --serve` on any
 computer runs a stubbed server to try it against without a radio. See
 [`../docs/06_api.md`](../docs/06_api.md), "TCI".
+
+## `xtal_sweep.py`
+
+Measures a radio's crystal filter, to find the right
+`xtal_filter_center` for `data/hw_settings.ini`. It holds the dial still,
+steps `xtal_filter_center` over rigctld (`L XTALCENTER`, TCP 4532), and
+records the whole I/Q spectrum (UDP 4536) at each step.
+
+At each step, the offset *d* from the dial sees the crystal filter at
+*setting − d*, multiplied by a response that depends on *d* alone (the
+codec, its digital filter and the anti-alias filter, which see the same
+IF at every step). The tool separates the two with a robust fit, so each
+crystal frequency is measured at up to 45 offsets rather than one. The
+fit also takes out the band's level rising and falling during the sweep
+(fading), which moves every offset of a step together and would
+otherwise be drawn into the filter as ripple. The result is smoother,
+signals that come and go are ignored, and it covers
+the swept range plus about 11 kHz on each side, so the filter's edges are
+measured even when they are outside the sweep.
+[`../docs/dsp_design_notes/zbitx_port_study.md`](../docs/dsp_design_notes/zbitx_port_study.md)
+§11 explains the method.
+
+```
+python3 tools/xtal_sweep.py --host zbitx.local
+python3 tools/xtal_sweep.py --host sbitx.local --out sbitx_filter
+python3 tools/xtal_sweep.py --refit xtal_sweep_20261004_150000_raw.csv
+```
+
+By default it sweeps 39,975,000 to 40,050,000 Hz in 1,000 Hz steps
+(about two minutes); the step is also the result's resolution. It prints
+the filter against crystal frequency with bars, the peak, the depth of
+the measurement, the edges and centres at −3, −6 and −20 dB, and the
+−6 dB centre (or the −3 dB one, if the measurement isn't deep enough)
+rounded to 100 Hz as the value to put in the ini. It also prints the
+response after the filter. It restores the original setting at the end,
+also on Ctrl-C, and never writes the ini.
+
+Files, named from `--out` (default `xtal_sweep_<time>`): `.csv` (the
+filter, with a 1 kHz window at the dial measured the simple way beside
+it), `_if.csv` (the response after the filter), `_steps.csv` (the
+band's level changes it took out, step by step), `_raw.csv` (every step's
+spectrum; `--refit` reads it again without the radio), and `.png` if
+matplotlib is installed.
+
+How deep the filter can be drawn depends on how far the noise in front
+of it is above the noise added after it. Band noise on an antenna gives
+several dB to a few tens of dB, depending on the band and the time of
+day; a noise source at the antenna input gives the most; a dummy load
+shows the filter barely at all. The report gives the depth, and doesn't
+report an edge below it. In a shallow measurement the edges come out a
+little wide, but the centre holds. `--help` lists the other options.
+
+**Requirements:** Python 3 and `numpy`; `matplotlib` for the plot. Needs
+a maxibitx with rigctld's `XTALCENTER` level
+([`../docs/06_api.md`](../docs/06_api.md)); with an older build it says
+so and stops. While a setting leaves no usable transmit IF, maxibitx
+refuses to transmit; the sweep won't start while the radio is
+transmitting.

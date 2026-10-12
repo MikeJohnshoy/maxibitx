@@ -86,7 +86,8 @@ static double codec_ppm = 0;
 static int64_t capture_ns(long k, int64_t jitter_ns) {
   int64_t t = T0 + (int64_t)llround(k * BLOCK * 1e9 / FS * (1 + codec_ppm * 1e-6));
   if (jitter_ns) {
-    t += (int64_t)(((k * 2654435761u) >> 8) % 1001) * jitter_ns / 1000;
+    // 64-bit product, so a 32-bit build draws the same jitter.
+    t += (int64_t)((((uint64_t)k * 2654435761u) >> 8) % 1001) * jitter_ns / 1000;
     if (k == 12)
       t += 8 * MS;
   }

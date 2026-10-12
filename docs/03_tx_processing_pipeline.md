@@ -68,13 +68,13 @@ The derivations and bench numbers behind the current design are
   Crystal filter, centered at xtal_filter_center (40,012,400 Hz)
      |
      v
-  Mixer 1  <---  clk2 = freq_hdr + xtal_filter_center (no RIT during TX)
+  Mixer 1  <---  clk2 = freq_hdr + XIT + xtal_filter_center (no RIT during TX)
      |
      v
   PA (fixed gain)
      |
      v
-  LPF bank (radio_hw.c: set_lpf_40mhz, same relays RX uses)
+  LPF bank (radio_hw.c: on the sBitx, radio_hw_tune()'s, same relays RX uses)
      |
      v
   Antenna
@@ -132,7 +132,9 @@ for why). Who calls it:
   requests to change it are ignored - the local key wins.
 
 **Band limits.** `radio_set_tx()` refuses to transmit when the dial
-sits outside every `[tx_band]` range in `data/hw_settings.ini`, which
+sits outside every `[tx_band]` range in `data/hw_settings.ini`, or when
+the board may not transmit at all (`radio_hw_tx_permitted()`, a switch
+in each board's profile, on for both boards) - the two checks together are `radio_tx_allowed()`. That
 covers all of those sources at once rather than each having to check
 for itself. Returning to receive is never refused. rigctld's `T`
 answers `RPRT -1`; the other surfaces have no error reply, so the
@@ -140,10 +142,14 @@ refusal is reported on the console instead — by `maxibitx.c`'s idle
 loop rather than at the point of refusal, because the straight key's
 path runs on the real-time audio thread and may not do I/O. A key held
 down out of band therefore logs once a second, not once per poll.
+`radio_tx_refused()` gives the idle loop the reason with the dial
+frequency: `tx: PTT refused - <freq> Hz is outside every calibrated
+[tx_band] range`, or `tx: PTT refused - transmit is not enabled on the
+zBitx`.
 
-If no `[tx_band]` entries were loaded at all — no `hw_settings.ini`, or
-one without them — nothing is refused. An empty table means nothing is
-calibrated, not that nothing is allowed; refusing everything would
+If no `[tx_band]` entries were loaded at all — a `hw_settings.ini`
+without them — nothing is refused on that account. An empty table means
+nothing is calibrated, not that nothing is allowed; refusing everything would
 leave an uncalibrated board unable to transmit at all, which is the
 worse failure.
 
@@ -157,14 +163,32 @@ produce a carrier.
 
 `radio_tx_apply(1)` then runs, in order: mute RX capture
 (`sound_set_rx_capture(0)`, before any TX RF exists), set clk1 to
-`bfo_freq` and clk2 to `freq_hdr + xtal_filter_center`, raise PTT
-(`EXT_PTT`), wait `ext_ptt_delay_ms` from `hw_settings.ini` (20 ms by
-default, for an external amplifier's relay; 0 for a station with nothing on
-`EXT_PTT`), switch the T/R relay (`TX_LINE`), and open the
-exciter feed (`sound_set_tx_drive(TX_MASTER_VOL)`). Returning to RX is
-the reverse: exciter feed to 0, PTT off, 5 ms, relay off, clk1 back to
+`bfo_freq` and clk2 to the transmit frequency plus `xtal_filter_center`,
+run the board's relay half of the sequence (`radio_hw_relays_tx(1,
+tx_freq)`, `radio_hw.c`), and open the exciter feed
+(`sound_set_tx_drive(TX_MASTER_VOL)`). The transmit frequency is
+`radio_tx_freq()`: the dial, plus XIT when it's on (rigctld `Z`, CAT `XT`,
+TCI `xit_offset`). `radio_set_tx(1)` fixes it for the whole transmission
+before raising `in_tx`, and the `[tx_band]` check and the per-band power
+scale use it too, so XIT can't carry a signal out of a band unnoticed.
+Returning to RX is the reverse: exciter feed to 0,
+`radio_hw_relays_tx(0, ...)`, clk1 back to
 `xtal_filter_center + RX_IF_FREQ_HZ`, clk2 back to its RX value (with
 RIT), and RX capture unmuted last, once the relay has settled.
+
+On the sBitx the relay half raises PTT (`EXT_PTT`), waits
+`ext_ptt_delay_ms` from `hw_settings.ini` (20 ms by default, for an
+external amplifier's relay; 0 for a station with nothing on
+`EXT_PTT`), then switches the T/R relay (`TX_LINE`); back to receive it
+drops `EXT_PTT`, waits 5 ms and drops `TX_LINE`. On the zBitx, which
+has no `EXT_PTT` and ignores `ext_ptt_delay_ms`, the transmit half drops
+`RX_LINE` (receiver off), selects the LPF for the transmit frequency,
+waits 10 ms for its relay and raises `TX_LINE`, which powers the PA; the
+receive half drops `TX_LINE`, turns every LPF off, waits 5 ms and raises
+`RX_LINE`. At 30 MHz and above there is no LPF, so the transmit half
+refuses and switches nothing, and `radio_tx_apply()` restores the RX
+clocks and capture and stays in receive. The sequence is zbitx's own
+([`zbitx_port_study.md`](dsp_design_notes/zbitx_port_study.md) §3.3).
 
 ## Stage by stage
 
@@ -196,8 +220,11 @@ period:
   (`uac_pull_audio_tx()`) and upsampled 2x (`upsample48k.c`). Gaps are
   filled with silence so the filter history stays continuous.
 - Test tones, in any mode, while the generator is on (`tone_gen.c`,
-  rigctld `U TONE 1|2`): a full-scale 1000 Hz tone, or 700 + 1900 Hz at
-  half amplitude each. Both peak at full scale, so both reach the same
+  rigctld `U TONE 1|2`): a full-scale single tone, or 700 + 1900 Hz at
+  half amplitude each. The single tone is 1000 Hz in USB, LSB and
+  DIGITAL, landing 1 kHz from the dial; in CW and CWR it is the CW pitch,
+  which the CW shift lands on the dial (plus XIT), so TUNE's carrier is
+  where a key-down goes. Both peak at full scale, so both reach the same
   PEP as CW; the two-tone's average power is half. Any PTT source keys
   them, and the sideband still follows the mode. After 30 s in transmit
   the generator turns itself off and PTT drops. Design and measurement
@@ -231,14 +258,17 @@ For the example, the input is a 700 Hz tone.
    `bfo_freq` and `xtal_filter_center` actually loaded from
    `data/hw_settings.ini` - `sound.c` calls
    `tx_pipeline_set_if_placement()` after `hw_settings_load()`, and again
-   via `sound_update_cw_if_placement()` on every pitch change, so a board
+   via `sound_update_cw_if_placement()` on every pitch change and every
+   runtime change of `xtal_filter_center` (rigctld `L XTALCENTER`), so a board
    whose IF differs transmits on frequency rather than off
    by the difference. `tx_pipeline.h`'s `TX_IF_SHIFT_*_BINS` remain as
    the starting values and as what the bench harness uses, since that
    links no hardware code and has no settings file to read. A placement
    that isn't physical (a non-positive difference, or one past Nyquist)
-   is rejected, leaving the defaults and logging it: transmitting at a
-   wrong IF is worse than transmitting at the default one.
+   is rejected and logged, and transmit is then refused
+   (`sound_tx_if_placed()`, checked by `radio_tx_allowed()`) until a
+   placement succeeds: the shift in force would no longer match the
+   clocks, and the transmission would be off frequency by the difference.
 
    One measured consequence of doing the shift in whole bins: 46.875 Hz is
    the finest placement available, so the carrier lands within half a bin
@@ -291,7 +321,8 @@ what lets the filter keep one product and reject the other.
 product is deep in its stopband.
 
 **Mixer 1 — clk2.** clk2 is `freq_hdr + xtal_filter_center` =
-47,042,400 Hz, the same as RX without RIT. The output is
+47,042,400 Hz, the same as RX without RIT (XIT, when on, adds its
+offset here). The output is
 47,042,400 − 40,012,409.4 = 7,029,990.6 Hz: the carrier lands 9.4 Hz
 below the dial. That residual comes from the bin rotate moving in
 whole 46.875 Hz steps. The zeroed image, if any of it survives, would
@@ -418,8 +449,8 @@ clamped. The constants (`sound.c` unless noted):
   no power information. It is kept for legibility against sbitx's
   `tx_amp = tx_drive * band.scale`. The operator's power control is
   `POWER` above, not this.
-- **`hw_settings_tx_scale(freq)`** (`hw_settings.c`) — the current
-  band's `scale` from the `[tx_band]` entries in
+- **`hw_settings_tx_scale(freq)`** (`hw_settings.c`) — the transmit
+  frequency's band `scale` from the `[tx_band]` entries in
   `data/hw_settings.ini`, compensating for the PA's gain varying across
   bands. The values were re-derived with a wattmeter for this pipeline;
   procedure and results are in

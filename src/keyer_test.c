@@ -170,8 +170,9 @@ static void against_model(void) {
       long T = (FS * 12L / 10 + w / 2) / w;
       for (int r = 0; r < 40; r++) {
         // Up to 24 edges over ~30 dits, each paddle toggling at random
-        // times, some well inside an element and some near its edges.
-        struct edge ev[24];
+        // times, some well inside an element and some near its edges, and
+        // then a release for each paddle still down: room for 24 + 2.
+        struct edge ev[24 + 2];
         int n_ev = 0, st[2] = {0, 0};
         long t = 500;
         while (n_ev < 24) {

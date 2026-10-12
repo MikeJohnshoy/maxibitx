@@ -13,7 +13,11 @@ test-keyer
 test-keyer-straight
 test-tci-ws
 test-tci
+test-radio-hw
+test-encoder
+test-radio
 src/*.o
+test-logs/
 *.o
 
 # Python bytecode cache (tools/rigctl_panel.py)

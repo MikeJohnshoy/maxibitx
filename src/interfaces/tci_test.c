@@ -42,13 +42,14 @@
 int freq_hdr = 14074000;
 int in_tx;
 static enum radio_mode stub_mode = RADIO_MODE_USB;
-static int stub_rit, stub_rit_on, stub_volume = 67, stub_tx_allowed = 1;
+static int stub_rit, stub_rit_on, stub_xit, stub_xit_on, stub_volume = 67, stub_tx_allowed = 1;
 static int stub_key_holds_tx, stub_verbose;
 static double stub_power = 1.0;
 
 void radio_tune_to(uint32_t f) {
   freq_hdr = (int)f;
   stub_rit = stub_rit_on = 0;
+  stub_xit = stub_xit_on = 0;
   if (stub_verbose)
     printf("radio: tuned to %u Hz\n", f);
 }
@@ -67,13 +68,21 @@ void radio_set_rit(int hz) {
 int radio_get_rit(void) { return stub_rit; }
 void radio_set_rit_enabled(int on) { stub_rit_on = on != 0; }
 int radio_rit_enabled(void) { return stub_rit_on; }
+void radio_set_xit(int hz) {
+  stub_xit = hz;
+  stub_xit_on = hz != 0;
+}
+int radio_get_xit(void) { return stub_xit; }
+void radio_set_xit_enabled(int on) { stub_xit_on = on != 0; }
+int radio_xit_enabled(void) { return stub_xit_on; }
+int radio_tx_freq(void) { return freq_hdr + (stub_xit_on ? stub_xit : 0); }
 void radio_set_mode(enum radio_mode m) {
   stub_mode = m;
   if (stub_verbose)
     printf("radio: mode %d\n", m);
 }
 enum radio_mode radio_get_mode(void) { return stub_mode; }
-int hw_settings_tx_allowed(int f) {
+int radio_tx_allowed(int f) {
   (void)f;
   return stub_tx_allowed;
 }
@@ -352,6 +361,17 @@ static void test_control(void) {
         "rit_offset leaves RIT off");
   send_text(a, "rit_enable:0,true;");
   CHECK(expect(a, "rit_enable:0,true;", 1000) && stub_rit_on, "rit_enable");
+  send_text(a, "xit_offset:0,-300;");
+  gather(a, 200, got, sizeof(got));
+  CHECK(!strcmp(got, "xit_offset:0,-300;") && stub_xit == -300 && !stub_xit_on,
+        "xit_offset leaves XIT off");
+  send_text(a, "xit_enable:0,true;");
+  CHECK(expect(a, "xit_enable:0,true;", 1000) && stub_xit_on && radio_tx_freq() == freq_hdr - 300,
+        "xit_enable: transmits 300 Hz below the dial");
+  send_text(a, "XIT_ENABLE:0;");
+  CHECK(expect(a, "xit_enable:0,true;", 600), "xit_enable read back");
+  send_text(a, "xit_enable:0,false;");
+  CHECK(expect(a, "xit_enable:0,false;", 1000) && !stub_xit_on, "xit_enable off");
   send_text(a, "cw_macros_speed:25;");
   gather(a, 200, got, sizeof(got));
   CHECK(strstr(got, "cw_macros_speed:25;") && strstr(got, "cw_keyer_speed:25;") && keyer_get_wpm() == 25,

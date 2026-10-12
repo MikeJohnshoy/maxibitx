@@ -2,7 +2,25 @@
 #ifndef HW_SETTINGS_H
 #define HW_SETTINGS_H
 
+// Reads data/hw_settings.ini into the settings below. A missing file or
+// key leaves the compiled-in default, except sbitx_version, which stays
+// empty - see "Radio board".
 void hw_settings_load(void);
+
+// ---- Radio board ------------------------------------------------------------
+//
+// sbitx_version, a required top-level key naming the board:
+//   sbitx_version = SBITX_V3    an sBitx DE, v2 or v3
+//   sbitx_version = SBITX_V4    a zBitx
+// radio_hw_select_board() takes it; with no line, or another value,
+// maxibitx.c refuses to start. There is no default, so a board is never
+// driven with another board's pins. zbitx's own hw= key is not read.
+//
+// i2c_bus, optional: the Linux I2C bus the si5351 is on (`i2cdetect -l`),
+// for when it isn't the board's usual one. -1 if absent.
+// docs/dsp_design_notes/zbitx_port_study.md §9.
+extern char sbitx_version[32];
+extern int hw_i2c_bus;
 
 // ---- Per-band TX power calibration -------------------------------------
 //
@@ -86,9 +104,10 @@ double hw_settings_power_ratio(void);
 
 // ---- External PTT sequencing --------------------------------------------
 //
-// ext_ptt_delay_ms, a top-level key: how long radio.c's TX-up sequence
-// holds EXT_PTT (BCM 12, the line that leaves the radio for an external
-// amplifier or accessory) before it raises TX_LINE and RF can appear. It
+// ext_ptt_delay_ms, a top-level key, sBitx only: how long the TX-up
+// sequence (radio_hw.c) holds EXT_PTT (BCM 12, the line that leaves the
+// radio for an external amplifier or accessory) before it raises TX_LINE
+// and RF can appear. The zBitx has no EXT_PTT and ignores it. It
 // exists so an amplifier's relay has closed before power arrives -
 // hot-switching an amp relay is how amplifiers are destroyed.
 //

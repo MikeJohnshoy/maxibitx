@@ -1,7 +1,16 @@
 // maxibitx.c
 //
-// initializes the sbitx radio hardware and external interfaces,
-// then processes requests until shutting down
+// maxibitx runs a set of all-mode (CW, CWR, USB, LSB and DIGITAL) radio functions for
+// an sbitx radio board and Raspberry Pi. There is no user interface included,
+// the GUI is to be provided by external software. This main function initializes
+// the sbitx radio hardware and external interfaces, then processes requests until 
+// shutting down
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation
+//
+// Mike Johnshoy, KB2ML
 
 #include "hpsdr_p1.h"
 #include "iq_stream.h"
@@ -17,9 +26,11 @@
 #include "cw.h"
 #include "key_input.h"
 #include "keyer.h"
+#include "knobs.h"
 #include "rx_audio.h"
 #include "tone_gen.h"
 #include <stdio.h>
+#include <time.h>
 #include <unistd.h>
 #include <signal.h>
  
@@ -32,6 +43,19 @@ static volatile sig_atomic_t shutdown_requested = 0;
 static void handle_shutdown_signal(int sig) {
   (void)sig;
   shutdown_requested = 1;
+}
+
+// For the start-up log line only; rigctld, CAT and TCI have their own names.
+static const char *startup_mode_name(enum radio_mode m) {
+  switch (m) {
+  case RADIO_MODE_CW:      return "CW";
+  case RADIO_MODE_CWR:     return "CWR";
+  case RADIO_MODE_USB:     return "USB";
+  case RADIO_MODE_LSB:     return "LSB";
+  case RADIO_MODE_DIGITAL: return "DIGITAL (USB demodulation, narrow filter held out, "
+                                  "PTT from the computer only)";
+  }
+  return "?";
 }
  
 // initialize hardware, being careful of producer/consumer dependencies
@@ -53,34 +77,40 @@ int main(int argc, char **argv) {
   // in data/hw_settings.ini, not in source - the crystal filter center
   // varies radio to radio. Load it before anything below uses either.
   hw_settings_load();
+
+  // Which radio board this is, from hw_settings.ini's sbitx_version line.
+  // Without it nothing is started: driving one board's pins as another's
+  // could key a transmitter (hw_settings.h, "Radio board").
+  if (radio_hw_select_board(sbitx_version) < 0) {
+    fprintf(stderr, "init: add the sbitx_version line for this radio above the first [section] "
+                    "of data/hw_settings.ini - maxibitx will not start without it\n");
+    return 1;
+  }
+  printf("init: radio board: %s%s\n", radio_hw_board_name(),
+         radio_hw_tx_permitted() ? "" : " - receive only, transmit is not enabled on this board");
  
-  // Claim the output GPIO lines (LPF relays, TX_LINE, TX_POWER, EXT_PTT)
-  // via the kernel's GPIO character-device API (src/gpio.c) and put them
-  // into their idle state. The key jack's inputs are key_input_start()'s,
+  // Claim the board's output lines via the kernel's GPIO character-device
+  // API (src/gpio.c), each in its receive state; radio_hw_gpio_init()
+  // reports what it claimed. The key jack's inputs are key_input_start()'s,
   // below.
   if (radio_hw_gpio_init() < 0) {
     fprintf(stderr, "init: GPIO setup failed\n");
     return -1;
   }
-  printf("init: GPIO configured, T/R relay and PTT held low (RX-safe state)\n");
  
   // Initialize the si5351 clock generator (this also brings up the I2C
-  // bus it needs). si5351bx_init() powers down all three clocks, so
-  // clk1 has to be started here before anything downstream needs it -
-  // at its RX value; it only switches to bfo_freq during a TX burst
-  si5351bx_init();
+  // bus it needs, the board's). si5351bx_init() powers down all three
+  // clocks, so clk1 has to be started here before anything downstream
+  // needs it - at its RX value; it only switches to bfo_freq during a TX
+  // burst
+  si5351bx_init(radio_hw_i2c_bus());
   si5351bx_setfreq(1, xtal_filter_center + RX_IF_FREQ_HZ);
   si5351_reset();
-  printf("init: si5351 oscillator ready, clk1 (RX) at %d Hz\n",
-         xtal_filter_center + RX_IF_FREQ_HZ);
+  printf("init: si5351 oscillator ready on I2C bus %d, clk1 (RX) at %d Hz\n",
+         radio_hw_i2c_bus(), xtal_filter_center + RX_IF_FREQ_HZ);
  
-  // detecting board revision and using INA260 power monitor both need the I2C
-  // bus si5351bx_init() just brought up, so they can only be probed after
-  // it, not before.
-  int hw_rev = radio_hw_detect_version();  
-  printf("init: board revision detected: %s\n",
-         hw_rev == SBITX_V2 ? "sBitx v2 (power/SWR bridge present)"
-                             : "sBitx DE (original, no power/SWR bridge)");
+  // The INA260 power monitor needs the I2C bus si5351bx_init() just
+  // brought up, so it can only be probed after it, not before.
   if (radio_hw_ina260_configure() == 0) {
     printf("init: INA260 power monitor configured\n");
   } else {
@@ -122,6 +152,24 @@ int main(int argc, char **argv) {
   // report a pitch the radio isn't using if the bank's rungs ever change.
   printf("init: RX audio demod ready (CW pitch %d Hz, narrow filter %d Hz)\n",
          radio_get_cw_pitch(), rx_audio_get_narrow_width());
+
+  // The startup mode (radio.h), through radio_set_mode() so the
+  // demodulator and the narrow-filter hold follow it like any other change.
+  radio_set_mode(RADIO_STARTUP_MODE);
+  printf("init: mode %s\n", startup_mode_name(RADIO_STARTUP_MODE));
+
+  // The front-panel knobs (src/encoder.c reads them, src/knobs.c acts on
+  // them): tuning and volume on the sBitx, none the Pi reads on the zBitx.
+  // After the demodulator, whose volume one of them turns. Not fatal: the
+  // radio works without them.
+  int n_knobs = knobs_start();
+  if (n_knobs < 0)
+    printf("init: front-panel knobs unavailable, continuing without them\n");
+  else if (n_knobs == 0)
+    printf("init: no front-panel knobs on the %s's GPIO\n", radio_hw_board_name());
+  else
+    printf("init: knobs ready - tuning step %d Hz (push for the next), volume push mutes\n",
+           knobs_get_step());
 
   // Bring up the rigctld-compatible control surface (src/interfaces/hamlib.c) first -
   // not a hard failure if the port's unavailable, same as HPSDR/UAC2.
@@ -205,6 +253,11 @@ int main(int argc, char **argv) {
   int tone_tx_seconds = 0;
   while (!shutdown_requested) {
     sleep(1);
+
+    // A knob turned and now still: one line for where it ended.
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    knobs_log_settled((int64_t)now.tv_sec * 1000000000LL + now.tv_nsec);
     if (in_tx && tone_gen_get_mode() != TONE_GEN_OFF) {
       if (++tone_tx_seconds >= TONE_GEN_TIMEOUT_S) {
         tone_gen_set_mode(TONE_GEN_OFF);
@@ -223,11 +276,16 @@ int main(int argc, char **argv) {
     // where the refusal happens: the straight key's path runs on the
     // real-time audio thread, which may not do I/O (radio.h). Draining
     // once a second also means a held key logs once, not at poll rate.
-    int refused_hz = radio_tx_refused_hz();
-    if (refused_hz) {
+    int refused_hz;
+    enum radio_tx_refusal why = radio_tx_refused(&refused_hz);
+    if (why == RADIO_TX_REFUSED_BAND)
       printf("tx: PTT refused - %d Hz is outside every calibrated [tx_band] "
              "range\n", refused_hz);
-    }
+    else if (why == RADIO_TX_REFUSED_BOARD)
+      printf("tx: PTT refused - transmit is not enabled on the %s\n", radio_hw_board_name());
+    else if (why == RADIO_TX_REFUSED_IF)
+      printf("tx: PTT refused - bfo_freq (%d Hz) and xtal_filter_center (%d Hz) "
+             "give no usable TX IF\n", bfo_freq, radio_get_xtal_filter_center());
   }
 
   // Graceful shutdown - roughly the reverse of bring-up

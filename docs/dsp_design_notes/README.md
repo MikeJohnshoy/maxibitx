@@ -289,3 +289,41 @@ already used in `antialias_filter_design.md`.
   Status: **implemented** (WebSocket, control, receive and transmit audio,
   I/Q, CW text) and bench-tested; **on the air, I/Q only so far**, the
   right way up in sdrOxide as a TCI panadapter client; NCM not built.
+- [`zbitx_port_study.md`](zbitx_port_study.md) — whether maxibitx can
+  run headless on the zBitx with a Pi Zero 2W, read against the zbitx
+  `devcwmod` code. The boards share every common signal's pin; the
+  zBitx adds RX_LINE (BCM 15, the UART's receive pin) and LPF_E (BCM 12,
+  maxibitx's EXT_PTT on the sBitx), uses its LPF relays only while
+  transmitting, and keeps its si5351 on a different I2C bus beside an
+  RP2040 front panel. Proposes one codebase with every board difference
+  in `radio_hw.c`, the board named by a required `sbitx_version` line in
+  `hw_settings.ini` (§9: no line, no start; no zBitx transmit until it
+  is calibrated), a zBitx T/R sequence, and the `zmax` branch merged
+  back to `main`; flags the Zero 2W's CPU (stage 1's 327-tap FIR
+  dominates the receive cost) and the 15 m LPF assignment as the things
+  to settle, and plans a receive-only first step. Status: step 1
+  (receive only) built and receiving on a zBitx, with its Pi Zero 2W's
+  CPU measured and stage 1 vectorized for it (§10), and the crystal
+  filter measured (§11); step 2 built, transmitting into a dummy load and
+  calibrated to 2 W on every band, as safe defaults in
+  `data/hw_settings_zbitx.ini` (§12), on frequency on the air, with
+  DIGITAL over TCI, the CW T/R timing and the SSB sidebands checked; SSB
+  from the microphone still to try.
+- [`rx_cw_noise_reduction_study.md`](rx_cw_noise_reduction_study.md) —
+  whether, where and how to add noise reduction to the local CW audio,
+  measured with `tools/nr_study/` (keyed CW in white noise through a model
+  of stage 3 and each candidate). NR buys comfort, not copy: at −9 dB the
+  best variants make the gaps 12–13 dB quieter for about 5 dB of signal,
+  and no spectral NR decodes more dit slots than the filter alone. The 150
+  Hz filter is the copy tool (errors 7.8% → 3.2% at 20 WPM, 13.2% → 7.0% at
+  35 WPM). NR can't go inside stage 3's FFT: per-bin gains there alias
+  (−13 dB, measured). It goes in its own 6 kHz stage between stage 3 and
+  the AGC's gain multiply, with the gain delayed to match and `uac_out`,
+  the S-meter and DIGITAL untouched. The sbitx's DSP and ANR are modelled
+  line for line: each cuts the signal nearly as much as the noise, and ANR
+  amplitude-modulates every block by 2.3 dB. A line enhancer copies well on
+  one signal but costs a weaker second station in the passband (0.8% → 5.0%
+  errors). Recommends listening to the WAVs first, then, if wanted, a
+  CW-tuned MMSE-LSA spectral NR, 128-point at 6 kHz (≈ 22.5 ms latency,
+  ≈ 4% of stage 1), off by default. Status: **proposed** - a study, nothing
+  built.

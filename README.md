@@ -1,5 +1,7 @@
 # maxibitx
 
+NOTE: ONLY THIS **EXPERIMENTAL** BRANCH RUNS ON BOTH ZBITX AND SBITX HARDWARE
+
 A headless, all-mode (CW, USB, LSB, DIGITAL) radio daemon for the
 Raspberry Pi inside an [sBitx](https://github.com/afarhan/sbitx). It
 brings up the radio hardware, runs the receive and transmit signal
@@ -38,18 +40,20 @@ applications to maxibitx.
 |---|---|
 | Startup and shutdown | `maxibitx.c` |
 | Radio state: tuning, RIT, mode, T/R switching | `radio.c` |
-| Hardware: GPIO, I2C, si5351 clocks, LPF relays, board calibration | `radio_hw.c`, `gpio.c`, `i2c.c`, `si5351v2.c`, `hw_settings.c` |
+| Hardware: board profiles, GPIO, I2C, si5351 clocks, LPF relays, board calibration | `radio_hw.c`, `gpio.c`, `i2c.c`, `si5351v2.c`, `hw_settings.c` |
 | Real-time audio thread and WM8731 codec | `sound.c` |
 | RX: I/Q mixing, anti-aliasing, demodulation | `vfo.c`, `antialias.c`, `rx_audio.c`, `rx_filter.c` |
 | TX: CW keying, shared FFT TX pipeline | `cw.c`, `key_input.c`, `keyer.c`, `morse.c`, `tx_pipeline.c`, `fft_filter.c` |
 | USB audio rate conversion | `decim48k.c`, `upsample48k.c` |
 | External interfaces | `interfaces/hamlib.c` (rigctld), `interfaces/hpsdr_p1.c` (HPSDR Protocol 1), `interfaces/usb_gadget.c` (USB audio + Kenwood CAT), `interfaces/iq_stream.c` (I/Q for the control panel), `interfaces/tci.c`, `tci_cw.c`, `tci_stream.c`, `tci_ws.c` (TCI: control, audio, I/Q and CW text over a WebSocket) |
 
+`make test` runs every bench test below and says which, if any, failed.
 The DSP is bench-tested on its own (`make test-fft-filter`,
 `test-tx-pipeline`, `test-rx-filter`, `test-rx-audio`,
 `test-rx-audio-impulse`, `test-upsample48k`, `test-cw`, `test-key-input`,
-`test-keyer`, `test-keyer-straight`), and so is the TCI
-server (`test-tci-ws`, `test-tci`, over loopback), without any hardware attached.
+`test-keyer`, `test-keyer-straight`), and so are the TCI
+server (`test-tci-ws`, `test-tci`, over loopback) and the board layer
+(`test-radio-hw`, with GPIO and I2C stubbed), without any hardware attached.
 
 ## What works
 
@@ -76,6 +80,13 @@ server (`test-tci-ws`, `test-tci`, over loopback), without any hardware attached
 make
 ./maxibitx
 ```
+
+`data/hw_settings.ini` must name the radio board, on a line above its
+first `[section]`: `sbitx_version = SBITX_V3` for an sBitx DE, v2 or
+v3, or `sbitx_version = SBITX_V4` for a zBitx.
+Without it maxibitx prints the valid lines and exits, before touching
+any hardware. Run it from the repository root, where it finds
+`data/hw_settings.ini`.
 
 Needs `libasound` and single-precision FFTW (`libfftw3f`); see
 `Makefile`. `make` also grants the binary real-time scheduling and the
@@ -110,7 +121,7 @@ device-mode USB port and a few kernel options - see
 - `hpsdrsim.c` protocol details from the piHPSDR project
 - [minibitx](https://github.com/MikeJohnshoy/minibitx), maxibitx's direct
   predecessor
-- Evan (AC9TU), Robert Benedict and Juan Agrinsoni (WP3DN) - encouragement
+- Evan Hand (AC9TU), Robert Benedict (KD8CGH) and Juan Agrinsoni (WP3DN) - encouragement
   throughout
 
 ## License

@@ -60,7 +60,7 @@ generator is one more branch there, taking priority while it's on.
 
 | Mode | Tones | Amplitude | Peak | Average power vs. CW |
 |---|---|---|---|---|
-| Single | 1000 Hz | 1.0 | 1.0 | Same as CW |
+| Single | 1000 Hz (the CW pitch in CW and CWR) | 1.0 | 1.0 | Same as CW |
 | Two-tone | 700 + 1900 Hz | 0.5 each | 1.0 | Half of CW |
 
 Both peaks equal full scale, the same as `cw.c`'s key-down tone. Since

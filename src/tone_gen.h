@@ -13,7 +13,8 @@
 
 enum tone_gen_mode {
     TONE_GEN_OFF = 0,
-    TONE_GEN_SINGLE = 1, // TONE_GEN_SINGLE_HZ at full scale
+    TONE_GEN_SINGLE = 1, // one tone at full scale: TONE_GEN_SINGLE_HZ, or the
+                         // frequency tone_gen_set_single_hz() last gave
     TONE_GEN_TWO = 2,    // TONE_GEN_TWO_LOW_HZ + TONE_GEN_TWO_HIGH_HZ, 0.5 each
 };
 
@@ -29,6 +30,13 @@ enum tone_gen_mode {
 // values are ignored.
 void tone_gen_set_mode(enum tone_gen_mode m);
 enum tone_gen_mode tone_gen_get_mode(void);
+
+// The single tone's frequency, Hz (TONE_GEN_SINGLE_HZ until set). sound.c
+// sets it every block: the CW pitch in CW and CWR, where the TX shift puts
+// a tone at the pitch on the dial - so TUNE's carrier lands on the dial,
+// plus XIT, as a key-down does - and TONE_GEN_SINGLE_HZ in the other
+// modes, 1 kHz from the dial. Call only from the audio thread.
+void tone_gen_set_single_hz(double hz);
 
 // Next sample at 96kHz, peak 1.0 in both tone modes (0 when off). Call
 // only from the audio thread, once per sample. Phases run continuously

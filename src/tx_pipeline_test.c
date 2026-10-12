@@ -114,6 +114,17 @@ static double to_db(double measured, double reference)
 	return 20.0 * log10(measured / reference);
 }
 
+// Each case's "want" is checked as well as printed, so the exit status
+// means something to `make test`.
+static int failures = 0;
+static void check(int ok, const char *what)
+{
+	if (!ok) {
+		fprintf(stderr, "   FAIL: %s\n", what);
+		failures++;
+	}
+}
+
 // Runs a continuous tone_hz tone (steady key-down, envelope at max - same
 // "settle, then measure" idea as fft_filter_test.c's
 // steady_state_output()) through the real tx_pipeline for
@@ -241,11 +252,26 @@ static float limiter_ref[TONE_GEN_MEASURE_BLOCKS * TX_PIPELINE_BLOCK_LEN];
 // mic_tx_gain - which is how a real signal comes to exceed full scale
 // and give the limiter something to do. *alc_db receives the
 // gain-reduction meter after the measured blocks.
+// measure_tone_gen() on a pipeline the caller has set up (and frees).
+static void measure_tone_gen_on(struct tx_pipeline *p, enum tone_gen_mode m,
+                                enum tx_pipeline_signal sig, float ceiling, float in_gain,
+                                const double *hz, double *mags, int n, double *peak,
+                                double *alc_db);
+
 static void measure_tone_gen(enum tone_gen_mode m, enum tx_pipeline_signal sig,
                              float ceiling, float in_gain, const double *hz,
                              double *mags, int n, double *peak, double *alc_db)
 {
 	struct tx_pipeline *p = tx_pipeline_new();
+	measure_tone_gen_on(p, m, sig, ceiling, in_gain, hz, mags, n, peak, alc_db);
+	tx_pipeline_free(p);
+}
+
+static void measure_tone_gen_on(struct tx_pipeline *p, enum tone_gen_mode m,
+                                enum tx_pipeline_signal sig, float ceiling, float in_gain,
+                                const double *hz, double *mags, int n, double *peak,
+                                double *alc_db)
+{
 	float in[TX_PIPELINE_BLOCK_LEN], out[TX_PIPELINE_BLOCK_LEN];
 	const int len = TONE_GEN_MEASURE_BLOCKS * TX_PIPELINE_BLOCK_LEN;
 
@@ -266,7 +292,6 @@ static void measure_tone_gen(enum tone_gen_mode m, enum tx_pipeline_signal sig,
 	}
 	tone_gen_set_mode(TONE_GEN_OFF);
 	*alc_db = tx_pipeline_alc_db(p);
-	tx_pipeline_free(p);
 
 	for (int k = 0; k < n; k++) {
 		double re = 0, im = 0, wsum = 0;
@@ -304,6 +329,7 @@ int main(void)
 		double m = measure_tone(p, TX_PIPELINE_CW, target_wanted, 8, 8);
 		printf("A. Wanted tone at %.3f Hz (predicted placement): %.2f dB (want ~0 dB)\n",
 		       target_wanted, to_db(m, 1.0));
+		check(fabs(to_db(m, 1.0)) <= 0.1, "CW tone not within 0.1 dB of 0 at its predicted IF");
 		tx_pipeline_free(p);
 	}
 
@@ -333,6 +359,10 @@ int main(void)
 		       to_db(wanted_no_zero, 1.0), to_db(image_no_zero, 1.0));
 		printf("   with    bin-zero: wanted %.2f dB, image %.2f dB (want: wanted ~0dB, image very deep)\n",
 		       to_db(wanted_zeroed, 1.0), to_db(image_zeroed, 1.0));
+		check(fabs(to_db(wanted_no_zero, 1.0) - to_db(image_no_zero, 1.0)) <= 0.5,
+		      "without bin-zero, wanted and image differ by more than 0.5 dB");
+		check(fabs(to_db(wanted_zeroed, 1.0)) <= 0.1, "bin-zero moved the wanted tone");
+		check(to_db(image_zeroed, 1.0) <= -60.0, "bin-zero left the image above -60 dB");
 		filter_free(f);
 	}
 
@@ -380,19 +410,24 @@ int main(void)
 		// flags any localized spike, not the expected slope itself.
 		int ramp_lo = RAMP_START - 4, ramp_hi = RAMP_START + RAMP_LEN + 4;
 		int block_edge = TX_PIPELINE_BLOCK_LEN * 3; // where block 3 -> 4 seam falls, inside the ramp
-		double max_d2_overall = 0, max_d2_near_edge = 0;
+		double max_d2_overall = 0, max_d2_near_edge = 0, max_d2_away = 0;
 		for (int i = ramp_lo + 1; i < ramp_hi - 1; i++) {
 			double d2 = fabs((double)out_all[i + 1] - 2.0 * out_all[i] + out_all[i - 1]);
 			if (d2 > max_d2_overall)
 				max_d2_overall = d2;
-			if (i >= block_edge - 8 && i <= block_edge + 8 && d2 > max_d2_near_edge)
-				max_d2_near_edge = d2;
+			if (i >= block_edge - 8 && i <= block_edge + 8) {
+				if (d2 > max_d2_near_edge)
+					max_d2_near_edge = d2;
+			} else if (d2 > max_d2_away) {
+				max_d2_away = d2;
+			}
 		}
 		printf("\nC. Block-boundary check, key-up ramp crossing the internal %d-sample block seam:\n",
 		       TX_PIPELINE_BLOCK_LEN);
 		printf("   max |2nd derivative| across the whole ramp: %.6f\n", max_d2_overall);
-		printf("   max |2nd derivative| within +-8 samples of the seam: %.6f (want: not >> the whole-ramp max)\n",
-		       max_d2_near_edge);
+		printf("   max |2nd derivative| within +-8 samples of the seam: %.6f (want: not >> the rest of the ramp's, %.6f)\n",
+		       max_d2_near_edge, max_d2_away);
+		check(max_d2_near_edge <= 1.05 * max_d2_away, "a spike at the block seam");
 		tx_pipeline_free(p);
 	}
 
@@ -416,6 +451,8 @@ int main(void)
 		       lsb_wanted, to_db(m[0], 1.0));
 		printf("   Same signal at IF %.3f Hz (carrier + 1000, the USB side): %.1f dB (want: very negative)\n",
 		       lsb_wrong_side, to_db(m[1], 1.0));
+		check(fabs(to_db(m[0], 1.0)) <= 0.1, "LSB tone not within 0.1 dB of 0 below the carrier");
+		check(to_db(m[1], 1.0) <= -60.0, "LSB tone above -60 dB on the USB side");
 	}
 
 	// --- Case E: the test-tone generator (tone_gen.c) ---------------------
@@ -445,6 +482,11 @@ int main(void)
 		       to_db(peak2, peak1));
 		printf("   IMD3 at carrier %+.0f Hz: %.1f dB, at carrier %+.0f Hz: %.1f dB (want: numerical floor)\n",
 		       2 * lo - hi, to_db(m2[2], 1.0), 2 * hi - lo, to_db(m2[3], 1.0));
+		check(fabs(to_db(m1[0], 1.0)) <= 0.1, "single tone not within 0.1 dB of 0");
+		check(fabs(to_db(m2[0], 1.0) + 6.02) <= 0.1 && fabs(to_db(m2[1], 1.0) + 6.02) <= 0.1,
+		      "two-tone levels not within 0.1 dB of -6.02");
+		check(fabs(to_db(peak2, peak1)) <= 0.1, "two-tone PEP differs from the single tone's");
+		check(to_db(m2[2], 1.0) <= -100.0 && to_db(m2[3], 1.0) <= -100.0, "IMD3 above -100 dB");
 	}
 
 	// --- Case F: the peak limiter (ALC) ----------------------------------
@@ -517,6 +559,14 @@ int main(void)
 		printf("   POWER at 50%% (ceiling %.3f), drive 1.0: peak %.4f, tone %.2f dB,\n"
 		       "     ALC %.2f dB (want -3.01 dB out, 3.01 dB of reduction)\n",
 		       half_power, peak_low, to_db(m_low[0], 1.0), alc_low);
+		check(peak_ref <= 1.0001 && fabs(to_db(m_ref[0], 1.0)) <= 0.1 && fabs(alc_ref) <= 0.1,
+		      "the limiter touched a signal at the ceiling");
+		check(peak_hot <= 1.0001, "overdriven peak over the ceiling");
+		check(fabs(alc_hot - to_db(overdrive, 1.0)) <= 0.1,
+		      "ALC reduction not within 0.1 dB of the overdrive");
+		check(worst <= 1e-3, "the limiter changed the waveform (worst deviation over 1e-3)");
+		check(peak_low <= half_power + 1e-3 && fabs(to_db(m_low[0], 1.0) + 3.01) <= 0.1 &&
+		      fabs(alc_low - 3.01) <= 0.1, "POWER at 50% is not 3.01 dB down");
 	}
 
 	// --- Case G: tx_pipeline_reset() ------------------------------------
@@ -574,10 +624,7 @@ int main(void)
 		       alc_before);
 		printf("   Worst sample difference over %d blocks: %.2e (want 0 - identical)\n",
 		       burst, worst);
-		if (worst != 0.0) {
-			fprintf(stderr, "   FAIL: reset left state behind\n");
-			return 1;
-		}
+		check(worst == 0.0, "reset left state behind");
 		tx_pipeline_free(fresh);
 		tx_pipeline_free(reused);
 	}
@@ -683,9 +730,44 @@ int main(void)
 			                "a full bin\n");
 			fails++;
 		}
-		if (fails)
-			return 1;
+		failures += fails;
 	}
 
-	return 0;
+	// --- Case I: TUNE in CW lands on the dial -----------------------------
+	// sound.c sets the single test tone to the CW pitch in CW and CWR, so
+	// the CW shift - which places a tone at the pitch on the dial - puts
+	// TUNE's carrier where a key-down goes. A 1 kHz tone there would land
+	// 1000 - pitch Hz above the dial instead.
+	{
+		const int pitches[] = { 600, 700, 900 };
+		int fails = 0;
+		printf("\nI. TUNE in CW: the single tone at the CW pitch\n");
+		for (unsigned i = 0; i < sizeof(pitches) / sizeof(pitches[0]); i++) {
+			int pitch = pitches[i];
+			struct tx_pipeline *p = tx_pipeline_new();
+			tx_pipeline_set_if_placement(p, TX_PIPELINE_BENCH_BFO_FREQ_HZ,
+			                             TX_PIPELINE_BENCH_XTAL_CENTER_HZ, pitch);
+			double shift_hz = (double)p->cw_shift_bins * TX_PIPELINE_BIN_HZ;
+			double dial = shift_hz + pitch; // where a key-down lands
+			double hz[2] = { dial, shift_hz + TONE_GEN_SINGLE_HZ };
+			double m[2], peak, alc;
+			tone_gen_set_single_hz(pitch);
+			measure_tone_gen_on(p, TONE_GEN_SINGLE, TX_PIPELINE_CW, 1.0f, 1.0f, hz, m, 2,
+			                    &peak, &alc);
+			tone_gen_set_single_hz(TONE_GEN_SINGLE_HZ);
+			tx_pipeline_free(p);
+			double at_dial = to_db(m[0], 1.0), off_dial = to_db(m[1], 1.0);
+			printf("   pitch %4d: %+6.2f dB on the dial, %7.1f dB at dial %+5d Hz\n", pitch,
+			       at_dial, off_dial, (int)TONE_GEN_SINGLE_HZ - pitch);
+			if (at_dial < -1.0 || off_dial > -60.0) {
+				fprintf(stderr, "   FAIL: TUNE's carrier is not on the dial at pitch %d\n",
+				        pitch);
+				fails++;
+			}
+		}
+		failures += fails;
+	}
+
+	printf("\n%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);
+	return failures ? 1 : 0;
 }

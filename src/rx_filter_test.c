@@ -104,6 +104,17 @@ static double to_db(double measured, double reference)
 	return 20.0 * log10(measured / reference);
 }
 
+// Each case's "want" is checked as well as printed, so the exit status
+// means something to `make test`.
+static int failures = 0;
+static void check(int ok, const char *what)
+{
+	if (!ok) {
+		fprintf(stderr, "   FAIL: %s\n", what);
+		failures++;
+	}
+}
+
 // Injects a tone at `target_hz` for settle_blocks+measure_blocks blocks,
 // discards the first settle_blocks (overlap-save history/filter-edge
 // transient - M-1=3072 samples ~= 3 blocks, settle_blocks stays >= 8 at
@@ -303,6 +314,8 @@ int main(void)
 		printf("   Real/imag check at steady state: max|real|=%.6f max|imag|=%.6f "
 		       "(imag/real=%.2e - want negligible, unlike tx_pipeline.c's deliberate one-sided halving)\n",
 		       max_re, max_im, max_im / max_re);
+		check(fabs(to_db(m, 1.0)) <= 0.1, "gain at pitch not within 0.1 dB of 0");
+		check(max_im / max_re <= 1e-3, "output not real");
 		rx_filter_free(r);
 	}
 
@@ -339,6 +352,12 @@ int main(void)
 		double image_offset_db = to_db(measure_offset(r, CW_PITCH_HZ + 3000.0, 8, 16), ref);
 		printf("   rejection at pitch+3000Hz (matches rx_audio.c's own elliptic bench point): %.2f dB\n",
 		       image_offset_db);
+		// The default 300 Hz filter measures 267 Hz wide at -3 dB and
+		// -60 dB by +273 Hz; these bounds leave room for rounding, not for
+		// a different filter.
+		check(cross_3 >= 120.0 && cross_3 <= 165.0, "-3 dB edge not within +120..+165 Hz of pitch");
+		check(cross_60 >= 0 && cross_60 <= 300.0, "not -60 dB by +300 Hz from pitch");
+		check(image_offset_db <= -80.0, "rejection at pitch+3000 Hz above -80 dB");
 		rx_filter_free(r);
 	}
 
@@ -355,6 +374,9 @@ int main(void)
 		printf("\nC. Live retune (pitch 700->800 Hz, width 300->150 Hz), rx_filter_retune() rc=%d:\n", rc);
 		printf("   700 Hz: %.2f dB -> %.2f dB (want: drops, now near/outside the new edge)\n", before_700, after_700);
 		printf("   800 Hz: %.2f dB -> %.2f dB (want: stays ~0 dB, now the tuned pitch)\n", before_800, after_800);
+		check(rc == 0, "rx_filter_retune() failed");
+		check(after_700 <= -6.0, "700 Hz did not drop below -6 dB after the retune");
+		check(fabs(after_800) <= 0.5, "800 Hz not within 0.5 dB of 0 after the retune");
 		rx_filter_free(r);
 	}
 
@@ -364,6 +386,9 @@ int main(void)
 		double delay_ms = measure_group_delay_ms(r, 8);
 		printf("\nD. Measured group delay (impulse-response peak): %.2f ms "
 		       "(elliptic IIR being replaced: ~2.6ms - see rx_audio.c)\n", delay_ms);
+		// Linear phase: exactly half the impulse, (M - 1) / 2 samples.
+		double expect_ms = (RX_FILTER_IMPULSE_LEN - 1) / 2.0 / TEST_FS * 1000.0;
+		check(fabs(delay_ms - expect_ms) <= 0.1, "group delay not (M - 1) / 2 samples");
 		rx_filter_free(r);
 	}
 
@@ -381,38 +406,54 @@ int main(void)
 		double ref_lin = measure_offset(lin, CW_PITCH_HZ, 8, 16);
 		double ref_min = measure_offset(min, CW_PITCH_HZ, 8, 16);
 		const double offsets[] = { 50, 100, 150, 200, 300, 600, 1400, 3000 };
-		double worst = 0, worst_off = 0;
+		double worst = 0, worst_off = 0, worst_passband = 0;
 		printf("   offset   linear phase   minimum phase\n");
 		for (unsigned i = 0; i < sizeof(offsets) / sizeof(offsets[0]); i++) {
 			double l = to_db(measure_offset(lin, CW_PITCH_HZ + offsets[i], 8, 16), ref_lin);
 			double m = to_db(measure_offset(min, CW_PITCH_HZ + offsets[i], 8, 16), ref_min);
 			printf("   %+5.0f Hz %11.2f dB %12.2f dB (%+.2f)\n", offsets[i], l, m, m - l);
 			if (fabs(m - l) > worst) { worst = fabs(m - l); worst_off = offsets[i]; }
+			if (offsets[i] <= 150 && fabs(m - l) > worst_passband)
+				worst_passband = fabs(m - l);
 		}
 		printf("   largest deviation %.2f dB, at +%.0f Hz (want: small everywhere -\n"
 		       "   'same magnitude' is the claim this case exists to check)\n", worst, worst_off);
 		printf("   gain at pitch: %.2f dB linear phase, %.2f dB minimum phase\n",
 		       to_db(ref_lin, 1.0), to_db(ref_min, 1.0));
+		check(rc == 0, "rx_filter_set_min_phase() failed");
+		// Measured: 0.04 dB through +150 Hz, 0.49 dB at +300 Hz, where
+		// both are 66 dB down.
+		check(worst_passband <= 0.1, "minimum phase changes the passband by more than 0.1 dB");
+		check(worst <= 1.0, "minimum phase changes the response by more than 1 dB");
+		check(fabs(to_db(ref_min, 1.0)) <= 0.1, "minimum-phase gain at pitch not within 0.1 dB of 0");
 
 		// What it buys.
-		printf("   group delay: %.2f ms -> %.2f ms\n",
-		       measure_group_delay_ms(lin, 8), measure_group_delay_ms(min, 8));
+		double delay_lin = measure_group_delay_ms(lin, 8), delay_min = measure_group_delay_ms(min, 8);
+		double attack_lin = measure_attack_ms(lin, CW_PITCH_HZ, 8);
+		double attack_min = measure_attack_ms(min, CW_PITCH_HZ, 8);
+		printf("   group delay: %.2f ms -> %.2f ms\n", delay_lin, delay_min);
 		printf("   keyed element, key-down to -3dB of settled: %.1f ms -> %.1f ms\n",
-		       measure_attack_ms(lin, CW_PITCH_HZ, 8), measure_attack_ms(min, CW_PITCH_HZ, 8));
+		       attack_lin, attack_min);
+		check(delay_min <= 6.0, "minimum-phase group delay over 6 ms");
+		check(attack_min < attack_lin, "minimum phase does not shorten the attack");
 
 		// What it costs, and the thing that would break silently.
+		double tail_lin = measure_impulse_tail_db(lin), tail_min = measure_impulse_tail_db(min);
 		printf("   impulse energy past tap %d (overlap-save discards M-1): %.1f dB "
 		       "linear phase, %.1f dB minimum phase\n", RX_FILTER_IMPULSE_LEN - 1,
-		       measure_impulse_tail_db(lin), measure_impulse_tail_db(min));
+		       tail_lin, tail_min);
+		check(tail_lin <= -100.0 && tail_min <= -100.0, "impulse energy past M-1 taps above -100 dB");
 
 		double max_re, max_im;
 		measure_realness(min, CW_PITCH_HZ, 8, 8, &max_re, &max_im);
 		printf("   real output preserved: imag/real = %.2e (Case A's check, re-run here -\n"
 		       "   the conversion must not make this filter complex)\n", max_im / max_re);
+		check(max_im / max_re <= 1e-3, "minimum-phase output not real");
 
 		rx_filter_free(lin);
 		rx_filter_free(min);
 	}
 
-	return 0;
+	printf("\n%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);
+	return failures ? 1 : 0;
 }

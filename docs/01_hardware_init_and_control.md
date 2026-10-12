@@ -7,71 +7,95 @@ signal chain can actually start moving samples — see
 [`02_rx_processing_pipeline.md`](02_rx_processing_pipeline.md) for what
 happens to those samples once they arrive.
 
-## Startup order, in `main()` (`minibitx.c`)
+## Startup order, in `main()` (`maxibitx.c`)
 
-1. `radio_hw_gpio_init()` — GPIO lines and RX-safe idle state (below)
-2. `si5351bx_init()` / `si5351bx_setfreq(1, bfo_freq)` / `si5351_reset()`
-   — oscillator bring-up (below)
-3. `radio_hw_detect_version()` / `radio_hw_ina260_configure()` — board
-   revision and power monitor, probed right after the si5351 bring-up
-   above since they share its I2C bus (below)
-4. `vfo_init_phase_table()` / `vfo_start()` / `radio_tune_to()` —
+1. `hw_settings_load()` — `data/hw_settings.ini`, including the
+   `sbitx_version` line that names the board
+2. `radio_hw_select_board()` — the board profile; maxibitx exits here if
+   the file doesn't name a board it knows
+   ([Board selection](#board-selection), below)
+3. `radio_hw_gpio_init()` — the board's GPIO lines and RX-safe idle
+   state (below)
+4. `si5351bx_init(radio_hw_i2c_bus())` / `si5351bx_setfreq(1, ...)` /
+   `si5351_reset()` — oscillator bring-up on the board's I2C bus (below)
+5. `radio_hw_ina260_configure()` — power monitor, probed right after the
+   si5351 bring-up above since it shares its I2C bus (below)
+6. `vfo_init_phase_table()` / `vfo_start()` / `radio_tune_to()` —
    software RX VFO and initial tuning (covered in
    [`02_rx_processing_pipeline.md`](02_rx_processing_pipeline.md))
-5. `cw_init()` / `key_input_start()` — the keyed tone, then the key jack
+7. `cw_init()` / `key_input_start()` — the keyed tone, then the key jack
    and its input thread ([The key jack](#the-key-jack), below)
-6. Networking and control surfaces — Hamlib/rigctld, TCI, HPSDR, USB gadget
-   (covered in
-   [`04_remote_control_and_iq_output.md`](04_remote_control_and_iq_output.md))
+8. `rx_audio_init()` — the onboard demodulator
+9. `knobs_start()` — the front-panel knobs and their thread, on a board
+   whose knobs the Pi reads ([The front-panel knobs](#the-front-panel-knobs), below)
+10. Networking and control surfaces — Hamlib/rigctld, TCI, HPSDR,
+    iq_stream, USB gadget, CAT (covered in
+    [`04_remote_control_and_iq_output.md`](04_remote_control_and_iq_output.md))
+11. `setup_audio_codec()` / `sound_thread_start()` — WM8731 codec and
+    capture stream (below)
 
 Each step above prints one console line reporting its own result, in a
-consistent `init: ...` format, ending with `minibitx: radio hardware
-initialization complete` once every step has run. See
+consistent `init: ...` format, ending with `maxiBitx: radio hardware
+initialization complete, ready to serve!` once every step has run. See
 [`05_process_and_threading_model.md`](05_process_and_threading_model.md)
 for what the console reports after that point.
-7. `setup_audio_codec()` / `sound_thread_start()` — WM8731 codec and
-   capture stream (below)
 
 The ordering matters for one reason in particular: GPIO init happens
-*first*, before anything that could conceivably key the transmitter
-exists yet.
+before anything that could conceivably key the transmitter exists yet,
+and only once the board is known, so no pin is ever driven with another
+board's meaning.
 
 ## GPIO setup and the RX-safe idle state
 
-`radio_hw_gpio_init()` (`radio_hw.c`) requests `TX_LINE`, `TX_POWER`,
-`EXT_PTT`, and the four LPF select lines (`LPF_A`–`LPF_D`) as outputs
-through `gpio.c`'s wrapper around the Linux GPIO character-device API
-(`/dev/gpiochip0`):
+`radio_hw_gpio_init()` (`radio_hw.c`) requests the selected board's
+output lines through `gpio.c`'s wrapper around the Linux GPIO
+character-device API (`/dev/gpiochip0`), each driven to its receive
+state as part of its request:
 
 ```c
-line_tx_line  = gpio_request_output(TX_LINE,  0, "maxibitx-tx_line");
-line_tx_power = gpio_request_output(TX_POWER, 0, "maxibitx-tx_power");
-line_ext_ptt  = gpio_request_output(EXT_PTT,  0, "maxibitx-ext_ptt");
-line_lpf_a    = gpio_request_output(LPF_A,    0, "maxibitx-lpf_a");
-line_lpf_b    = gpio_request_output(LPF_B,    0, "maxibitx-lpf_b");
-line_lpf_c    = gpio_request_output(LPF_C,    0, "maxibitx-lpf_c");
-line_lpf_d    = gpio_request_output(LPF_D,    0, "maxibitx-lpf_d");
+err |= claim(board->tx_line_pin, 0, "maxibitx-tx_line");
+err |= claim(board->tx_power_pin, 0, "maxibitx-tx_power");
+err |= claim(board->ext_ptt_pin, 0, "maxibitx-ext_ptt"); // -1: none, skipped
+err |= claim(board->rx_line_pin, 1, "maxibitx-rx_line"); // -1: none, skipped
+for (int i = 0; board->lpf_pins[i] >= 0; i++)
+  err |= claim(board->lpf_pins[i], 0, "maxibitx-lpf");
 ```
+
+| Line | sBitx (BCM) | zBitx (BCM) | Receive state |
+|---|---|---|---|
+| `TX_LINE` | 23 | 23 | low |
+| `TX_POWER` | 16 | 16 | low |
+| `EXT_PTT` | 12 | — | low |
+| `RX_LINE` | — | 15 | high (receiver connected) |
+| LPF relays | 24, 25, 8, 7 | 24, 25, 8, 7 | all off |
+| BCM 12, unused | — | 12 | low |
+
+On the zBitx, BCM 12 is zbitx's `LPF_E`, a line with no filter behind
+it, held low as zbitx does, and `RX_LINE` is BCM 15, the UART's RXD pin, so the serial
+console and UART must be disabled for maxibitx to claim it. The log
+line `init: GPIO configured for the <board>: ...` says what was claimed.
 
 The key jack's two contacts are inputs, claimed separately by
 `key_input_start()` (`key_input.c`) in one request with pull-ups and edge
-events — see [The key jack](#the-key-jack) below.
+events — see [The key jack](#the-key-jack) below. The sBitx's two knobs
+are inputs too, claimed the same way by `encoder.c` — see
+[The front-panel knobs](#the-front-panel-knobs).
 
 Unlike the old wiringPi-based version, there's no separate "set the pin
 mode, then write it low" sequence — each `gpio_request_output()` call
-claims the line and drives it to its initial value (`0`, here) as one
+claims the line and drives it to its initial value as one
 atomic kernel request, so there's no window where a line briefly holds
 whatever power-on/pinctrl default it had before minibitx touched it.
 
-`EXT_PTT` and `TX_LINE` low is the T/R relay's RX-idle state. Because
-this runs before the si5351, the VFO, the network threads, or either
+`EXT_PTT` (where there is one) and `TX_LINE` low is the T/R relay's
+RX-idle state. Because this runs before the si5351, the VFO, the network threads, or either
 control surface (Hamlib, HPSDR's MOX handling) exist, there is no code
 path in the process's lifetime where the radio could power on
 transmitting — the relay and PTT lines are guaranteed low before
 anything capable of calling `radio_set_tx()` is even initialized.
 
 `TX_POWER` is also set low at boot; its exact purpose is inherited from
-sbitx and unconfirmed here (see `radio_hw.h`).
+sbitx and unconfirmed here (see `radio_hw.c`).
 
 ### Migrating off wiringPi: BCM pin mapping
 
@@ -79,9 +103,9 @@ minibitx used to drive these pins through wiringPi, which numbers pins
 in its own scheme rather than the SoC's BCM GPIO numbers. Since
 wiringPi is unmaintained upstream (and has no Pi 5 support), `radio_hw.c`
 was moved onto `gpio.c`'s direct character-device API, which takes BCM
-offsets — so every pin constant in `radio_hw.h` changed from a wiringPi
-number to the corresponding BCM number. The mapping below was derived
-from a `gpio readall` capture on real sBitx v2 hardware (Pi 4, bench,
+offsets — so every pin number (the board profiles in `radio_hw.c`, and
+the key jack's in `radio_hw.h`) is a BCM number. The sBitx mapping below
+was derived from a `gpio readall` capture on real sBitx v2 hardware (Pi 4, bench,
 2026-09) with nothing running at the time — informative for pin
 *identity* and *direction* (a pin already latched as `OUT` by a previous
 run confirms which physical pins get driven as outputs, regardless of
@@ -89,7 +113,7 @@ whether anything is running right now), but not for the specific logic
 levels captured, which were just whatever a previous run happened to
 leave behind rather than a live read of the radio's current state:
 
-| `radio_hw.h` name | wiringPi # (old) | BCM # (current) | Physical pin | Role |
+| Name | wiringPi # (old) | BCM # (current) | Physical pin | Role |
 |---|---|---|---|---|
 | `TX_LINE` | 4 | 23 | 16 | T/R relay control |
 | `TX_POWER` | 27 | 16 | 36 | set low at boot, purpose unconfirmed |
@@ -100,6 +124,16 @@ leave behind rather than a live read of the radio's current state:
 | `LPF_D` | 11 | 7 | 26 | LPF band select (shares SPI0's CE1 pin, unused as SPI here) |
 | `KEY_RING_GPIO` | 7 | 4 | 7 | key jack ring: dash, straight key, mic PTT; pull-up, active low |
 | `KEY_TIP_GPIO` | 21 | 5 | 29 | key jack tip: dot, straight key; pull-up, active low |
+| `ENC1_A` | 13 | 9 | 21 | volume knob, read as maxibitx's B (shares SPI0's MISO pin, unused as SPI here) |
+| `ENC1_B` | 12 | 10 | 19 | volume knob, read as maxibitx's A (SPI0's MOSI) |
+| `ENC1_SW` | 14 | 11 | 23 | volume knob's push switch (SPI0's SCLK) |
+| `ENC2_A` | 0 | 17 | 11 | tuning knob, encoder A |
+| `ENC2_B` | 2 | 27 | 13 | tuning knob, encoder B |
+| `ENC2_SW` | 3 | 22 | 15 | tuning knob's push switch |
+
+The six `ENC` rows come from sbitx's own pin names and wiringPi numbers,
+converted with the same mapping as the rows above. Which encoder is which
+knob was found by turning them on a DE board running maxibitx.
 
 If this ever needs porting to different hardware (a different Pi model,
 a different board layout), re-derive this table the same way — from a
@@ -149,40 +183,102 @@ How the edges reach the transmitted signal:
 [`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md) and
 [`cw_keyer_design_study.md`](dsp_design_notes/cw_keyer_design_study.md) §16.
 
-## Board revision detection
+## The front-panel knobs
 
-`radio_hw_detect_version()` probes I2C address `0x8` with a 4-byte block
-read. If that read fails, it reports `SBITX_DE` (original sbitx, no
-power/SWR bridge board); if it succeeds, `SBITX_V2` (v2-and-later
-hardware, power/SWR bridge present). It's called once, from `main()`,
-right after the si5351/I2C bus comes up — its result is logged
-(`init: board revision detected: ...`) but nothing else in the codebase
-branches on it yet; it exists as a hook for hardware-revision-dependent
-behavior to attach to later.
+The sBitx has two knobs, each a rotary encoder with a push switch:
+tuning (sbitx's `ENC2`) and volume (`ENC1`, sbitx's multi-function
+knob). Their pins are part of the board profile (`radio_hw_knob()`), so
+the zBitx, whose knob and buttons belong to its RP2040 front panel rather
+than the Pi's GPIO, has none and the log says `init: no front-panel knobs
+on the zBitx's GPIO`.
+
+`encoder.c` claims all six lines in one request with pull-ups and edge
+events, and a thread of its own (ordinary scheduling) sleeps in
+`ppoll()` until a knob moves. Each encoder's A and B contacts step
+through a two-bit Gray code and rest at a click with both open; every
+edge counts +1 or -1 by the two states it joins, so contact bounce counts
+up and down and nets to nothing, and a click is reported when the knob
+reaches a rest state having counted at least half a click's edges one
+way. A knob with two edges a click (resting with both contacts closed as
+well as both open) is a board-profile setting, `edges_per_detent`; the
+sBitx's is set to 4, unconfirmed. A press is taken on its first closing
+edge and the switch is then ignored for 20 ms.
+
+What they do is `knobs.c`'s:
+
+| Knob | Turn | Push |
+|---|---|---|
+| Tuning | the dial moves by the tuning step a click; below 1 kHz, a fast turn multiplies it by 2, 5 or 10. Nothing while transmitting. | next step: 10 Hz, 100 Hz, 1 kHz, 10 kHz, then 10 Hz again |
+| Volume | 2% (1 dB) a click; unmutes | mutes or unmutes the speaker, keeping the volume |
+
+The tuning step is rigctld's `n` / `N`, so a client can show and set it;
+`tools/rigctl_panel.py` sets it to the digit tapped. The mute is rigctld's
+`u MUTE` / `U MUTE`. If a knob counts the wrong way, swap its `a_pin` and
+`b_pin` in `radio_hw.c`; if each click moves it two steps, or one every
+other click, its `edges_per_detent` is wrong. Tests: `make test-encoder`.
+
+## Board selection
+
+maxibitx runs on two radio boards, and every difference between them
+lives in `radio_hw.c`, as one profile per board (`struct board`,
+`boards[]`). `data/hw_settings.ini` names the board with a top-level
+line, above the first `[section]`:
+
+| Line | Board |
+|---|---|
+| `sbitx_version = SBITX_V3` | sBitx DE, v2 or v3 |
+| `sbitx_version = SBITX_V4` | zBitx |
+
+`main()` passes the value to `radio_hw_select_board()` straight after
+`hw_settings_load()`. If the file is missing, has no such line, or names
+anything else (the match is exact, case included), maxibitx prints the
+valid lines and exits with status 1, before it touches any GPIO line or
+clock. There is no default, so a board is never driven with another
+board's pins. zbitx's own `hw=` key is not read; if it is present, or a
+top-level key looks like a misspelling of `sbitx_version`, the log says
+so. On success the log reads `init: radio board: <name>`, with
+` - receive only, transmit is not enabled on this board` added on a
+board that may not transmit.
+
+The rest of the code asks nothing about the board; it calls
+`radio_hw_tune()`, `radio_hw_tx_permitted()`, `radio_hw_relays_tx()`,
+`radio_hw_tx_settle_ms()`, `radio_hw_i2c_bus()` and `radio_hw_knob()`,
+which mean the same on every board. Both profiles may transmit; the
+`tx_permitted` switch in a profile is there for a board whose transmit
+path isn't ready, and with it off `radio_set_tx()` refuses every transmit
+request. The design:
+[`zbitx_port_study.md`](dsp_design_notes/zbitx_port_study.md) §5 and §9.
 
 ## LPF bank switching
 
-`set_lpf_40mhz(frequency)` selects one of four low-pass filter relays
-based on the tuned frequency:
+`radio_tune_to()` calls `radio_hw_tune(frequency)` on every retune — see
+[`02_rx_processing_pipeline.md`](02_rx_processing_pipeline.md). On the
+sBitx, whose LPFs are in the receive path, it selects the band's relay
+from the board's plan, all others off; on the zBitx, whose LPFs carry
+only the transmitter, it does nothing, and the relay half of the T/R
+sequence selects the filter for the transmit frequency (the dial plus
+XIT) each time it goes to transmit, and refuses where there is none.
+Each board's plan:
 
-| Frequency | Relay |
-|---|---|
-| < 5.5 MHz | `LPF_D` |
-| < 10.5 MHz | `LPF_C` |
-| < 18.5 MHz | `LPF_B` |
-| < 30 MHz | `LPF_A` |
+| Frequency | Bands | sBitx | zBitx |
+|---|---|---|---|
+| below 5.5 MHz | 80, 60 m | `LPF_D` (BCM 7) | `LPF_D` (BCM 7) |
+| 5.5 to 10.5 MHz | 40, 30 m | `LPF_C` (BCM 8) | `LPF_C` (BCM 8) |
+| 10.5 to 18.5 MHz | 20, 17 m | `LPF_B` (BCM 25) | `LPF_B` (BCM 25) |
+| 18.5 to 21.5 MHz | 15 m | `LPF_A` (BCM 24) | `LPF_B` (BCM 25) |
+| 21.5 to 30 MHz | 12, 10 m | `LPF_A` (BCM 24) | `LPF_A` (BCM 24) |
+| 30 MHz and above | | none | none |
 
-It's a no-op if the new selection matches the last one (tracked in a
+Both boards have these four filters and no others.
+
+Selection is a no-op if the new relay matches the last one (tracked in a
 static `prev_lpf`), so retuning within a band doesn't chatter the relays.
-This is called from `radio_tune_to()` — see
-[`02_rx_processing_pipeline.md`](02_rx_processing_pipeline.md) — not
-independently.
 
 ## INA260 power monitor
 
 `radio_hw_ina260_configure()` writes `0x6127` (continuous mode, default
 averaging) to the INA260's config register at I2C address `0x40`. It's
-called once, from `main()`, alongside board revision detection above —
+called once, from `main()`, right after the si5351 bring-up below —
 `init: INA260 power monitor configured`, or a non-fatal
 `init: INA260 power monitor not responding, continuing without it` if
 the write fails. `read_voltage_current()` then reads the voltage and
@@ -198,8 +294,9 @@ console echoes, not a periodic status line).
 
 The si5351 generates both mixer LOs used in the RX chain (see
 [`02_rx_processing_pipeline.md`](02_rx_processing_pipeline.md) for what
-each clock actually does). `si5351bx_init()` (`si5351v2.c`) powers down
-all three clocks and brings up the I2C connection it needs; `main()`
+each clock actually does). `si5351bx_init(bus)` (`si5351v2.c`) powers
+down all three clocks and brings up the I2C connection on the bus it is
+given, `radio_hw_i2c_bus()`; `main()`
 then explicitly starts `clk1` at its RX value
 (`xtal_filter_center + RX_IF_FREQ_HZ`) before calling `si5351_reset()`.
 Unlike `clk2` (which `radio_tune_to()` sweeps constantly) or the older
@@ -222,12 +319,16 @@ WWV on receive. Measuring it:
 [`dsp_design_notes/tx_test_tones_and_alc.md`](dsp_design_notes/tx_test_tones_and_alc.md),
 "Frequency calibration".
 
-The si5351 sits on I2C bus 22 (`SI5351_I2C_BUS` in `si5351v2.c`), sharing
-the physical bus with the board's RTC via the `i2c-rtc-gpio` device tree
-overlay. That bus number came from `i2cdetect -y 22` showing a device at
-`SI5351_ADDR` (`0x60`) — not GPIO23/22 as originally assumed. It's a
+The si5351 is at `SI5351_ADDR` (`0x60`) on the bus `radio_hw_i2c_bus()`
+returns: the board profile's usual bus, unless `hw_settings.ini` has a
+top-level `i2c_bus` key, which overrides it. On the sBitx that is bus
+22, the physical bus it shares with the board's RTC via the
+`i2c-rtc-gpio` device tree overlay (`i2cdetect -y 22` shows a device at
+`0x60`); on the zBitx it is bus 3. The startup log names it
+(`init: si5351 oscillator ready on I2C bus N, ...`). It's a
 Linux-assigned bus number, not a fixed hardware address, so it can
-change across kernel/config updates; see
+change across kernel/config updates; `i2c_bus` is the fix without a
+rebuild. See
 [`08_troubleshooting_and_bringup.md`](08_troubleshooting_and_bringup.md)
 if the si5351 ever stops responding after an OS update.
 
@@ -235,8 +336,8 @@ if the si5351 ever stops responding after an OS update.
 SMBus ioctls (byte read/write, block read/write) — nothing sbitx- or
 si5351-specific lives there.
 
-Because that bus is bit-banged by the kernel rather than served by a
-hardware peripheral, I2C traffic is CPU time. One `si5351bx_setfreq()` is
+Because the sBitx's bus is bit-banged by the kernel rather than served
+by a hardware peripheral, I2C traffic there is CPU time. One `si5351bx_setfreq()` is
 17 separate transactions, and a T/R transition writes two clocks. What that
 costs, why none of it reaches the real-time audio path, and which half of
 it is redundant when RIT is zero:

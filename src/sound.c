@@ -17,6 +17,7 @@
 #include "hw_settings.h"
 #include "iq_stream.h"
 #include "radio.h"
+#include "radio_hw.h" // radio_hw_tx_settle_ms() - tr_warn_if_clipping()
 #include "rx_audio.h"
 #include "sound.h"
 #include "tci.h"
@@ -57,7 +58,7 @@ static int rx_mute_by_switch = 1;
 // 21, ~-3.0dB. Bench-derived, not a final calibration - see
 // docs/dsp_design_notes/rx_gain_and_level_calibration.md. rx_clip_check()
 // warns if it turns out too hot.
-#define RX_CAPTURE_GAIN_PERCENT 70
+#define RX_CAPTURE_GAIN_PERCENT 100
 
 // WM8731 'Mic' gain for the R (mic) capture channel. A starting midpoint,
 // not calibrated - and possibly inert on this board: 'Input Mux' is fixed
@@ -152,20 +153,29 @@ double sound_get_alc_db(void) {
   return cw_tx_pipeline ? (double)tx_pipeline_alc_db(cw_tx_pipeline) : 0.0;
 }
 
-// Re-derives the CW bin rotation from this board's IF values and whatever
-// tone cw.c is currently generating. Called once at startup and again after
-// every pitch change, so the shift and the tone always cancel to a carrier
-// on the dial.
+// Re-derives the CW and SSB bin rotations from this board's IF values and
+// whatever tone cw.c is currently generating. Called once at startup and
+// again after every pitch change or xtal_filter_center change, so the
+// shift and the tone always cancel to a carrier on the dial.
 //
 // Reads cw_get_pitch() rather than taking the pitch as an argument: that
 // keeps one source of truth for what is actually being generated, so this
 // can't be called with a pitch cw.c doesn't have. Returns -1 if the board's
-// values don't give a usable IF, leaving the previous placement alone.
+// values don't give a usable IF, leaving the previous placement alone and
+// sound_tx_if_placed() at 0 until a later call succeeds.
+static atomic_int tx_if_placed = 1;
+
 int sound_update_cw_if_placement(void) {
   if (!cw_tx_pipeline)
     return 0; // nothing built yet; sound_thread_start() will do it
-  return tx_pipeline_set_if_placement(cw_tx_pipeline, bfo_freq, xtal_filter_center,
-                                      cw_get_pitch());
+  int r = tx_pipeline_set_if_placement(cw_tx_pipeline, bfo_freq, xtal_filter_center,
+                                       cw_get_pitch());
+  atomic_store(&tx_if_placed, r == 0);
+  return r;
+}
+
+int sound_tx_if_placed(void) {
+  return atomic_load(&tx_if_placed);
 }
 
 /* ------------------------------------------------------------------ */
@@ -566,7 +576,7 @@ static int xrun_recover(snd_pcm_t *pcm, int err) {
 // ordinary-priority audio thread can't keep up with real time. See
 // docs/08_troubleshooting_and_bringup.md "Audio thread xruns" for the
 // full failure mode and the SCHED_FIFO fix.
-#define XRUN_FLOOD_WINDOW_NS 1000000000L /* 1 second */
+#define XRUN_FLOOD_WINDOW_NS 1000000000LL /* 1 second */
 #define XRUN_FLOOD_THRESHOLD 10          /* xruns within the window = "flooding" */
 
 struct xrun_tracker {
@@ -575,12 +585,17 @@ struct xrun_tracker {
   int hint_shown;
 };
 
+// Nanoseconds from a to b. 64-bit, since a long is 32 bits on a 32-bit OS
+// and overflows past about 2.1 s.
+static int64_t ns_between(const struct timespec *a, const struct timespec *b) {
+  return (int64_t)(b->tv_sec - a->tv_sec) * 1000000000LL + (b->tv_nsec - a->tv_nsec);
+}
+
 static void xrun_note(struct xrun_tracker *t, const char *label) {
   struct timespec now;
   clock_gettime(CLOCK_MONOTONIC, &now);
 
-  long elapsed_ns = (now.tv_sec - t->window_start.tv_sec) * 1000000000L +
-                    (now.tv_nsec - t->window_start.tv_nsec);
+  int64_t elapsed_ns = ns_between(&t->window_start, &now);
   if (t->count == 0 || elapsed_ns > XRUN_FLOOD_WINDOW_NS || elapsed_ns < 0) {
     t->window_start = now;
     t->count = 0;
@@ -711,16 +726,16 @@ static void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output
 // 5s. Always measured (it's cheap); printed only when MAXIBITX_LOOP_TIMING
 // is set. Used to trace the startup xrun flood (ARCHITECTURE.md §10 step
 // 7 follow-ups).
-#define BLOCK_TIMING_WINDOW_NS 5000000000L /* 5 seconds */
+#define BLOCK_TIMING_WINDOW_NS 5000000000LL /* 5 seconds */
 #define BLOCK_PERIOD_BUDGET_MS (1000.0 * PERIOD_FRAMES / SAMPLE_RATE) /* 10.667ms */
 
 struct phase_stats {
-  long sum_ns;
-  long max_ns;
+  int64_t sum_ns;
+  int64_t max_ns;
   int count;
 };
 
-static void phase_note(struct phase_stats *p, long elapsed_ns) {
+static void phase_note(struct phase_stats *p, int64_t elapsed_ns) {
   p->sum_ns += elapsed_ns;
   if (elapsed_ns > p->max_ns)
     p->max_ns = elapsed_ns;
@@ -763,16 +778,18 @@ struct loop_timing_tracker {
 // For tr_warn_if_clipping() below, both measured on a Pi 4 with
 // MAXIBITX_TR_TIMING: the audio loop's processing time before each write
 // (the playback queue is the buffer less one period less this), and the
-// TX-up sequence's own time apart from ext_ptt_delay_ms - two mixer calls,
+// TX-up sequence's own time apart from its deliberate relay wait - two mixer calls,
 // two Si5351 writes and the worker's wake-up. A slower board has more of
 // both, so on a Pi Zero 2W the estimate below errs on the hopeful side.
 #define TR_EST_PROCESS_MS 3.1
 #define TR_EST_TX_UP_MS 7.0
 
-// Warns at start-up when this playback depth and hw_settings.ini's
-// ext_ptt_delay_ms together mean the first keyed sample of a transmission
-// will reach the DAC before the TX-up sequence has unmuted the exciter
-// drive - i.e. the start of every transmission's first element is lost.
+// Warns at start-up when this playback depth and the board's relay wait
+// (radio_hw_tx_settle_ms(): ext_ptt_delay_ms on the sBitx) together mean
+// the first keyed sample of a transmission will reach the DAC before the
+// TX-up sequence has unmuted the exciter drive - i.e. the start of every
+// transmission's first element is lost. Silent on a board that cannot
+// transmit.
 // Sidetone and RF share the playback queue, so a shorter buffer that
 // speeds up the sidetone also shortens that head start.
 // docs/dsp_design_notes/cw_keyer_design_study.md §8.
@@ -780,16 +797,18 @@ static void tr_warn_if_clipping(snd_pcm_uframes_t playback_buffer) {
   double frame_ms = 1000.0 / SAMPLE_RATE;
   double queue_ms = ((double)playback_buffer - PERIOD_FRAMES) * frame_ms - TR_EST_PROCESS_MS;
   double rf_ms = queue_ms + TX_PIPELINE_DELAY_FRAMES * frame_ms;
-  double drive_ms = tx_ext_ptt_delay_ms + TR_EST_TX_UP_MS;
-  if (rf_ms >= drive_ms)
+  int settle_ms = radio_hw_tx_settle_ms();
+  double drive_ms = settle_ms + TR_EST_TX_UP_MS;
+  if (!radio_hw_tx_permitted() || rf_ms >= drive_ms)
     return;
   fprintf(stderr,
-          "sound: WARNING - with a %.0f ms playback buffer and ext_ptt_delay_ms=%d, the first "
+          "sound: WARNING - with a %.0f ms playback buffer and a %d ms relay wait, the first "
           "~%.0f ms of each transmission's first element will not reach the air: RF gets to "
           "the DAC ~%.0f ms after TX is requested, but the exciter drive is only up after "
-          "~%.0f ms. Use a longer buffer (MAXIBITX_PLAYBACK_PERIODS), or ext_ptt_delay_ms=0 "
-          "if nothing is connected to EXT_PTT. MAXIBITX_TR_TIMING=1 measures it.\n",
-          playback_buffer * frame_ms, tx_ext_ptt_delay_ms, drive_ms - rf_ms, rf_ms, drive_ms);
+          "~%.0f ms. Use a longer buffer (MAXIBITX_PLAYBACK_PERIODS), or on an sBitx "
+          "ext_ptt_delay_ms=0 if nothing is connected to EXT_PTT. MAXIBITX_TR_TIMING=1 "
+          "measures it.\n",
+          playback_buffer * frame_ms, settle_ms, drive_ms - rf_ms, rf_ms, drive_ms);
 }
 
 // Written by the audio thread once per transmission start, read by the TX
@@ -847,8 +866,8 @@ static int loop_timing_should_print(void) {
 // previous iteration's read/process/write durations (-1 = not applicable,
 // e.g. write with no pcm_playback) and this iteration's period, then
 // prints and resets once per BLOCK_TIMING_WINDOW_NS.
-static void loop_timing_note(struct loop_timing_tracker *t, long read_ns, long process_ns,
-                              long write_ns) {
+static void loop_timing_note(struct loop_timing_tracker *t, int64_t read_ns,
+                              int64_t process_ns, int64_t write_ns) {
   struct timespec now;
   clock_gettime(CLOCK_MONOTONIC, &now);
 
@@ -859,8 +878,7 @@ static void loop_timing_note(struct loop_timing_tracker *t, long read_ns, long p
     return; // no previous top-of-loop timestamp yet to measure a period against
   }
 
-  long period_ns = (now.tv_sec - t->last_loop_top.tv_sec) * 1000000000L +
-                    (now.tv_nsec - t->last_loop_top.tv_nsec);
+  int64_t period_ns = ns_between(&t->last_loop_top, &now);
   t->last_loop_top = now;
 
   if (read_ns >= 0)
@@ -871,13 +889,12 @@ static void loop_timing_note(struct loop_timing_tracker *t, long read_ns, long p
     phase_note(&t->write, write_ns);
   phase_note(&t->period, period_ns);
 
-  long elapsed_window_ns = (now.tv_sec - t->window_start.tv_sec) * 1000000000L +
-                            (now.tv_nsec - t->window_start.tv_nsec);
+  int64_t elapsed_window_ns = ns_between(&t->window_start, &now);
   if (elapsed_window_ns >= BLOCK_TIMING_WINDOW_NS && t->period.count > 0) {
     if (loop_timing_should_print()) {
       fprintf(stderr,
               "sound: loop timing over last %ds (budget %.3fms/block period):\n",
-              (int)(BLOCK_TIMING_WINDOW_NS / 1000000000L), BLOCK_PERIOD_BUDGET_MS);
+              (int)(BLOCK_TIMING_WINDOW_NS / 1000000000LL), BLOCK_PERIOD_BUDGET_MS);
       phase_print(&t->read, "read");
       phase_print(&t->process, "process");
       phase_print(&t->write, "write");
@@ -913,8 +930,7 @@ static void *audio_loop(void *arg) {
     clock_gettime(CLOCK_MONOTONIC, &t_read0);
     snd_pcm_sframes_t frames = snd_pcm_readi(pcm_capture, cap_buf, PERIOD_FRAMES);
     clock_gettime(CLOCK_MONOTONIC, &t_read1);
-    long read_ns = (t_read1.tv_sec - t_read0.tv_sec) * 1000000000L +
-                   (t_read1.tv_nsec - t_read0.tv_nsec);
+    int64_t read_ns = ns_between(&t_read0, &t_read1);
     if (frames < 0) {
       xrun_note(&capture_xrun, "capture");
       if (xrun_recover(pcm_capture, (int)frames) < 0) {
@@ -937,7 +953,7 @@ static void *audio_loop(void *arg) {
     clock_gettime(CLOCK_MONOTONIC, &t0);
     sound_process(rx_buf, mic_buf, spk_buf, tx_buf, n);
     clock_gettime(CLOCK_MONOTONIC, &t1);
-    long process_ns = (t1.tv_sec - t0.tv_sec) * 1000000000L + (t1.tv_nsec - t0.tv_nsec);
+    int64_t process_ns = ns_between(&t0, &t1);
 
     // Once per audio block - takes the key's edges since the last capture,
     // manages the CW keying burst's hang timer, and asserts/releases PTT via
@@ -950,7 +966,7 @@ static void *audio_loop(void *arg) {
     // burst - see docs/08_troubleshooting_and_bringup.md for why
     // (ALSA underrun detection is tied to the hardware clock, not to
     // whether writei() is called).
-    long write_ns = -1; // stays -1 (not counted) if pcm_playback is NULL
+    int64_t write_ns = -1; // stays -1 (not counted) if pcm_playback is NULL
     struct timespec t_write0, t_write1;
     if (pcm_playback) {
       clock_gettime(CLOCK_MONOTONIC, &t_write0);
@@ -983,8 +999,8 @@ static void *audio_loop(void *arg) {
       if (tx_audio_active) {
         // Per-band calibrated scale (see the TX_SAMPLE_HEADROOM
         // comment above) - looked up once per block, not per
-        // sample, since freq_hdr doesn't change mid-block.
-        double band_scale = hw_settings_tx_scale(freq_hdr);
+        // sample. radio_tx_freq(): where this transmission is, XIT included.
+        double band_scale = hw_settings_tx_scale(radio_tx_freq());
         double amp = TX_SAMPLE_HEADROOM * TX_DRIVE * band_scale * TX_GAIN_CORRECTION;
 
         // The limiter's ceiling, as an amplitude: POWER's fraction of
@@ -1012,13 +1028,16 @@ static void *audio_loop(void *arg) {
 
         if (tone_on) {
           // Test tones replace the mode's own source; the sideband still
-          // follows the mode (tone_gen.h).
+          // follows the mode (tone_gen.h). In CW and CWR the single tone is
+          // the CW pitch, which the CW shift lands on the dial: TUNE puts
+          // its carrier where a key-down would go.
+          int cw_mode = tx_mode == RADIO_MODE_CW || tx_mode == RADIO_MODE_CWR;
+          tone_gen_set_single_hz(cw_mode ? (double)cw_get_pitch() : TONE_GEN_SINGLE_HZ);
           for (int i = 0; i < n; i++)
             tx_audio_buf[i] = tone_gen_sample();
           signal = (tx_mode == RADIO_MODE_LSB) ? TX_PIPELINE_LSB
-                   : (tx_mode == RADIO_MODE_CW || tx_mode == RADIO_MODE_CWR)
-                       ? TX_PIPELINE_CW
-                       : TX_PIPELINE_USB;
+                   : cw_mode                    ? TX_PIPELINE_CW
+                                                : TX_PIPELINE_USB;
         } else if (tx_mode == RADIO_MODE_CW || tx_mode == RADIO_MODE_CWR) {
           // cw_get_sample() owns the envelope advance for this sample -
           // must be called exactly once per real audio sample (its
@@ -1134,8 +1153,7 @@ static void *audio_loop(void *arg) {
         }
       }
       clock_gettime(CLOCK_MONOTONIC, &t_write1);
-      write_ns = (t_write1.tv_sec - t_write0.tv_sec) * 1000000000L +
-                 (t_write1.tv_nsec - t_write0.tv_nsec);
+      write_ns = ns_between(&t_write0, &t_write1);
     }
 
     loop_timing_note(&loop_timing, read_ns, process_ns, write_ns);
@@ -1175,7 +1193,7 @@ int sound_thread_start(const char *device_name) {
   if (sound_update_cw_if_placement() < 0) {
     fprintf(stderr,
             "sound: bfo_freq (%d) and xtal_filter_center (%d) don't give a "
-            "usable TX IF - keeping the compiled-in placement\n",
+            "usable TX IF - transmit is refused\n",
             bfo_freq, xtal_filter_center);
   } else {
     printf("sound: TX IF placed from bfo_freq - xtal_filter_center = %d Hz, "
