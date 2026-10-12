@@ -304,8 +304,9 @@ already used in `antialias_filter_design.md`.
   to settle, and plans a receive-only first step. Status: step 1
   (receive only) built and receiving on a zBitx, with its Pi Zero 2W's
   CPU measured and stage 1 vectorized for it (§10), and the crystal
-  filter measured (§11); step 2's T/R sequence built and bench-tested,
-  not yet run on a zBitx, and its power calibration to do (§12).
+  filter measured (§11); step 2 built, transmitting into a dummy load and
+  calibrated to 2 W on every band, as safe defaults in
+  `data/hw_settings_zbitx.ini` (§12); the on-air checks still to do.
 - [`rx_cw_noise_reduction_study.md`](rx_cw_noise_reduction_study.md) —
   whether, where and how to add noise reduction to the local CW audio,
   measured with `tools/nr_study/` (keyed CW in white noise through a model
