@@ -35,7 +35,7 @@ the model.
 | TX chain, `tx_pipeline.c`, `cw.c`, power | `docs/03_tx_processing_pipeline.md` |
 | rigctld, CAT, HPSDR, iq_stream, USB audio | `docs/06_api.md` (client view) and `docs/04_remote_control_and_iq_output.md` (implementation) |
 | Startup, threads, failure handling | `docs/05_process_and_threading_model.md` |
-| Build, kernel, deployment | `docs/07_build_and_deployment.md` |
+| Build, kernel, deployment | `README.md` ("Building and running"), `docs/dsp_design_notes/usb_gadget_OS_setup.md` |
 | A design decision or build-order step | `docs/ARCHITECTURE.md` §10 |
 
 If a doc says something the code no longer does, fix the doc in the same
