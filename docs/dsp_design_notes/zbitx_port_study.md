@@ -3,8 +3,8 @@
 Status: **step 1 built** (receive only, §7) on the `zmax` branch and
 receiving on a zBitx; **step 2 built**: the zBitx transmits into a dummy
 load, calibrated to 2 W on every band, on frequency, with DIGITAL over
-TCI and CW's T/R timing checked (§12); SSB and the opposite sideband
-still to check. Written before any
+TCI, CW's T/R timing and the SSB sidebands checked (§12); SSB from the
+microphone still to try. Written before any
 code; §9 records the decisions taken on it, §10 step 1 as built, §11 how
 to measure the crystal filter's centre, and §12 step 2 as built.
 
@@ -849,11 +849,13 @@ to compress is not known.
   leaves 16.2 to 21.7 ms spare: no part of the first element is lost.
 - **On frequency**, on a remote receiver.
 - **DIGITAL over TCI** transmits.
+- **USB and LSB** on the right sideband, with the 1000 Hz test tone, on
+  a remote receiver.
 - **The RP2040 front panel** keeps showing the last screen zbitx drew,
   frozen, since nothing talks to it. Receive and transmit are
   unaffected.
 
-**Still to do:** the opposite sideband on a remote receiver; SSB from
-the microphone; and anything for the front panel (§3.7, step 3). clk1 leaking through the crystal filter would appear
+**Still to do:** SSB from the microphone, and anything for the front
+panel (§3.7, step 3). clk1 leaking through the crystal filter would appear
 `bfo_freq − xtal_filter_center` below the dial, 35.6 kHz with this
 board's values, beyond the filter's −60 dB point (§11).
