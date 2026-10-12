@@ -302,7 +302,10 @@ already used in `antialias_filter_design.md`.
   back to `main`; flags the Zero 2W's CPU (stage 1's 327-tap FIR
   dominates the receive cost) and the 15 m LPF assignment as the things
   to settle, and plans a receive-only first step. Status: step 1
-  (receive only) built and bench-tested, not yet run on a zBitx.
+  (receive only) built and receiving on a zBitx, with its Pi Zero 2W's
+  CPU measured and stage 1 vectorized for it (§10), and the crystal
+  filter measured (§11); step 2's T/R sequence built and bench-tested,
+  not yet run on a zBitx, and its power calibration to do (§12).
 - [`rx_cw_noise_reduction_study.md`](rx_cw_noise_reduction_study.md) —
   whether, where and how to add noise reduction to the local CW audio,
   measured with `tools/nr_study/` (keyed CW in white noise through a model
