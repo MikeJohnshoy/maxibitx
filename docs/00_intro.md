@@ -460,8 +460,9 @@ SBITX_V3` for an sBitx DE, v2 or v3.
 
 maxibitx also has a profile for the zBitx (`sbitx_version =
 SBITX_V4`), which shares this signal chain but has its own pins, LPF
-plan, I2C bus and T/R switching. It is receive only for now: every
-request to transmit is refused. See
+plan, I2C bus and T/R switching. Its LPFs carry only the transmitter,
+so the band's filter is switched in at each transmission rather than on
+each retune. See
 [zbitx_port_study.md](dsp_design_notes/zbitx_port_study.md) §5 and §9.
 
 ### Band low-pass filters
@@ -1338,7 +1339,7 @@ real time. Run it before uploading a change.
 | `make test-keyer-straight` | the same tests against `keyer_straight.c`, which must refuse what it does not offer |
 | `make test-tci-ws` | `tci_ws.c` over loopback: the WebSocket handshake and its refusals, every frame length encoding, fragmentation, close, oversize and malformed frames, the client limit, and the send queue's drop policy |
 | `make test-tci` | the TCI server over loopback, with the radio stubbed: a JTDX-style start-up, state echoes, PTT rules, receive audio in every format and rate, I/Q at both rates, transmit audio paced by `TX_CHRONO`, and CW text read back from what the real keyer keys |
-| `make test-radio-hw` | `hw_settings.c`'s `sbitx_version` and `i2c_bus` keys and `radio_hw.c`'s board profiles, with GPIO and I2C stubbed: the pins each board claims and their levels, LPF selection, the order of the T/R relay sequence, that the zBitx can neither be permitted to transmit nor raise TX_LINE, and each board's knob pins, clear of every other pin in use |
+| `make test-radio-hw` | `hw_settings.c`'s `sbitx_version` and `i2c_bus` keys and `radio_hw.c`'s board profiles, with GPIO and I2C stubbed: the pins each board claims and their levels, LPF selection, the order of the T/R relay sequence, the zBitx's LPF chosen at the transmit frequency and no transmit where there is no LPF, and each board's knob pins, clear of every other pin in use |
 
 `make check-comments` runs `tools/check_comments.py` over the sources,
 enforcing the comment policy: comments state what the code does now,
