@@ -4,9 +4,9 @@
 // i2c_bus keys, and radio_hw.c's two board profiles, with gpio.c and i2c.c
 // stubbed so every line request and write is recorded rather than made.
 // Checks which pins each board claims and at what level, LPF selection on a
-// retune, the relay half of the T/R sequence in both directions, that the
-// zBitx can neither be permitted to transmit nor raise TX_LINE, and each
-// board's front-panel knobs: their pins, and that no knob pin is one the
+// retune, the relay half of the T/R sequence in both directions (on the
+// zBitx, the transmit frequency's LPF chosen at transmit, and no transmit
+// where there is no LPF), and each board's front-panel knobs: their pins, and that no knob pin is one the
 // board drives, the key jack's, or the sBitx si5351's I2C pins.
 // docs/dsp_design_notes/zbitx_port_study.md §5 and §9.
 //
@@ -151,7 +151,7 @@ int main(void) {
   hw_i2c_bus = 1;
   check(radio_hw_i2c_bus() == 1, "i2c_bus overrides it");
   hw_i2c_bus = -1;
-  check(!radio_hw_tx_permitted(), "transmit is not permitted");
+  check(radio_hw_tx_permitted(), "transmit is permitted");
   reset_pins();
   check(radio_hw_gpio_init() == 0, "GPIO lines claimed");
   check(claimed_pins() ==
@@ -162,10 +162,30 @@ int main(void) {
   radio_hw_tune(21200000);
   radio_hw_tune(7030000);
   check(n_writes == 0 && high_pins() == BIT(15), "a retune selects no LPF (not in the RX path)");
-  check(radio_hw_relays_tx(1, 14060000) < 0, "the relays refuse to go to transmit");
-  check(n_writes == 0 && high_pins() == BIT(15), "... and nothing was switched");
-  check(radio_hw_relays_tx(0, 14060000) == 0, "the relays go to receive");
-  check(high_pins() == BIT(15) && level[23] == 0, "... TX_LINE low, LPFs off, RX_LINE high");
+  // To transmit: RX_LINE low first, TX_LINE high last, and between them
+  // the transmit frequency's LPF and no other.
+  static const struct { int hz; int lpf; const char *what; } txs[] = {
+      {14060000, 25, "14.060 MHz: RX_LINE low, LPF_B (25), then TX_LINE high"},
+      {21060000, 25, "21.060 MHz: LPF_B (25) - 15 m is on B on the zBitx"},
+      {24906000, 24, "24.906 MHz: LPF_A (24)"},
+      {3560000, 7, "3.560 MHz: LPF_D (7)"},
+      {10106000, 8, "10.106 MHz: LPF_C (8)"},
+  };
+  for (size_t i = 0; i < sizeof(txs) / sizeof(txs[0]); i++) {
+    n_writes = 0;
+    int ok = radio_hw_relays_tx(1, txs[i].hz) == 0 && n_writes >= 3 && writes[0][0] == 15 &&
+             writes[0][1] == 0 && writes[n_writes - 1][0] == 23 &&
+             writes[n_writes - 1][1] == 1 && high_pins() == (BIT(23) | BIT(txs[i].lpf));
+    check(ok, txs[i].what);
+    n_writes = 0;
+    ok = radio_hw_relays_tx(0, txs[i].hz) == 0 && n_writes >= 2 && writes[0][0] == 23 &&
+         writes[0][1] == 0 && writes[n_writes - 1][0] == 15 && writes[n_writes - 1][1] == 1 &&
+         high_pins() == BIT(15);
+    check(ok, "... and back: TX_LINE low first, LPFs off, RX_LINE high last");
+  }
+  n_writes = 0;
+  check(radio_hw_relays_tx(1, 31000000) < 0 && n_writes == 0 && high_pins() == BIT(15),
+        "31 MHz, no LPF: refused, nothing switched");
   check(radio_hw_tx_settle_ms() == 10, "relay wait is the LPF's 10 ms");
   check(radio_hw_knob(RADIO_KNOB_TUNING).a_pin < 0 && radio_hw_knob(RADIO_KNOB_VOLUME).a_pin < 0,
         "no knobs on the Pi's GPIO (the RP2040 panel has them)");
