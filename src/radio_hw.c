@@ -82,12 +82,10 @@ static const struct board boards[] = {
     },
     {
         // zbitx (drexjj/zbitx, branches dev and devcwmod): LPF_B reaches
-        // 21.5 MHz, and the LPFs are switched for transmit only. Transmit
-        // is refused until its sequence is written and the board
-        // calibrated (study §7, step 2).
+        // 21.5 MHz, and the LPFs are switched for transmit only.
         .version = "SBITX_V4",
         .name = "zBitx",
-        .tx_permitted = 0,
+        .tx_permitted = 1,
         .i2c_bus = 3, // zbitx opens /dev/i2c-3; the RP2040 panel is at 0x0a there
         .tx_line_pin = 23,
         .tx_power_pin = 16,
@@ -203,27 +201,30 @@ static void lpfs_off(void) {
     drive(board->lpf_pins[i], 0);
 }
 
-// Selects the LPF for freq_hz, all others off. 30 MHz and above: none.
-static void select_lpf(int freq_hz) {
-  int pin = 0;
-  for (int i = 0; board->lpf[i].below_hz; i++) {
-    if (freq_hz < board->lpf[i].below_hz) {
-      pin = board->lpf[i].pin;
-      break;
-    }
-  }
+// The LPF pin for freq_hz; 0 for 30 MHz and above, where there is none.
+static int lpf_for(int freq_hz) {
+  for (int i = 0; board->lpf[i].below_hz; i++)
+    if (freq_hz < board->lpf[i].below_hz)
+      return board->lpf[i].pin;
+  return 0;
+}
+
+// Selects the LPF for freq_hz, all others off. Says so when log is set.
+static void select_lpf(int freq_hz, int log) {
+  int pin = lpf_for(freq_hz);
   if (pin == prev_lpf)
     return;
   lpfs_off();
   if (pin)
     drive(pin, 1);
   prev_lpf = pin;
-  printf("LPF: selected pin %d for %d Hz\n", pin, freq_hz);
+  if (log)
+    printf("LPF: selected pin %d for %d Hz\n", pin, freq_hz);
 }
 
 void radio_hw_tune(int freq_hz) {
   if (board->lpf_in_rx_path)
-    select_lpf(freq_hz);
+    select_lpf(freq_hz, 1);
 }
 
 /* ---- Relay half of the T/R sequence -------------------------------------- */
@@ -254,13 +255,30 @@ static int sbitx_relays_tx(int on, int freq_hz) {
 }
 
 // zBitx: TX_LINE powers the PA, RX_LINE connects the receiver, and the LPF
-// relays carry only the transmitter. The transmit half is not written
-// until the zBitx transmit step (study §3.3, §7), so it refuses whatever
-// the profile says; the receive half leaves the radio receiving.
+// relays carry only the transmitter, so the band's LPF is chosen here, for
+// the transmit frequency, every time. zbitx's tr_switch_v4() order (study
+// §3.3): receiver off, LPF, the relay's settling time, PA on; and back:
+// PA off, LPFs off, settle, receiver on. A frequency with no LPF (30 MHz
+// and above) is refused before anything moves. The LPF is logged when it
+// differs from the last transmission's, not on every one.
 static int zbitx_relays_tx(int on, int freq_hz) {
-  (void)freq_hz;
-  if (on)
-    return -1;
+  static int last_logged_lpf = -1;
+  if (on) {
+    int pin = lpf_for(freq_hz);
+    if (!pin) {
+      printf("LPF: none for %d Hz - not transmitting without one\n", freq_hz);
+      return -1;
+    }
+    drive(board->rx_line_pin, 0);
+    select_lpf(freq_hz, 0);
+    if (pin != last_logged_lpf) {
+      printf("LPF: transmitting through pin %d for %d Hz\n", pin, freq_hz);
+      last_logged_lpf = pin;
+    }
+    usleep(LPF_SETTLE_MS * 1000);
+    drive(board->tx_line_pin, 1);
+    return 0;
+  }
   drive(board->tx_line_pin, 0);
   lpfs_off();
   prev_lpf = 0;
