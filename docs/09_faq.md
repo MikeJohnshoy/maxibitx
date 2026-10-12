@@ -321,8 +321,7 @@ board's:
 - **sBitx:** raise EXT_PTT, wait `ext_ptt_delay_ms` for an external
   amplifier, then raise TX_LINE.
 - **zBitx**, as its own software does it: drop RX_LINE, select the LPF
-  for the transmit frequency, wait 10 ms, then power the PA. That half
-  isn't written yet (below).
+  for the transmit frequency, wait 10 ms, then power the PA.
 
 `radio.c` doesn't know either sequence, and doesn't need to.
 
@@ -345,10 +344,9 @@ the sBitx's default puts it.
 **Where the zBitx stands:**
 
 - **Receive works** on a zBitx with its Pi Zero 2W.
-- **Transmit is refused**, by the profile and again by its relay
-  function, until the zBitx's T/R sequence is written and the board is
-  calibrated. While transmit is refused, rigctld lists no transmit
-  ranges and TCI reports transmit as unavailable.
+- **Transmit is written but not yet tried on the air.** Its T/R
+  sequence passes `make test-radio-hw`; its per-band power still has to
+  be calibrated with a wattmeter, starting from a low `max_power`.
 - **The CPU is not a concern.** With stage 1 vectorized, processing on
   the Zero 2W averages 4.3 ms of each 10.67 ms block and peaks at 6 ms
   (study §10).
@@ -362,7 +360,7 @@ function if its T/R sequence differs from both existing ones.
 - the pins it claims, and their levels;
 - its LPF selection;
 - the order of its relays;
-- that a board without transmit can never raise TX_LINE.
+- that it refuses to transmit where it has no LPF.
 
 The pin numbers have to come from the new board itself, by reading its
 wiring or its own software's pin map, converted to BCM numbering. They
@@ -740,4 +738,5 @@ daemon; remote element keying absent (CW text works, over TCI too);
 TCI's audio and CW text not yet tried on the air (its I/Q is, with
 sdrOxide); carrier placement a
 few Hz low from whole-bin rotation (6.25 Hz on SSB, 9.4 Hz on CW); and
-transmit on the zBitx, whose T/R sequence is not yet written.
+the zBitx's transmit, written and bench-tested but not yet calibrated or
+tried on the air.
