@@ -1,3 +1,4 @@
+[README.md](https://github.com/user-attachments/files/33356039/README.md)
 # DSP design notes
 
 Home for DSP design notes — measured data, derivations,
@@ -307,8 +308,8 @@ already used in `antialias_filter_design.md`.
   filter measured (§11); step 2 built, transmitting into a dummy load and
   calibrated to 2 W on every band, as safe defaults in
   `data/hw_settings_zbitx.ini` (§12), on frequency on the air, with
-  DIGITAL over TCI and the CW T/R timing checked; SSB and the opposite
-  sideband still to check.
+  DIGITAL over TCI, the CW T/R timing and the SSB sidebands checked; SSB
+  from the microphone still to try.
 - [`rx_cw_noise_reduction_study.md`](rx_cw_noise_reduction_study.md) —
   whether, where and how to add noise reduction to the local CW audio,
   measured with `tools/nr_study/` (keyed CW in white noise through a model
