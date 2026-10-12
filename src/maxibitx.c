@@ -1,7 +1,16 @@
 // maxibitx.c
 //
-// initializes the sbitx radio hardware and external interfaces,
-// then processes requests until shutting down
+// maxibitx is set of all-mode (CW, CWR, USB, LSB and DIGITAL) radio functions for
+// an sbitx radio board and Raspberry Pi. There is no user interface included,
+// the GUI is to be provided by external software. This main function initializes
+// the sbitx radio hardware and external interfaces, then processes requests until 
+// shutting down
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation
+//
+// Mike Johnshoy, KB2ML
 
 #include "hpsdr_p1.h"
 #include "iq_stream.h"
