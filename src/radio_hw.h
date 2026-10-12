@@ -61,7 +61,8 @@ void radio_hw_tune(int freq_hz);
 struct radio_hw_knob radio_hw_knob(enum radio_knob k);
 
 // 1 if this board may transmit at all, 0 if every transmit request is to
-// be refused (the zBitx, until its transmit path is calibrated).
+// be refused. Both boards may today; the profile keeps the switch for a
+// board whose transmit path isn't ready.
 int radio_hw_tx_permitted(void);
 
 // The relay half of the T/R sequence, for radio.c's TX worker, which does
@@ -69,9 +70,9 @@ int radio_hw_tx_permitted(void);
 // clocks being set for TX and the exciter feed being raised, including any
 // settling wait. on = 0: everything between the exciter feed being dropped
 // and the clocks going back to RX, ending with the receiver connected.
-// freq_hz is the dial, for a board that picks its LPF at transmit. Returns
-// 0, or -1 if this board cannot transmit, in which case nothing is
-// switched; on = 0 always succeeds.
+// freq_hz is the transmit frequency (the dial plus XIT), for a board that
+// picks its LPF at transmit. Returns 0, or -1 if this board cannot transmit
+// there, in which case nothing is switched; on = 0 always succeeds.
 int radio_hw_relays_tx(int on, int freq_hz);
 
 // Milliseconds the relay half of the TX-up sequence deliberately waits
