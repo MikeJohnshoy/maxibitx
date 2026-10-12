@@ -124,8 +124,8 @@ off and drops PTT after 30 s in transmit.
 - **Transmit is refused outside the calibrated bands.** PTT only takes
   effect when the dial is inside one of the `[tx_band]` ranges
   `dump_state` advertises; outside them rigctld answers `RPRT -1` and
-  the radio stays in receive. On a board that may not transmit (the
-  zBitx, for now) every PTT is refused the same way. Returning to
+  the radio stays in receive. On a board whose profile may not transmit
+  every PTT is refused the same way. Returning to
   receive is never refused.
 
 **No notifications.** Nothing is pushed to clients. To stay in sync with
