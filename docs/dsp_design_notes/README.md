@@ -1,4 +1,3 @@
-[README.md](https://github.com/user-attachments/files/33356039/README.md)
 # DSP design notes
 
 Home for DSP design notes — measured data, derivations,
