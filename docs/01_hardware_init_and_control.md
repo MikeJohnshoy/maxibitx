@@ -243,9 +243,10 @@ board that may not transmit.
 The rest of the code asks nothing about the board; it calls
 `radio_hw_tune()`, `radio_hw_tx_permitted()`, `radio_hw_relays_tx()`,
 `radio_hw_tx_settle_ms()`, `radio_hw_i2c_bus()` and `radio_hw_knob()`,
-which mean the same on every board. The zBitx profile is receive only: `radio_hw_tx_permitted()`
-is 0, so `radio_set_tx()` refuses every transmit request, and its relay
-half of the T/R sequence refuses to go to transmit as well. The design:
+which mean the same on every board. Both profiles may transmit; the
+`tx_permitted` switch in a profile is there for a board whose transmit
+path isn't ready, and with it off `radio_set_tx()` refuses every transmit
+request. The design:
 [`zbitx_port_study.md`](dsp_design_notes/zbitx_port_study.md) §5 and §9.
 
 ## LPF bank switching
@@ -254,7 +255,10 @@ half of the T/R sequence refuses to go to transmit as well. The design:
 [`02_rx_processing_pipeline.md`](02_rx_processing_pipeline.md). On the
 sBitx, whose LPFs are in the receive path, it selects the band's relay
 from the board's plan, all others off; on the zBitx, whose LPFs carry
-only the transmitter, it does nothing. Each board's plan:
+only the transmitter, it does nothing, and the relay half of the T/R
+sequence selects the filter for the transmit frequency (the dial plus
+XIT) each time it goes to transmit, and refuses where there is none.
+Each board's plan:
 
 | Frequency | Bands | sBitx | zBitx |
 |---|---|---|---|
