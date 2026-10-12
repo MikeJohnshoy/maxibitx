@@ -133,8 +133,8 @@ for why). Who calls it:
 
 **Band limits.** `radio_set_tx()` refuses to transmit when the dial
 sits outside every `[tx_band]` range in `data/hw_settings.ini`, or when
-the board may not transmit at all (`radio_hw_tx_permitted()`, 0 on the
-zBitx for now) - the two checks together are `radio_tx_allowed()`. That
+the board may not transmit at all (`radio_hw_tx_permitted()`, a switch
+in each board's profile, on for both boards) - the two checks together are `radio_tx_allowed()`. That
 covers all of those sources at once rather than each having to check
 for itself. Returning to receive is never refused. rigctld's `T`
 answers `RPRT -1`; the other surfaces have no error reply, so the
@@ -181,12 +181,14 @@ On the sBitx the relay half raises PTT (`EXT_PTT`), waits
 external amplifier's relay; 0 for a station with nothing on
 `EXT_PTT`), then switches the T/R relay (`TX_LINE`); back to receive it
 drops `EXT_PTT`, waits 5 ms and drops `TX_LINE`. On the zBitx, which
-has no `EXT_PTT` and ignores `ext_ptt_delay_ms`, the transmit half
-refuses and switches nothing - a second guard behind `radio_set_tx()`'s
-check - so `radio_tx_apply()` restores the RX clocks and capture and
-stays in receive; the receive half drops `TX_LINE`, turns every LPF
-off, waits 5 ms and raises `RX_LINE`. The zBitx transmit sequence:
-[`zbitx_port_study.md`](dsp_design_notes/zbitx_port_study.md) §3.3.
+has no `EXT_PTT` and ignores `ext_ptt_delay_ms`, the transmit half drops
+`RX_LINE` (receiver off), selects the LPF for the transmit frequency,
+waits 10 ms for its relay and raises `TX_LINE`, which powers the PA; the
+receive half drops `TX_LINE`, turns every LPF off, waits 5 ms and raises
+`RX_LINE`. At 30 MHz and above there is no LPF, so the transmit half
+refuses and switches nothing, and `radio_tx_apply()` restores the RX
+clocks and capture and stays in receive. The sequence is zbitx's own
+([`zbitx_port_study.md`](dsp_design_notes/zbitx_port_study.md) §3.3).
 
 ## Stage by stage
 
