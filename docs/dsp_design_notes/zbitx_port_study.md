@@ -335,9 +335,8 @@ connector, and whether anything else uses it.
 ### 4.5 Operating system
 
 The same build: `libasound`, `libfftw3f`, `make`'s `setcap`. On the
-zBitx's Pi, in addition to what
-[`07_build_and_deployment.md`](../07_build_and_deployment.md) lists:
-the UART off (§3.1), and the I2C bus that carries the si5351 (§3.4).
+zBitx's Pi, in addition to what the README's "Building and running"
+lists: the UART off (§3.1), and the I2C bus that carries the si5351 (§3.4).
 Both 32-bit and 64-bit Raspberry Pi OS should build it; 64-bit is what
 it has been developed on.
 
