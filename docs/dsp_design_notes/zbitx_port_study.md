@@ -1,8 +1,9 @@
 # Porting maxibitx to the zBitx and Pi Zero 2W: a study
 
 Status: **step 1 built** (receive only, §7) on the `zmax` branch and
-receiving on a zBitx; **step 2's T/R sequence built** and bench-tested,
-not yet run on a zBitx, its power calibration to do. Written before any
+receiving on a zBitx; **step 2 built**: the zBitx transmits into a dummy
+load, calibrated to 2 W on every band (§12); the checks on the air are
+still to do. Written before any
 code; §9 records the decisions taken on it, §10 step 1 as built, §11 how
 to measure the crystal filter's centre, and §12 step 2 as built.
 
@@ -803,7 +804,38 @@ scale is raised is the PA compressing (`tx_power_calibration.md` §7).
 The 3 W full scale itself is extrapolated, not measured, until a band is
 run with `max_power=3`.
 
-**Still to do on the radio:** the calibration above; CW keying with
+**As calibrated (2026-10-12)**, on a zBitx on loan from Evan, AC9TU,
+into a dummy load at the test frequencies, in CW with TUNE. The plan
+above changed along the way. A first pass with the sBitx's scales and
+no cap (`full_scale_power` = `max_power` = 3) read 0.2 to 0.3 W on 80 to
+40 m but 2.0 to 2.1 W on 12 and 10 m: the zBitx needs 10 to 12 dB more
+drive than the sBitx at the bottom of HF and about 2 dB more at the top,
+so the sBitx scales get the shape wrong as well as the level. Those
+readings, taken at full scale, set the scales for 3 W; at those scales
+full scale read 2.0 to 2.6 W, highest on 12 m. The 80 to 40 m readings
+had been below the wattmeter's reliable range, which is why those bands
+moved most. The target then became a 2 W full scale, conservative for
+a borrowed board, and one trim by `scale × sqrt(2 / P)` gave:
+
+| Band | Frequency | Scale | Power |
+|---|---|---|---|
+| 80 m | 3.560 MHz | 0.00314 | 2.1 W |
+| 60 m | ~5.357 MHz | 0.00309 | 2.1 W |
+| 40 m | 7.030 MHz | 0.00338 | 2.0 W |
+| 30 m | 10.106 MHz | 0.00337 | 1.9 W |
+| 20 m | 14.060 MHz | 0.00506 | 1.9 W |
+| 17 m | 18.086 MHz | 0.00476 | 2.1 W |
+| 15 m | 21.060 MHz | 0.00606 | 2.1 W |
+| 12 m | 24.906 MHz | 0.00743 | 2.2 W |
+| 10 m | 28.060 MHz | 0.01180 | 2.1 W |
+
+with `full_scale_power = max_power = 2`. These are in
+`data/hw_settings_zbitx.ini` as safe defaults for a zBitx. An owner
+wanting more power raises both values together and re-checks each band
+on a wattmeter; the PA has not been run above 2.6 W, so where it begins
+to compress is not known.
+
+**Still to do on the radio:** CW keying with
 `MAXIBITX_TR_TIMING`; the signal on a remote receiver, on frequency and
 with the opposite sideband down; SSB from the microphone; DIGITAL over
 TCI; and whether the RP2040 front panel does anything during transmit
