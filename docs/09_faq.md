@@ -344,15 +344,16 @@ the sBitx's default puts it.
 **Where the zBitx stands:**
 
 - **Receive works** on a zBitx with its Pi Zero 2W.
-- **Transmit works into a dummy load**, calibrated to 2 W on every band.
+- **Transmit works**, calibrated to 2 W on every band into a dummy load.
   Those scales are in `data/hw_settings_zbitx.ini` as conservative
   defaults; the PA has more in it, but it hasn't been measured further
-  (study §12). The on-air checks are still to do.
+  (study §12). A remote receiver puts it on frequency, DIGITAL over TCI
+  transmits, and CW's first element arrives with 16 ms or more to spare.
 - **The CPU is not a concern.** With stage 1 vectorized, processing on
   the Zero 2W averages 4.3 ms of each 10.67 ms block and peaks at 6 ms
   (study §10).
-- **Still open:** whether anything about the RP2040 front panel matters
-  when nothing talks to it (study §3.7).
+- **The RP2040 front panel** freezes on the last screen zbitx drew,
+  since nothing talks to it; nothing else is affected (study §3.7).
 
 **Adding a board** means adding a profile to `boards[]`, plus a relay
 function if its T/R sequence differs from both existing ones.
@@ -736,9 +737,8 @@ design notes: two-tone power and IMD measurements to establish this
 board's honest rated output; voice power never checked on a wattmeter;
 `POWER` and `ALC` bench-tested but not yet exercised against a running
 daemon; remote element keying absent (CW text works, over TCI too);
-TCI's transmit audio and CW text not yet tried on the air (its I/Q is,
-with sdrOxide, and its receive audio, with WSJT-X decoding FT8 on a
-zBitx); carrier placement a
+TCI's CW text not yet tried on the air (its I/Q is, with sdrOxide, and
+its audio both ways, with WSJT-X on a zBitx); carrier placement a
 few Hz low from whole-bin rotation (6.25 Hz on SSB, 9.4 Hz on CW); and
-the zBitx's transmit, calibrated into a dummy load but not yet tried on
-the air.
+on the zBitx, SSB from the microphone, the opposite sideband on a
+remote receiver, and anything for the RP2040 front panel.
