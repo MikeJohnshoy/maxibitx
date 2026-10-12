@@ -1,9 +1,10 @@
 # Porting maxibitx to the zBitx and Pi Zero 2W: a study
 
 Status: **step 1 built** (receive only, §7) on the `zmax` branch and
-receiving on a zBitx; step 2 (transmit) not started. Written before any
-code; §9 records the decisions taken on it, §10 step 1 as built, and §11
-how to measure the crystal filter's centre.
+receiving on a zBitx; **step 2's T/R sequence built** and bench-tested,
+not yet run on a zBitx, its power calibration to do. Written before any
+code; §9 records the decisions taken on it, §10 step 1 as built, §11 how
+to measure the crystal filter's centre, and §12 step 2 as built.
 
 The request: run maxibitx's headless radio and its external interfaces
 on the zBitx hardware with a Raspberry Pi Zero 2W, in place of the
@@ -741,3 +742,71 @@ whole-spectrum fit.
    setting, because the TX shift follows it. `bfo_freq`, which places the
    unwanted mixer product beyond the filter's edge, is calibrated
    separately.
+
+## 12. Step 2 as built
+
+**The T/R sequence.** The zBitx profile now permits transmit, and its
+relay half (`zbitx_relays_tx()` in `radio_hw.c`) does what zbitx's
+`tr_switch_v4()` does, inside `radio.c`'s own steps (§3.3):
+
+1. `radio.c`: receive capture muted, clk1 and clk2 to transmit.
+2. RX_LINE low: receiver off.
+3. All LPFs off, then the LPF for the **transmit** frequency (the dial
+   plus XIT) on.
+4. 10 ms for the relay to settle.
+5. TX_LINE high: PA on.
+6. `radio.c`: exciter feed up.
+
+And back: exciter feed down; TX_LINE low; all LPFs off; 5 ms; RX_LINE
+high; clocks to receive and capture unmuted. `radio_hw_tx_settle_ms()`
+was already 10 ms for this board, so `MAXIBITX_TR_TIMING` measures
+against the right wait.
+
+At 30 MHz and above there is no LPF. The transmit half refuses there
+before switching anything, and `radio.c` puts the clocks back and stays
+in receive. The `[tx_band]` check normally stops a request long before
+that; this is the guard for a `hw_settings.ini` whose bands reach past
+the filters. The console names the LPF when it differs from the last
+transmission's, rather than on every key-down.
+
+`make test-radio-hw` checks the sequence at one frequency on each
+filter, including 15 m on LPF_B: RX_LINE is the first line to move and
+TX_LINE the last, exactly the transmit frequency's LPF is on during
+transmit, the way back starts with TX_LINE and ends with RX_LINE with
+every LPF off, and 31 MHz is refused with nothing switched. Every other
+harness passes unchanged.
+
+**Calibrating the power**, into a dummy load, by
+[`tx_power_calibration.md`](tx_power_calibration.md)'s one-frequency-per-band
+method. The `[tx_band]` scales start as the sBitx's, which are a guide
+to shape across the bands at best, so the first key-down on each band is
+made under a cap that `hw_settings.ini` holds across restarts (rigctld's
+`RFPOWER` returns to 100% at each start):
+
+```
+full_scale_power=3
+max_power=1
+```
+
+The limiter then holds a full-scale signal to a third of what that
+band's scale would give. In CW, with TUNE (a steady carrier on the
+dial), read the steady power P on each band. A PA is linear at that
+level, so full scale at the present scale is 3P, and
+
+    new scale = old scale × sqrt(3 / 3P) = old scale × sqrt(1 / P)
+
+makes full scale 3 W: each band then reads 1.0 W under the cap. Then
+`max_power=2` gives 2 W on every band, which is the check: read each
+band again and touch up any band that is off with
+`scale × sqrt(2 / P)`. A band that reads low and barely moves when its
+scale is raised is the PA compressing (`tx_power_calibration.md` §7).
+The 3 W full scale itself is extrapolated, not measured, until a band is
+run with `max_power=3`.
+
+**Still to do on the radio:** the calibration above; CW keying with
+`MAXIBITX_TR_TIMING`; the signal on a remote receiver, on frequency and
+with the opposite sideband down; SSB from the microphone; DIGITAL over
+TCI; and whether the RP2040 front panel does anything during transmit
+(§3.7). clk1 leaking through the crystal filter would appear
+`bfo_freq − xtal_filter_center` below the dial, 35.6 kHz with this
+board's values, beyond the filter's −60 dB point (§11).
