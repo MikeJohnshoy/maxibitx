@@ -344,9 +344,10 @@ the sBitx's default puts it.
 **Where the zBitx stands:**
 
 - **Receive works** on a zBitx with its Pi Zero 2W.
-- **Transmit is written but not yet tried on the air.** Its T/R
-  sequence passes `make test-radio-hw`; its per-band power still has to
-  be calibrated with a wattmeter, starting from a low `max_power`.
+- **Transmit works into a dummy load**, calibrated to 2 W on every band.
+  Those scales are in `data/hw_settings_zbitx.ini` as conservative
+  defaults; the PA has more in it, but it hasn't been measured further
+  (study §12). The on-air checks are still to do.
 - **The CPU is not a concern.** With stage 1 vectorized, processing on
   the Zero 2W averages 4.3 ms of each 10.67 ms block and peaks at 6 ms
   (study §10).
@@ -735,8 +736,9 @@ design notes: two-tone power and IMD measurements to establish this
 board's honest rated output; voice power never checked on a wattmeter;
 `POWER` and `ALC` bench-tested but not yet exercised against a running
 daemon; remote element keying absent (CW text works, over TCI too);
-TCI's audio and CW text not yet tried on the air (its I/Q is, with
-sdrOxide); carrier placement a
+TCI's transmit audio and CW text not yet tried on the air (its I/Q is,
+with sdrOxide, and its receive audio, with WSJT-X decoding FT8 on a
+zBitx); carrier placement a
 few Hz low from whole-bin rotation (6.25 Hz on SSB, 9.4 Hz on CW); and
-the zBitx's transmit, written and bench-tested but not yet calibrated or
-tried on the air.
+the zBitx's transmit, calibrated into a dummy load but not yet tried on
+the air.
