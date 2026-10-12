@@ -264,7 +264,6 @@ single-client limit.
 ## USB gadget (audio + Kenwood CAT)
 
 When the Pi's USB-C port is in device mode (setup in
-[`07_build_and_deployment.md`](07_build_and_deployment.md) and
 [`dsp_design_notes/usb_gadget_OS_setup.md`](dsp_design_notes/usb_gadget_OS_setup.md)),
 maxibitx appears to the host computer as a composite USB device,
 "sBitx Audio", with two functions. Windows 10/11 binds both with its
