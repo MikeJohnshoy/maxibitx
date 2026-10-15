@@ -402,6 +402,37 @@ Mean CER over the grid: 66.5% → 26.4% with the setting at 20, and
 
 These are the next changes to measure.
 
+**Trying them one at a time doesn't work.** I tried them on top of the
+fix, each on 16 cells × 3 runs at 15 dB, with the WPM setting at 20
+(mean CER, then with word breaks):
+
+| Variant | Mean CER | With word breaks |
+|---|---|---|
+| fix as built | 25.2% | 38.8% |
+| no pull toward the setting | 25.2% | 39.3% |
+| and gap thresholds from `dot_len` alone | 54.2% | 63.3% |
+| and the nominal word gap at 5 dots | 54.2% | 71.5% |
+
+Taking the setting out of the gap thresholds fixes fast senders. Good
+fist at 35 WPM goes from 38.9% to 1.9%, and machine code at 35 WPM to
+0.5%. But it wrecks slow ones: good at 15 WPM 2.0% → 88.3%, and machine
+code at 10 WPM prints garbage, 320%. With nothing anchoring it, `dot_len`
+runs down: the early adaptation pulls it toward the shortest recent
+mark. So the setting is holding up other weaknesses in Sections 6 and
+8.
+
+Farnsworth shows the same coupling from the other side. Good fist at
+5/18 decodes its characters (0.5%), but the long character gaps exceed
+the 7-dot word threshold, so spaces appear between letters: 52.6% with
+word breaks.
+
+The timing side needs gap thresholds learned from the gaps themselves
+(§5, step 2), replacing the dot-length multiples, the WPM anchor and the
+self-referential word-gap EMA together. That is a separate change from
+the detector fix, about the size of Sections 6 and 8's threshold code,
+and it should be measured on this bench before any of it goes on the
+air.
+
 **Weak signals.** Neither version copies at −3 dB in 2500 Hz. The fix
 does better at 0 dB (machine and good fists at 20 WPM, median CER 89% and
 58% before, 41% and 45% after) and at 3 dB (11% and 24% before, 0.6% and
