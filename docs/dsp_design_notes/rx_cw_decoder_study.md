@@ -1,0 +1,328 @@
+# A CW decoder for maxibitx: study
+
+Status: **study** - a bench and its measurements, nothing built into
+maxibitx yet.
+
+The question: is it worth building a new CW decoder for maxibitx? The
+target is hand-sent code at 5 to 35 WPM, at good signal-to-noise ratios,
+in one module well under 1000 lines. Slow senders are assumed to use
+Farnsworth-like spacing, so the slowest case is 5 WPM overall at 18 WPM
+character speed. Decoded text would appear on the panel, as two lines
+under a shorter waterfall in CW mode.
+
+This study does three things. It builds a model of hand-sent CW and a
+bench that runs it. It measures the decoder Mike wrote for sbitx (the
+"KB2ML decoder", `modem_cw.c` on MikeJohnshoy/sbitx branch `mj_decoder`,
+commit 6875d43) on that bench, against what the fists themselves allow.
+Then it uses those numbers to say what a new decoder should do
+differently.
+
+The short answer is yes, it's worth building. The bench puts most of the
+present decoder's errors in its detector, before any timing decision is
+made, and a plain detector removes them. The timing classifier behind it
+then only has to deal with the fist itself.
+
+## 1. The bench
+
+[`tools/cw_study/`](../../tools/cw_study/):
+
+- `cw_fist.py` makes QSO-like text (CQ POTA, reports, names, QTHs,
+  callsigns with `/P`, park numbers) and keys it with a fist.
+- It then makes the audio a receiver would hand its decoder:
+  - a tone at 700 Hz with 5 ms raised-cosine edges,
+  - white noise at a given SNR (dB in 2500 Hz, the WSJT-X convention),
+  - a 500 Hz CW filter,
+  - scaled so the tone peaks where sbitx's AGC puts it (10⁸).
+- `cw_bench.py` runs the fists through the decoders and scores them.
+- `kb2ml/harness.c` runs the receive half of `modem_cw.c` off the radio.
+  It stubs out what the rest of sbitx would supply: the key is up, the
+  WPM and PITCH fields are set from the command line, and the clock
+  advances with the audio. Audio goes in 1024 samples at a time, as
+  `rx_linear()` hands it to `modem_rx()`.
+
+```
+python3 tools/cw_study/cw_bench.py --sbitx ~/sbitx/src      # all of it, ~10 min on 2 cores
+python3 tools/cw_study/cw_bench.py --only ceiling,ambiguity # no sbitx needed, seconds
+python3 tools/cw_study/cw_bench.py --sbitx ~/sbitx/src --decode rec.wav --wpm 20
+```
+
+**Scoring.** The character error rate (CER) is the edit distance between
+what was decoded and what was sent, divided by the number of characters
+sent. Spaces are removed from both texts, so CER counts characters. A
+run is counted as *lost* when its CER is over 10%: the decoder lost the
+sender's speed and stayed lost for much of the run. Each cell is 4 runs
+of about 250 characters with different noise and timing draws. Because
+runs are either decoded or lost, the grid gives the median rather than
+the mean.
+
+**The fists.** Each fist is a set of timing statistics, in dot units at
+the sender's speed:
+
+- the dash length and its spread,
+- the spread of the dot,
+- the three gaps (inside a character, between characters, between
+  words),
+- a weight (added to marks, taken from gaps),
+- the chance of running two characters together, or breaking one in two,
+- a slow wander of the speed.
+
+| Fist | Dash | Spread of marks / gaps | Weight | Run together / broken | Drift |
+|---|---|---|---|---|---|
+| machine | 3.0 | 0 | 0 | 0 | 0 |
+| good | 3.0 | 10% / 15-20% | 0 | 0 | 3% |
+| average | 2.8 | 15% / 20-25% | 0.1 | 2% / 1% | 5% |
+| poor | 2.5 | 20% / 25-30% | 0.2 | 5% / 3% | 8% |
+| heavy | 3.3 | 12% / 20-25% | 0.4 | 2% / 0 | 4% |
+| bug | 3.8, hand-made | dots 3%, dashes 20% / 5-30% | 0 | 3% / 0 | 3% |
+
+These presets are a model. I chose them to span "machine" to "hard to
+copy". They are not measurements of real operators. Recordings of real
+hand-sent QSOs are what should calibrate them (§6).
+
+**Two references for what is possible:**
+
+- **Ceiling.** A timing-only decoder that knows the sender's true dot
+  length at every moment. It uses the best fixed dot/dash,
+  character-gap and word-gap thresholds for that run, found from the
+  truth. It has no detector errors and no language model. Its errors are
+  the fist's own: a 1-unit gap that came out longer than a short 3-unit
+  gap, and so on. No real decoder knows the truth, but this is the score
+  a decoder working from timing alone should approach.
+- **Simple detector.** About 50 lines of numpy. It mixes the audio down
+  from 700 Hz, lowpasses at 150 Hz and takes the magnitude every 1 ms. It
+  calls mark or gap at half way between a peak tracked in marks and a
+  floor tracked in gaps, with 10% hysteresis. Its marks and gaps go
+  through the ceiling's classifier, so this measures what a real detector
+  costs on top of the ceiling.
+
+## 2. The detector is where KB2ML loses
+
+Machine-perfect code at 20 WPM, with the decoder's WPM setting at 20.
+The true dot, dash and gap are 60, 180 and 60 ms. Medians of what each
+detector measured, then the mean of 12 runs:
+
+| SNR, dB | KB2ML marks found | dot, ms | dash, ms | gap, ms | marks > 5 units | CER | runs lost | | simple: dot, ms | dash, ms | gap, ms | CER |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 6 | 98% | 75 | 203 | 40 | 0.8% | 7.0% | 3 of 12 | | 59 | 179 | 61 | 0.7% |
+| 10 | 96% | 75 | 199 | 43 | 2.1% | 11.2% | 8 of 12 | | 59 | 179 | 61 | 0.0% |
+| 15 | 93% | 75 | 196 | 43 | 5.2% | 15.5% | 4 of 12 | | 60 | 180 | 60 | 0.0% |
+| 20 | 86% | 75 | 196 | 41 | 12.3% | 24.9% | 4 of 12 | | 60 | 180 | 60 | 0.0% |
+| 30 | 95% | 75 | 203 | 42 | 4.8% | 8.0% | 1 of 12 | | 60 | 180 | 60 | 0.0% |
+| 40 | 78% | 81 | 205 | 32 | 25.3% | 29.3% | 4 of 12 | | 60 | 180 | 60 | 0.0% |
+
+The simple detector found every mark, at every SNR.
+
+KB2ML makes every mark 15 to 25 ms longer and every gap 17 to 28 ms
+shorter, at every SNR. A 1-unit gap at 20 WPM is 60 ms, so a third to a
+half of it is gone. Any gap that comes out short goes completely, and
+two marks become one: the "marks > 5 units" column. Even on perfect
+code, a third of the runs lose the speed somewhere and stay lost for a
+while. Which runs are lost depends on the noise draw, so these counts
+move by a few between sets of draws.
+
+The simple detector measures the same elements to within a millisecond
+from 6 to 40 dB.
+
+Reading `modem_cw.c` with a trace of each mark and gap
+(`cw_rx_add_symbol()`) shows why:
+
+- **Its time step is one call of `cw_rx()`: 1024 samples, 10.67 ms.** At
+  35 WPM a dot is 34 ms, about three steps.
+- **The magnitude passes through four delays, two of which scale with
+  the decoder's own estimate of the dot length:**
+  1. a 3-step median per bin,
+  2. an EMA with α = 2/`dot_len` (at least 0.3),
+  3. a 2-D k-means on log(1 + magnitude), whose mark/gap boundary sits
+     near the geometric mean of the two levels,
+  4. a second EMA, with τ = `dot_len`/2, before the hysteresis.
+- **The k-means stage takes longer as SNR rises.** The magnitude falls a
+  fixed number of dB per step after key-up, and the boundary sits further
+  below the peak. That is why gaps are shortest at 40 dB.
+- **The two `dot_len`-scaled stages form a loop.** A lost gap makes a
+  long mark. A long mark raises `dot_len`. A higher `dot_len` slows both
+  EMAs, so more gaps are lost. One trace climbed from 5 to 22 steps
+  before `cw_rx_classify_and_output()`'s pull toward the WPM setting
+  brought it back.
+
+The detector's lag is a fixed fraction of a dot whatever the speed. This
+matches the grid below: machine code at 15 WPM with the setting at 15
+lost every run, measuring 7.5-step dots as 10 to 12 steps and 7.5-step
+gaps as 3 to 4.
+
+## 3. The grid
+
+15 dB SNR. Median CER for KB2ML with the WPM setting at 20, as for a
+sender of unknown speed:
+
+| Fist | 10 | 15 | 20 | 25 | 30 | 35 |
+|---|---|---|---|---|---|---|
+| machine | 0.0 | 1.0 | 52.9 | 69.4 | 62.8 | 90.3 |
+| good | 10.1 | 28.4 | 62.2 | 72.3 | 78.4 | 87.5 |
+| average | 32.4 | 55.8 | 75.1 | 83.9 | 80.9 | 86.2 |
+| poor | 65.4 | 76.4 | 80.1 | 85.6 | 88.3 | 89.0 |
+| heavy | 72.9 | 82.9 | 86.1 | 88.6 | 90.3 | 89.9 |
+| bug | 21.5 | 33.5 | 65.5 | 80.2 | 73.4 | 83.3 |
+
+Farnsworth, overall / character WPM: good 5/18 65.2%, 10/18 72.7%;
+average 5/18 78.7%, 10/18 82.5%.
+
+The same with the WPM setting at the sender's speed (for Farnsworth, the
+character speed):
+
+| Fist | 10 | 15 | 20 | 25 | 30 | 35 |
+|---|---|---|---|---|---|---|
+| machine | 3.0 | 27.8 | 52.9 | 1.4 | 0.5 | 39.5 |
+| good | 51.3 | 62.9 | 62.2 | 33.0 | 43.0 | 45.9 |
+| average | 74.5 | 75.9 | 75.1 | 74.6 | 60.3 | 75.9 |
+| poor | 79.1 | 81.9 | 80.1 | 81.2 | 77.9 | 82.5 |
+| heavy | 84.8 | 87.2 | 86.1 | 87.5 | 84.8 | 86.9 |
+| bug | 48.4 | 63.9 | 65.5 | 60.0 | 54.6 | 72.4 |
+
+Farnsworth: good 5/18 72.1%, 10/18 85.9%; average 5/18 82.5%,
+10/18 85.6%.
+
+Outside machine code, every cell lost all 4 runs, except good at 10 WPM
+with the setting at 20, which lost 2. Setting the WPM to the sender's
+speed helps above 20 WPM and hurts below it. It isn't a cure, because
+the detector's lag scales with the same number.
+
+Mean CER for the ceiling. The simple detector's column is within a
+point of it everywhere (largest gap: 1.4 points, poor at 25 WPM):
+
+| Fist | 10 | 15 | 20 | 25 | 30 | 35 |
+|---|---|---|---|---|---|---|
+| machine | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 |
+| good | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 |
+| average | 9.0 | 8.7 | 8.4 | 9.1 | 9.0 | 9.1 |
+| poor | 37.5 | 29.9 | 30.1 | 35.8 | 35.6 | 32.2 |
+| heavy | 3.9 | 2.5 | 2.7 | 3.4 | 1.6 | 3.9 |
+| bug | 3.8 | 1.5 | 2.3 | 3.8 | 3.4 | 3.4 |
+
+Farnsworth: good 0.0% at both; average 3.0% at 5/18 and 3.7% at 10/18.
+
+Read together:
+
+- **Headroom.** For good, heavy and bug fists, timing alone can be
+  close to perfect at every speed, and a plain detector keeps it there.
+  KB2ML is at 10 to 90% on the same audio, so the room for improvement
+  is large.
+- **Heavy fists are KB2ML's worst case.** A weight of 0.4 leaves
+  0.6-unit gaps, which its detector can't keep.
+- **What timing alone can't fix.** On the average fist, about 9% CER is
+  the fist's own: gaps that overlap between classes. That is the part
+  where context (a language prior) has to help. The poor fist is about a
+  third errors on timing alone; most operators would struggle with it
+  too.
+- **Farnsworth spacing is easy for a classifier that learns gaps from
+  gaps** (0 to 4% ceiling). A decoder that derives gap thresholds from
+  the dot length or the WPM setting gets it badly wrong.
+
+## 4. Ambiguity: does validity tell a split from a merge?
+
+Mike's objection to the earlier suggestion ("decide whether to split or
+merge by which reading gives valid Morse characters") was that almost
+every fragment is a valid character. Over about 20,000 characters of the
+QSO text:
+
+| Change | Gives valid characters |
+|---|---|
+| split a character at one of its gaps | 93% of 33,139 gaps |
+| ... a character of 2, 3 or 4 elements | 100% |
+| ... of 5 elements (digits, `/`) | 81.7% |
+| ... of 6 elements (`?`) | 40.0% |
+| merge two adjacent characters into one | 26% of 10,529 pairs |
+
+He is right. For letters, validity never rules out a split. It rules out
+a merge three times in four, but a merge only comes up when a gap
+between characters came out short, so validity can settle only some of
+the doubtful cases.
+
+What decides the ambiguous gaps has to be:
+
+- **the gap's own duration**, under the gap statistics learned for this
+  sender: which of the 1, 3 and 7-unit clusters it most likely belongs
+  to, and how sure that is;
+- **for the few gaps that timing leaves near even**, a prior on the text
+  (character pairs, and the QSO vocabulary: CQ, DE, TU, 5NN, RST, `/P`,
+  callsign shapes).
+
+The earlier suggestion should have said that. The ceiling in §3 is the
+score with the first alone.
+
+## 5. What a new decoder should do
+
+1. **Detect at a fine, fixed time step.**
+   - Mix down from the pitch and take the magnitude at about 1 ms (the
+     simple detector uses a 150 Hz lowpass; 35 WPM needs about that).
+   - Decide marks and gaps half way between a peak learned in marks and
+     a floor learned in gaps, with hysteresis.
+   - Keep the time constants in milliseconds, never tied to the speed
+     estimate, which breaks KB2ML's loop.
+   - The bench shows this gives timing within a millisecond from 6 to
+     40 dB. Low SNR would need more (the target is good SNR).
+2. **Classify marks and gaps separately, each from its own statistics.**
+   - Marks: two running clusters, dot and dash, in log duration, with
+     the threshold at their geometric mean.
+   - Gaps: three clusters, inside a character, between characters, and
+     between words, learned from the gaps themselves. That handles
+     Farnsworth spacing, heavy fists and bugs without special cases.
+   - Learn quickly while the clusters are unsure, then slowly. Use no
+     prior from the operator's own keyer WPM: the grid shows that a
+     prior from it hurts as often as it helps.
+3. **Decide each character one gap late.** When the gap after a
+   character is ambiguous between two clusters, keep both readings. The
+   next character, and the text prior, choose between them.
+4. **Use a small text prior only where timing is unsure.** Character-pair
+   tables and the QSO words cost a few hundred bytes. On the average
+   fist, the bench's 9% ceiling is what this has to cut into. It is the
+   one part whose benefit this study hasn't measured.
+
+**In maxibitx.**
+
+- **Where it reads its audio.** It would take the demodulated CW audio
+  after the receiver's filter, decimated to 6 kHz. It does its own
+  mix-down at the pitch, so it doesn't depend on which filter is
+  selected.
+- **Threading.** The audio thread does only the cheap part: decimation
+  and the 1 ms magnitude, written into a ring. The classification and
+  text run on their own thread, as the keyer's edge handling does.
+- **Size.** Detector about 100 lines, classifier about 250, segmentation
+  and the prior about 250, tables about 100. That's well under 1000.
+- **Getting the text to the panel.** rigctld has no push, so the panel
+  would poll a new extended command for text since a sequence number.
+  It would show two lines under a waterfall shortened in CW mode.
+
+## 6. Before building
+
+1. **Check the harness against the radio.** Record CW audio on the
+   sBitx and run `cw_bench.py --decode rec.wav --wpm N`, then compare
+   that with what sbitx's console showed for the same signal. The harness
+   reproduces `modem_cw.c` exactly, but not how the rest of sbitx calls
+   it: `cw_poll()` runs once per audio block here rather than from
+   `ui_tick()`, and the input level is assumed, not measured. If its
+   output is much worse than the radio's, the grid overstates the
+   problem.
+2. **Calibrate the fists from real hand-sent recordings**, so "average"
+   means a real operator's spread. The simple detector can measure
+   their element and gap distributions directly.
+3. **Prototype the classifier in Python on this bench, without the
+   oracle**, and keep it only if it gets within a point or two of the
+   ceiling on good, heavy and bug fists at 10 to 35 WPM and Farnsworth.
+   Then add the text prior, and keep it only if it beats the ceiling on
+   the average fist.
+4. **Then write it in C** as one maxibitx module, with the bench's audio
+   as its test (`make test`), and the panel's two lines.
+
+## Caveats
+
+- The fists are a model; their spreads are my estimates.
+- The noise is white, and the signal is steady: no fading, no QRM, no
+  chirp.
+- The ceiling is an oracle (the true dot length and the best thresholds
+  for each run). No decoder will quite reach it, but the simple
+  detector's column shows detection is not what stands between a decoder
+  and it at good SNR.
+- The grid is at 15 dB only. The detector table covers 6 to 40 dB for
+  machine code at 20 WPM only.
+- KB2ML was measured at commit 6875d43. Its transmit-side decoder wasn't
+  measured.
