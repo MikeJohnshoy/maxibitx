@@ -348,4 +348,7 @@ already used in `antialias_filter_design.md`.
   plus the best timing thresholds reaches 0% on good fists and about 9% on
   an average one. Splitting a character almost always gives valid
   characters, so validity can't choose; gap statistics and a text prior
-  must. Status: **study** - nothing built.
+  must. §7 measures a detector fix for KB2ML itself (sbitx `decoder_fix`:
+  2.67 ms hops, a linear half-way decision, no `dot_len`-scaled delays):
+  true timing at 6-40 dB, mean CER over the grid 66% → 26%. Status:
+  **study** - nothing built in maxibitx.
