@@ -54,7 +54,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cw_fist as cf  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-TICK_S = 1024 / cf.FS          # the decoder's time step, 10.67 ms
+TICK_S = 1024 / cf.FS          # the decoder's time step: 10.67 ms, or CW_HOP if defined
 SPEEDS = (10, 15, 20, 25, 30, 35)
 FARNS = ((5, 18), (10, 18))    # (overall, character) WPM
 GRID_FISTS = ("machine", "good", "average", "poor", "heavy", "bug")
@@ -67,7 +67,12 @@ TRACE_LINE = ('  if (p == &decoder) fprintf(stderr, "%c%d ", '
 # ---------------------------------------------------------------- harness
 
 def build(sbitx_src, outdir):
-    """The decoder harness and its tracing twin; returns their paths."""
+    """
+    The decoder harness and its tracing twin; returns their paths. Sets
+    TICK_S from modem_cw.c: one cw_rx() block, or CW_HOP samples at 12 kHz
+    when the file defines it (the detector fix on branch decoder_fix).
+    """
+    global TICK_S
     plain = os.path.join(outdir, "kb2ml")
     trace = os.path.join(outdir, "kb2ml_trace")
     inc = os.path.join(HERE, "kb2ml")
@@ -75,6 +80,8 @@ def build(sbitx_src, outdir):
     cmd = ["gcc", "-O2", "-w", "-I" + inc, "-I" + sbitx_src, os.path.join(inc, "harness.c")]
     subprocess.run(cmd + [src, "-lfftw3", "-lm", "-o", plain], check=True)
     text = open(src, encoding="utf-8", errors="replace").read()
+    hop = re.search(r"^#define CW_HOP (\d+)", text, re.M)
+    TICK_S = int(hop.group(1)) / 12000.0 if hop else 1024 / cf.FS
     anchor = "  // move to the next position in the symbol buffer\n  p->next_symbol++;\n"
     if anchor not in text:
         sys.exit("cw_bench: cw_rx_add_symbol() isn't as expected; is this mj_decoder?")
@@ -264,7 +271,7 @@ def one_run(job):
 
 
 def detector_run(job):
-    snr, seed, exe = job
+    snr, seed, exe, tick_s = job
     rng = np.random.default_rng(seed)
     text = cf.qso_text(rng, CHARS)
     el = cf.key_text(text, "machine", 20, rng)
@@ -281,8 +288,8 @@ def detector_run(job):
         else:
             pending = n          # the last 's' before a mark is the whole gap
     true_marks = sum(1 for e in el if e[0])
-    m = np.array(marks[5:], float) * TICK_S * 1000
-    g = np.array(gaps[5:], float) * TICK_S * 1000
+    m = np.array(marks[5:], float) * tick_s * 1000
+    g = np.array(gaps[5:], float) * tick_s * 1000
     u = 60.0
     dots = m[m < u * np.sqrt(3)]
     dashes = m[(m >= u * np.sqrt(3)) & (m < u * 5)]
@@ -305,7 +312,7 @@ def detector_run(job):
 def report_detector(exe, workers):
     print("\n== detector: KB2ML on machine code, 20 WPM, WPM setting 20 "
           "(truth: dot 60, dash 180, gap 60 ms)\n")
-    jobs = [(snr, seed, exe) for snr in (6, 10, 15, 20, 30, 40) for seed in range(1, 13)]
+    jobs = [(snr, seed, exe, TICK_S) for snr in (6, 10, 15, 20, 30, 40) for seed in range(1, 13)]
     with ProcessPoolExecutor(workers) as ex:
         rows = list(ex.map(detector_run, jobs))
     print(" KB2ML")
