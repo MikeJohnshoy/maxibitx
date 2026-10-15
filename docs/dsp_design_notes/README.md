@@ -309,6 +309,16 @@ already used in `antialias_filter_design.md`.
   `data/hw_settings_zbitx.ini` (§12), on frequency on the air, with
   DIGITAL over TCI, the CW T/R timing and the SSB sidebands checked; SSB
   from the microphone still to try.
+- [`zbitx_rx_pipeline.md`](zbitx_rx_pipeline.md) — the zBitx's own
+  receive chain (drexjj/zbitx `hpsdr-iq`), antenna to speaker, loopback,
+  TCI and HPSDR, in the style of `../02_rx_processing_pipeline.md`. The
+  IF is 28,125 Hz; `rx_linear()` mixes it to baseband by rotating FFT
+  bins (exact only for an even `center_bin`), and only `iq_baseband.c`
+  makes time-domain I/Q. The 1025-tap channel filter is good enough to
+  carry the unfiltered decimations after it; ANR's bin smoothing (93.75 Hz
+  AM), the RX EQ and the unlocked filter re-plan are not. Performance:
+  `-O0` default build, double complex FFTs of real data, NR over all
+  2048 bins. Status: analysis only, nothing changed in either repo.
 - [`rx_cw_noise_reduction_study.md`](rx_cw_noise_reduction_study.md) —
   whether, where and how to add noise reduction to the local CW audio,
   measured with `tools/nr_study/` (keyed CW in white noise through a model
@@ -327,3 +337,15 @@ already used in `antialias_filter_design.md`.
   CW-tuned MMSE-LSA spectral NR, 128-point at 6 kHz (≈ 22.5 ms latency,
   ≈ 4% of stage 1), off by default. Status: **proposed** - a study, nothing
   built.
+- [`rx_cw_decoder_study.md`](rx_cw_decoder_study.md) — whether to build a
+  CW decoder for hand-sent code at 5-35 WPM (Farnsworth at the slow end),
+  measured with `tools/cw_study/`: a model of hand-sent fists, QSO-like
+  text, and a harness that runs sbitx's KB2ML decoder (`modem_cw.c`,
+  `mj_decoder`) off the radio. KB2ML loses most of its characters in its
+  detector: 10.67 ms steps and delays that scale with its own dot estimate
+  shorten every gap by 17-28 ms, so even perfect code loses lock in a third
+  of runs, and hand-sent fists come out at 10-90% CER. A plain 1 ms detector
+  plus the best timing thresholds reaches 0% on good fists and about 9% on
+  an average one. Splitting a character almost always gives valid
+  characters, so validity can't choose; gap statistics and a text prior
+  must. Status: **study** - nothing built.
