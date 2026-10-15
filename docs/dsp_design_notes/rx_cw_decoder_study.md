@@ -1,7 +1,8 @@
 # A CW decoder for maxibitx: study
 
 Status: **study** - a bench and its measurements, nothing built into
-maxibitx yet.
+maxibitx yet. §7 adds a detector fix for the KB2ML decoder itself
+(sbitx branch `decoder_fix`), measured on the same bench.
 
 The question: is it worth building a new CW decoder for maxibitx? The
 target is hand-sent code at 5 to 35 WPM, at good signal-to-noise ratios,
@@ -312,6 +313,104 @@ score with the first alone.
    the average fist.
 4. **Then write it in C** as one maxibitx module, with the bench's audio
    as its test (`make test`), and the panel's two lines.
+
+## 7. A detector fix for KB2ML (sbitx, branch `decoder_fix`)
+
+§2's diagnosis suggests a fix inside `modem_cw.c` that leaves its timing
+classifier (Sections 6 to 8) alone. It changes Sections 2 to 5:
+
+- **A 2.67 ms time step.** Sections 3 to 8 run four times per
+  1024-sample block, each time on a Goertzel window (still 128 samples,
+  10.67 ms, at 12 kHz) slid along by 32 samples (`CW_HOP`). All receive
+  timing (`dot_len`, `ticker`, the gaps) is counted in hops, so every
+  `(6 * SAMPLING_FREQ) / (5 * N_BINS * wpm)` on the receive side
+  becomes `CW_HOP`. The transmit self-decoder keeps its own blocks.
+- **A linear half-way decision.** Mark when the magnitude rises above
+  0.55 of the way from the noise floor to the peak, space when it falls
+  below 0.45. This replaces the 0.5 / 0.15 thresholds with the log-domain
+  k-means deciding in between. The k-means is still updated, because
+  Section 7's confidence score uses its centroids.
+- **No delays that scale with `dot_len`.**
+  - The magnitude EMA (α = 2/`dot_len`) is gone. The window and the
+    3-hop median already smooth the magnitude, and both delay rising and
+    falling edges alike.
+  - Section 5's EMA (τ = `dot_len`/2) is replaced by a fixed 2-hop
+    debounce. It is symmetric, so it rejects one-hop glitches without
+    changing lengths.
+- **Level tracking in hops.** The peak follows the signal down over
+  about 1 s in marks and 8 s in gaps, so the threshold holds through word
+  gaps and Farnsworth spacing. The noise floor adjusts over about 1 s.
+  Both are computed in 64 bits.
+- **The anti-alias FIR keeps its history across blocks.** It used to
+  start every block with zeros, upsetting the first 8 of each block's 128
+  decimated samples. It now computes only the samples it keeps, which is
+  8 times less work.
+
+On the bench (`cw_bench.py --sbitx <decoder_fix>/src`; the bench reads
+`CW_HOP` to scale the trace), machine code at 20 WPM with the setting at
+20 now measures 59 / 179 / 61 ms (dot / dash / gap) at every SNR from 6
+to 40 dB. No marks run together, and no run is lost; it was 24 of 72
+before. CER is 0.5%, the first character of each run.
+
+The grid at 15 dB, median CER before → after.
+
+WPM set to 20:
+
+| Fist | 10 | 15 | 20 | 25 | 30 | 35 |
+|---|---|---|---|---|---|---|
+| machine | 0.0 → **2.7** | 1.0 → **0.5** | 52.9 → **0.5** | 69.4 → **0.5** | 62.8 → **1.9** | 90.3 → **7.0** |
+| good | 10.1 → **7.8** | 28.4 → **2.0** | 62.2 → **2.6** | 72.3 → **4.9** | 78.4 → **17.0** | 87.5 → **38.4** |
+| average | 32.4 → **25.9** | 55.8 → **12.9** | 75.1 → **15.2** | 83.9 → **27.7** | 80.9 → **39.4** | 86.2 → **58.7** |
+| poor | 65.4 → **60.9** | 76.4 → **41.0** | 80.1 → **44.1** | 85.6 → **58.4** | 88.3 → **68.0** | 89.0 → **72.9** |
+| heavy | 72.9 → **11.1** | 82.9 → **17.1** | 86.1 → **36.1** | 88.6 → **55.2** | 90.3 → **65.2** | 89.9 → **75.7** |
+| bug | 21.5 → **18.2** | 33.5 → **8.7** | 65.5 → **14.9** | 80.2 → **23.0** | 73.4 → **37.6** | 83.3 → **53.9** |
+
+Farnsworth, before → after: good 5/18 65.2 → 0.5, 10/18 72.7 → 1.4;
+average 5/18 78.7 → 13.0, 10/18 82.5 → 12.3.
+
+WPM set to the sender's speed:
+
+| Fist | 10 | 15 | 20 | 25 | 30 | 35 |
+|---|---|---|---|---|---|---|
+| machine | 3.0 → **0.5** | 27.8 → **0.5** | 52.9 → **0.5** | 1.4 → **0.5** | 0.5 → **0.5** | 39.5 → **0.5** |
+| good | 51.3 → **3.3** | 62.9 → **2.5** | 62.2 → **2.6** | 33.0 → **1.7** | 43.0 → **2.8** | 45.9 → **1.0** |
+| average | 74.5 → **17.5** | 75.9 → **19.3** | 75.1 → **15.2** | 74.6 → **18.0** | 60.3 → **20.7** | 75.9 → **16.4** |
+| poor | 79.1 → **47.9** | 81.9 → **47.2** | 80.1 → **44.1** | 81.2 → **50.1** | 77.9 → **49.7** | 82.5 → **44.8** |
+| heavy | 84.8 → **42.5** | 87.2 → **40.1** | 86.1 → **36.1** | 87.5 → **39.8** | 84.8 → **37.4** | 86.9 → **33.7** |
+| bug | 48.4 → **19.8** | 63.9 → **14.4** | 65.5 → **14.9** | 60.0 → **14.7** | 54.6 → **17.5** | 72.4 → **18.0** |
+
+Farnsworth: good 5/18 72.1 → 0.5, 10/18 85.9 → 0.8; average 5/18
+82.5 → 11.5, 10/18 85.6 → 12.0.
+
+Mean CER over the grid: 66.5% → 26.4% with the setting at 20, and
+63.4% → 19.0% with it at the sender's speed.
+
+**What is left is on the timing side.**
+
+- **Fast senders with the setting at 20.** Good fist at 30 and 35 WPM:
+  17% and 38%, against 3% and 1% with the setting matched.
+  `cw_rx_classify_and_output()` pulls `dot_len` 40 to 80% of the way back
+  toward the WPM setting after any character that didn't adapt it.
+  `cw_rx_detect_symbol()` blends `dot_len` 50/50 with the setting for its
+  gap thresholds.
+- **Heavy fists and bugs.** They stay well above the ceiling (heavy at
+  20 WPM: 36% against 2.7%), because the gap thresholds are multiples of
+  the dot length rather than learned from the gaps.
+- **Word breaks.** With word breaks counted, the grid's mean CER rises
+  from 26.4% to 38.1%. The word gap starts at 7 dots and is only learned
+  from gaps already above it.
+
+These are the next changes to measure.
+
+**Weak signals.** Neither version copies at −3 dB in 2500 Hz. The fix
+does better at 0 dB (machine and good fists at 20 WPM, median CER 89% and
+58% before, 41% and 45% after) and at 3 dB (11% and 24% before, 0.6% and
+1.0% after). At −3 dB it prints more noise as characters (95 to 100%
+against 76 to 81%).
+
+**Cost.** With the FIR computing only the samples it keeps, the
+decoder runs about 3 times faster than before on the same audio (on the
+x86 bench: 0.19% of real time against 0.61%).
 
 ## Caveats
 
