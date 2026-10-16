@@ -337,18 +337,19 @@ already used in `antialias_filter_design.md`.
   CW-tuned MMSE-LSA spectral NR, 128-point at 6 kHz (≈ 22.5 ms latency,
   ≈ 4% of stage 1), off by default. Status: **proposed** - a study, nothing
   built.
-- [`rx_cw_decoder_study.md`](rx_cw_decoder_study.md) — whether to build a
-  CW decoder for hand-sent code at 5-35 WPM (Farnsworth at the slow end),
-  measured with `tools/cw_study/`: a model of hand-sent fists, QSO-like
-  text, and a harness that runs sbitx's KB2ML decoder (`modem_cw.c`,
-  `mj_decoder`) off the radio. KB2ML loses most of its characters in its
-  detector: 10.67 ms steps and delays that scale with its own dot estimate
-  shorten every gap by 17-28 ms, so even perfect code loses lock in a third
-  of runs, and hand-sent fists come out at 10-90% CER. A plain 1 ms detector
-  plus the best timing thresholds reaches 0% on good fists and about 9% on
-  an average one. Splitting a character almost always gives valid
-  characters, so validity can't choose; gap statistics and a text prior
-  must. §7 measures a detector fix for KB2ML itself (sbitx `decoder_fix`:
-  2.67 ms hops, a linear half-way decision, no `dot_len`-scaled delays):
-  true timing at 6-40 dB, mean CER over the grid 66% → 26%. Status:
-  **study** - nothing built in maxibitx.
+- [`rx_cw_decoder_study.md`](rx_cw_decoder_study.md) — maxibitx's CW
+  decoder (`src/cw_decoder.c`), for hand-sent code at 5-35 WPM (Farnsworth
+  at the slow end), and the study behind it, measured with
+  `tools/cw_study/`: a model of hand-sent fists, QSO-like text, and a
+  harness that runs sbitx's KB2ML decoder (`modem_cw.c`) off the radio.
+  KB2ML lost most characters in its detector (10.67 ms steps, delays that
+  scale with its own dot estimate); §7 is a fix for it (sbitx
+  `decoder_fix`: mean CER over the grid 66% → 26%). Splitting a character
+  almost always gives valid characters, so validity can't choose; gap
+  statistics must. §8, the decoder as built: a 1 ms half-way detector,
+  then dots, dashes and the three gaps each learned from the signal (Otsu
+  splits of the last 32 marks and 64 gaps), no WPM setting; mean CER 10.1%
+  against the timing ceiling's 7.4%, machine and good fists decoded
+  perfectly from 10 to 35 WPM and Farnsworth 5/18. Text through rigctld
+  `\get_cw_text` and the panel. Status: **built**; on-air test and the
+  text prior still to do.
