@@ -16,6 +16,7 @@ test-tci
 test-radio-hw
 test-encoder
 test-radio
+test-cw-decoder
 src/*.o
 test-logs/
 *.o
