@@ -1,8 +1,9 @@
 # A CW decoder for maxibitx: study
 
-Status: **study** - a bench and its measurements, nothing built into
-maxibitx yet. §7 adds a detector fix for the KB2ML decoder itself
-(sbitx branch `decoder_fix`), measured on the same bench.
+Status: **built** - §8 is the decoder in maxibitx (`src/cw_decoder.c`)
+and its measurements. §1-6 are the study that led to it; §7 is a detector
+fix for the KB2ML decoder in sbitx (branch `decoder_fix`), measured on the
+same bench.
 
 The question: is it worth building a new CW decoder for maxibitx? The
 target is hand-sent code at 5 to 35 WPM, at good signal-to-noise ratios,
@@ -443,6 +444,116 @@ against 76 to 81%).
 decoder runs about 3 times faster than before on the same audio (on the
 x86 bench: 0.19% of real time against 0.61%).
 
+## 8. The decoder as built (`src/cw_decoder.c`)
+
+The classifier was prototyped first in Python
+([`tools/cw_study/cw_proto.py`](../../tools/cw_study/cw_proto.py)) on the
+simple detector's marks and gaps, and tuned on the bench before it was
+written in C. `cw_decoder.c` is the same classifier behind a detector of
+the same kind, under 600 lines with its comments.
+
+**How it works.** All of it runs on the audio thread, fed by
+`rx_audio.c` with stage 2's output in CW and CWR, before the narrow
+filter. It costs about 4 µs per 1024-sample block on the x86 bench, 0.04%
+of the block's time.
+
+1. **Envelope.**
+   - Mix the tone down from the pitch, sum 16 samples at a time to
+     6 kHz, and lowpass at 150 Hz (4th-order Butterworth on I and Q).
+   - Take the magnitude every millisecond.
+2. **Mark or gap**, every millisecond.
+   - Half way between a tracked peak and a tracked noise floor, with 10%
+     hysteresis.
+   - The peak falls over 0.5 s in marks and 10 s in gaps. The floor
+     learns in gaps only.
+   - The first 300 ms only learn the floor.
+   - Nothing counts as a mark while the peak is under 4 times the mean
+     noise level. 30 s of noise alone gives no text.
+   - Every time constant is fixed; none follows the speed estimate.
+3. **Timing.**
+   - **History:** the last 32 marks and 64 gaps, in log ms.
+   - **Dot or dash:** the marks are split by Otsu's method (the split with
+     the largest between-class variance), with the threshold half way
+     between the two centres. A run of one kind of mark (E, T, S, O…) is
+     judged against the gaps inside characters, which are one unit long.
+   - **Gaps:** split the same way, short from long. The threshold sits
+     0.42 of the way up from the short centre, which the bench preferred to
+     half way: gaps between characters spread more than gaps inside them.
+     The long gaps split again, between characters and between words.
+   - **Blips:** a mark or gap shorter than 0.15 dot (6 ms at least) is
+     noise and joins the event before it.
+   - **Start-up:** nothing is decoded until 4 marks and 4 gaps have been
+     seen; those are then decoded with what was learned.
+   - **Pauses:** a gap of 2 s, and 2.5 word gaps, ends the transmission. A
+     line break is written and the timing is learned afresh.
+   - **Output:** a character is written as soon as its gap passes the
+     character threshold, a space as soon as it passes the word threshold.
+4. **Starting afresh.** `radio.c` resets the decoder on entering CW or
+   CWR from another mode, and when the receiver moves more than 300 Hz.
+5. **Out.** A 1024-character ring:
+   - rigctld `\get_cw_text`, `l DECODEWPM` and `u`/`U CWDECODE`
+     ([`../06_api.md`](../06_api.md)).
+   - The control panel's two lines under a shorter waterfall in CW and
+     CWR.
+
+**On the bench**, 15 dB, the same 160 runs as §3 and §7. Median CER, then
+averaged over 10 to 35 WPM. KB2ML has its WPM setting at 20; maxibitx has
+none. The ceiling is the mean.
+
+| Fist | KB2ML as it was | KB2ML, detector fix | maxibitx | ceiling |
+|---|---|---|---|---|
+| machine | 46.1% | 2.2% | **0.0%** | 0.0% |
+| good | 56.5% | 12.1% | **0.1%** | 0.0% |
+| average | 69.0% | 30.0% | **10.0%** | 8.9% |
+| poor | 80.8% | 57.5% | **42.9%** | 33.5% |
+| heavy | 85.1% | 43.4% | **5.0%** | 3.0% |
+| bug | 59.6% | 26.1% | **6.2%** | 3.0% |
+| Farnsworth, 5/18 and 10/18 | 74.8% | 6.8% | **2.0%** | 1.7% |
+
+Over the whole grid the mean is 10.1% (11.7% with word breaks), against
+the ceiling's 7.4%. Per cell, every machine and good-fist run decodes
+perfectly at every speed except one good-fist cell at 20 WPM (0.5%).
+The rest of the maxibitx column:
+
+| Fist | 10 | 15 | 20 | 25 | 30 | 35 |
+|---|---|---|---|---|---|---|
+| average | 10.4 | 8.6 | 10.0 | 10.2 | 10.7 | 10.3 |
+| heavy | 4.9 | 4.1 | 5.5 | 5.4 | 4.9 | 5.1 |
+| bug | 7.4 | 4.6 | 4.9 | 6.4 | 5.7 | 8.1 |
+
+Farnsworth: good 0.0% at both; average 3.3% at 5/18 and 4.8% at 10/18.
+
+At 6 dB the grid's mean is 9.5% (ceiling 6.9%), with machine and good
+fists at 0 to 0.8%.
+
+**What's left.**
+
+- The average fist is 1 to 2 points above the ceiling, heavy and bug 2
+  to 4 points, poor about 9. That is the cost of learning the thresholds
+  from the signal instead of knowing them.
+- The text prior (§5, step 4) is not built. The one-gap-late decision
+  between two readings (§5, step 3) isn't either: a character is
+  written as soon as its gap passes the threshold.
+- Changes of speed. A pause of 2 s or more, a retune or a mode change
+  starts afresh. A speed change without a pause is followed as the
+  32-mark window turns over, about ten characters.
+- Bench only: no on-air test yet, no fading, no QRM.
+
+**Tests.**
+
+- `make test-cw-decoder` (`src/cw_decoder_test.c`):
+  - machine code at 5, 20 and 35 WPM,
+  - Farnsworth 5/18 and 10/18,
+  - hand-sent (12% spread) at 12, 25 and 35 WPM,
+  - 6 dB,
+  - noise alone,
+  - a second station at another speed after a pause,
+  - the text reader.
+- `test-rx-audio` case K checks the decoder through `rx_audio_process()`.
+- `test-radio` checks when it is told to start afresh.
+- `cw_bench.py` runs the grid on `cw_decoder.c` as it is in the tree. Pass
+  `--sbitx` to add KB2ML beside it.
+
 ## Caveats
 
 - The fists are a model; their spreads are my estimates.
@@ -452,7 +563,7 @@ x86 bench: 0.19% of real time against 0.61%).
   for each run). No decoder will quite reach it, but the simple
   detector's column shows detection is not what stands between a decoder
   and it at good SNR.
-- The grid is at 15 dB only. The detector table covers 6 to 40 dB for
-  machine code at 20 WPM only.
+- The grid is at 15 dB (and, for maxibitx, 6 dB). The detector table
+  covers 6 to 40 dB for machine code at 20 WPM only.
 - KB2ML was measured at commit 6875d43. Its transmit-side decoder wasn't
   measured.
