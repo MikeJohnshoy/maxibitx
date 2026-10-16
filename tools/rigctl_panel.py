@@ -1169,7 +1169,9 @@ class Panel(tk.Tk):
     def apply_decode(self, reply, wpm):
         """A \\get_cw_text reply: the next character number, the text's
         length and the text, with '|' for each line break. The reply was
-        stripped, so the length restores a trailing space."""
+        stripped, so the length restores a trailing space. A line break
+        (the end of a transmission, or a retune) is shown as a space, so
+        the two lines keep rolling instead of starting afresh."""
         parts = reply.split(" ", 2)
         try:
             seq, length = int(parts[0]), int(parts[1])
@@ -1179,10 +1181,13 @@ class Panel(tk.Tk):
             return
         self.decode_seq = seq
         text = (parts[2] if len(parts) > 2 else "").ljust(length)
+        text = re.sub(" +", " ", text.replace("|", " "))
         t = self.decode_text
+        if text.startswith(" ") and t.get("end-2c", "end-1c") in ("", " ", "\n"):
+            text = text[1:]                # no space at the start, or after a space
         t.configure(state="normal")
         if text:
-            t.insert("end", text.replace("|", "\n"))
+            t.insert("end", text)
             excess = int(t.count("1.0", "end", "chars")[0]) - DECODE_KEEP
             if excess > 0:
                 t.delete("1.0", f"1.0 + {excess} chars")
