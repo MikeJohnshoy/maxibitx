@@ -9,10 +9,11 @@ receiver would hand its decoder, and measures:
             machine-perfect code at 20 WPM, against SNR: how many marks
             it finds, and how long it measures dots, dashes and the gaps
             inside characters, against the truth (60, 180 and 60 ms)
-  grid      its character error rate (CER) for each fist and speed, at
-            one SNR, with the decoder's WPM setting (the operator's own
-            keyer speed, which it uses as a prior) at 20 and at the
-            sender's speed
+  grid      the character error rate (CER) for each fist and speed, at
+            one SNR: maxibitx's own decoder (src/cw_decoder.c, as it is in
+            this tree, through mx/harness.c) and, with --sbitx, KB2ML with
+            its WPM setting (the operator's own keyer speed, which it uses
+            as a prior) at 20 and at the sender's speed
   ceiling   the CER of a timing-only decoder that knows the sender's
             speed at every moment and uses the best fixed thresholds for
             that run: what the fist itself costs, before any detector or
@@ -26,18 +27,19 @@ the sent text's length, with spaces removed from both (so it counts
 characters), and "+sp" the same with single spaces kept (so word breaks
 count too).
 
+  python3 tools/cw_study/cw_bench.py --only grid                  # maxibitx, ~5 min
   python3 tools/cw_study/cw_bench.py --sbitx ~/sbitx/src          # all, ~15 min
-  python3 tools/cw_study/cw_bench.py --sbitx ~/sbitx/src --only ceiling,ambiguity
+  python3 tools/cw_study/cw_bench.py --only ceiling,ambiguity
   python3 tools/cw_study/cw_bench.py --sbitx ~/sbitx/src --wav DIR    # also WAVs
-  python3 tools/cw_study/cw_bench.py --sbitx ~/sbitx/src --decode rec.wav --wpm 20
+  python3 tools/cw_study/cw_bench.py --decode rec.wav [--sbitx ~/sbitx/src --wpm 20]
 
 --sbitx is the src directory of a checkout of MikeJohnshoy/sbitx, branch
-mj_decoder (measured at 6875d43). The bench builds two harnesses from its
+mj_decoder (measured at 6875d43) or decoder_fix. The bench builds two harnesses from its
 modem_cw.c with kb2ml/harness.c: the decoder as it is, and the same with
 one fprintf added to cw_rx_add_symbol() that logs each mark and gap (the
 detector table). --decode runs the decoder on a recording instead (any
 rate, left channel, scaled so its peaks sit where sbitx's AGC puts them),
-to check the harness against what the radio shows for the same audio.
+to check a harness against what the radio shows for the same audio.
 Needs gcc, libfftw3-dev, numpy and scipy.
 """
 import argparse
@@ -90,6 +92,22 @@ def build(sbitx_src, outdir):
     subprocess.run(cmd + ["-I" + os.path.dirname(src), patched, "-lfftw3", "-lm", "-o", trace],
                    check=True)
     return plain, trace
+
+
+def build_maxibitx(outdir):
+    """maxibitx's own decoder (src/cw_decoder.c) in kb2ml's place: mx/harness.c."""
+    exe = os.path.join(outdir, "mx")
+    src = os.path.join(HERE, "..", "..", "src")
+    subprocess.run(["gcc", "-O2", "-Wall", "-std=gnu11", "-I" + src, os.path.join(HERE, "mx", "harness.c"),
+                    os.path.join(src, "cw_decoder.c"), os.path.join(src, "morse.c"), "-lm", "-o", exe],
+                   check=True)
+    return exe
+
+
+def run_maxibitx(exe, samples):
+    r = subprocess.run([exe, str(int(cf.PITCH))], input=samples.tobytes(),
+                       capture_output=True, check=True)
+    return r.stdout.decode(errors="replace")
 
 
 def run_decoder(exe, samples, wpm):
@@ -250,7 +268,7 @@ def simple_decode(samples, elements):
 # ---------------------------------------------------------------- one run
 
 def one_run(job):
-    fist, wpm, farns, snr, seed, exe, wav_dir = job
+    fist, wpm, farns, snr, seed, exe, mx, wav_dir = job
     rng = np.random.default_rng(seed * 1000 + int(wpm) * 7 + int(snr))
     text = cf.qso_text(rng, CHARS)
     el = cf.key_text(text, fist, wpm, rng, farns)
@@ -260,10 +278,14 @@ def one_run(job):
         cf.write_wav(os.path.join(wav_dir, tag + ".wav"), x)
     res = dict(fist=fist, wpm=wpm, farns=farns, snr=snr, seed=seed)
     sender = farns or wpm
-    for label, setting in (("w20", 20), ("wmatch", sender)):
-        hyp, _ = run_decoder(exe, x, setting)
-        res[label] = cer(text, hyp)
-        res[label + "_text"] = hyp.strip()
+    if exe:
+        for label, setting in (("w20", 20), ("wmatch", sender)):
+            hyp, _ = run_decoder(exe, x, setting)
+            res[label] = cer(text, hyp)
+            res[label + "_text"] = hyp.strip()
+    hyp = run_maxibitx(mx, x)
+    res["mx"] = cer(text, hyp)
+    res["mx_text"] = hyp.strip()
     res["ceiling"] = cer(text, ceiling_decode(el))
     res["simple"] = cer(text, simple_decode(x, el)[0])
     res["text"] = text
@@ -338,16 +360,23 @@ def report_detector(exe, workers):
           "is over 10%)")
 
 
-def report_grid(exe, snr, workers, wav_dir):
-    print(f"\n== grid: CER at {snr} dB SNR (in 2500 Hz), mean of {len(SEEDS)} runs of "
-          f"~{CHARS} characters\n")
-    jobs = [(f, w, None, snr, s, exe, wav_dir) for f in GRID_FISTS for w in SPEEDS for s in SEEDS]
-    jobs += [(f, w, c, snr, s, exe, wav_dir) for f in ("good", "average")
+def report_grid(exe, mx, snr, workers, wav_dir):
+    print(f"\n== grid: CER at {snr} dB SNR (in 2500 Hz), {len(SEEDS)} runs of "
+          f"~{CHARS} characters each\n")
+    jobs = [(f, w, None, snr, s, exe, mx, wav_dir) for f in GRID_FISTS for w in SPEEDS for s in SEEDS]
+    jobs += [(f, w, c, snr, s, exe, mx, wav_dir) for f in ("good", "average")
              for (w, c) in FARNS for s in SEEDS]
     with ProcessPoolExecutor(workers) as ex:
         rows = list(ex.map(one_run, jobs))
-    print(" fist       WPM   KB2ML, WPM set 20   KB2ML, WPM set to sender   ceiling  simple")
-    print("                  median CER   lost   median CER   lost          mean CER")
+    head = " fist       WPM "
+    sub = "                 "
+    if exe:
+        head += "  KB2ML, WPM set 20   KB2ML, WPM set to sender"
+        sub += " median CER   lost   median CER   lost       "
+    head += "   maxibitx        ceiling  simple"
+    sub += "  median CER  lost   mean CER"
+    print(head)
+    print(sub)
     keys = []
     for r in rows:
         k = (r["fist"], r["wpm"], r["farns"])
@@ -362,10 +391,14 @@ def report_grid(exe, snr, workers, wav_dir):
         ceil = np.mean([r["ceiling"][0] for r in rs]) * 100
         simp = np.mean([r["simple"][0] for r in rs]) * 100
         sp = f"{k[1]}/{k[2]}" if k[2] else f"{k[1]}"
-        print(f" {k[0]:8s} {sp:>6s}  {med('w20'):9.1f}%  {lost('w20'):3d}/{len(rs)}"
-              f"  {med('wmatch'):9.1f}%  {lost('wmatch'):3d}/{len(rs)}  {ceil:14.1f}%"
-              f"  {simp:5.1f}%")
-    for lbl, name in (("w20", "WPM set 20"), ("wmatch", "WPM set to sender")):
+        line = f" {k[0]:8s} {sp:>6s} "
+        if exe:
+            line += (f" {med('w20'):9.1f}%  {lost('w20'):3d}/{len(rs)}"
+                     f"  {med('wmatch'):9.1f}%  {lost('wmatch'):3d}/{len(rs)}      ")
+        line += f"  {med('mx'):9.1f}%  {lost('mx'):2d}/{len(rs)}  {ceil:8.1f}%  {simp:5.1f}%"
+        print(line)
+    labels = (("w20", "KB2ML, WPM set 20"), ("wmatch", "KB2ML, WPM set to sender")) if exe else ()
+    for lbl, name in labels + (("mx", "maxibitx"), ("ceiling", "ceiling")):
         a = np.mean([r[lbl][0] for r in rows]) * 100
         b = np.mean([r[lbl][1] for r in rows]) * 100
         print(f"\n {name}: mean CER over the grid {a:.1f}%, with word breaks {b:.1f}%", end="")
@@ -373,7 +406,9 @@ def report_grid(exe, snr, workers, wav_dir):
     ex_row = next(r for r in rows if r["fist"] == "average" and r["wpm"] == 20 and not r["farns"])
     print("\n example, average fist, 20 WPM, seed", ex_row["seed"])
     print("  sent    :", ex_row["text"][:150])
-    print("  KB2ML@20:", ex_row["w20_text"][:150])
+    if exe:
+        print("  KB2ML@20:", ex_row["w20_text"][:150])
+    print("  maxibitx:", ex_row["mx_text"][:150])
 
 
 def report_ceiling_only(workers):
@@ -437,18 +472,22 @@ def main():
     if a.wav:
         os.makedirs(a.wav, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
-        if a.decode:
-            plain, _ = build(os.path.expanduser(a.sbitx), tmp)
-            print(run_decoder(plain, read_wav(a.decode), a.wpm)[0])
-            return
-        if parts & {"detector", "grid"}:
-            if not a.sbitx:
-                sys.exit("cw_bench: --sbitx is needed for detector and grid")
+        mx = build_maxibitx(tmp)
+        plain = trace = None
+        if a.sbitx:
             plain, trace = build(os.path.expanduser(a.sbitx), tmp)
+        if a.decode:
+            x = read_wav(a.decode)
+            print("maxibitx:", run_maxibitx(mx, x).strip())
+            if plain:
+                print("KB2ML   :", run_decoder(plain, x, a.wpm)[0].strip())
+            return
         if "detector" in parts:
+            if not trace:
+                sys.exit("cw_bench: --sbitx is needed for the detector table")
             report_detector(trace, a.workers)
         if "grid" in parts:
-            report_grid(plain, a.snr, a.workers, a.wav)
+            report_grid(plain, mx, a.snr, a.workers, a.wav)
         if "ceiling" in parts:
             report_ceiling_only(a.workers)
         if "ambiguity" in parts:
