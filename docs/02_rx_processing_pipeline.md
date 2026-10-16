@@ -299,6 +299,18 @@ sees doesn't depend on the speaker volume. `sound.c` decimates it to
 `uac_push_audio_rx()`. That path has 15 dB of headroom
 (`UAC_RX_AUDIO_HEADROOM`) so strong signals don't clip.
 
+**The CW decoder.** In CW and CWR, stage 2's output also goes to
+`cw_decoder.c`, before stage 3, so what it decodes doesn't depend on the
+narrow filter's setting. It mixes the tone down from the pitch, filters
+it to 150 Hz, decides mark or gap every millisecond, and learns the
+sender's timing from the signal itself, with no WPM setting. Its text
+reaches clients through rigctld's `\get_cw_text`, and the control panel
+shows it under the waterfall
+([`06_api.md`](06_api.md);
+[`dsp_design_notes/rx_cw_decoder_study.md`](dsp_design_notes/rx_cw_decoder_study.md) §8).
+It starts afresh on entering CW or CWR and when the receiver moves more
+than 300 Hz; see Retuning.
+
 Full design, bench data and history:
 [`dsp_design_notes/rx_audio_demod_design.md`](dsp_design_notes/rx_audio_demod_design.md)
 (the stages and AGC) and
@@ -324,6 +336,9 @@ no notion of TX; the one place `clk1` *does* move is
 also sets `clk2` without the RIT offset during TX and restores it with
 RIT afterwards. As long as no TX burst is in progress, `clk1` sits at
 its RX value (`xtal_filter_center + RX_IF_FREQ_HZ`) and `radio_tune_to()`
-alone is enough to retune the receiver. Who's allowed to call
+alone is enough to retune the receiver. Both `radio_tune_to()` and the
+RIT setters tell the CW decoder to start afresh when the frequency it
+listens on has moved more than 300 Hz since it last did; a smaller move
+(tuning onto the same signal) keeps the timing it has learned. Who's allowed to call
 `radio_tune_to()`, and how, is covered in
 [`04_remote_control_and_iq_output.md`](04_remote_control_and_iq_output.md).
