@@ -40,6 +40,13 @@ const char *morse_pattern(unsigned char c);
 // "AR", "SK", ... for a prosign code; NULL otherwise.
 const char *morse_prosign_name(unsigned char c);
 
+// The internal-form character (a letter, digit, punctuation mark or prosign
+// code) whose pattern is the given dots and dashes, or -1 if no character
+// has it. The inverse of morse_pattern(), except that a pattern shared by a
+// prosign and a punctuation mark (AR and +, AS and &, BT and =) gives the
+// prosign. cw_decoder.c's lookup.
+int morse_decode(const char *pattern);
+
 // Translate a surface's text into internal form in out (NUL-terminated, at
 // most max - 1 characters). Letters are taken in either case; tabs and line
 // ends become spaces. A character the table lacks is left out and appended
