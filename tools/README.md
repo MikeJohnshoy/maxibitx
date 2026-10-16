@@ -56,8 +56,8 @@ The screen, top to bottom:
 - **Decoded CW:** in CW and CWR the waterfall is shorter, and two lines
   under it show what maxibitx's CW decoder reads (`\get_cw_text`, polled
   four times a second); the status line adds the speed it has learned
-  (`l DECODEWPM`). A new line starts when a transmission ends. Tap the
-  lines to clear them. Against a maxibitx without the decoder the lines
+  (`l DECODEWPM`). The text keeps rolling from one transmission to the
+  next. Tap the lines to clear them. Against a maxibitx without the decoder the lines
   don't appear.
 - **By mode:** in CW, ten macro buttons; in USB/LSB, mic gain and the ALC
   meter; in DIGI, a note that the digital-mode program has the audio.
