@@ -57,7 +57,10 @@
 #include <stdio.h>
 #include <math.h>
 #include <stdlib.h>
+#include <stdint.h>
+#include <string.h>
 #include "rx_audio.h"
+#include "cw_decoder.h"
 #include "rx_filter.h" // RX_FILTER_BLOCK_LEN only
 #include "cw.h"        // CW_PITCH_HZ only
 #include "vfo.h"       // vfo_init_phase_table() only
@@ -509,6 +512,67 @@ int main(void)
 		}
 		if (!reads_off || !reports_inhibited || !reads_on) {
 			fprintf(stderr, "   FAIL: readback disagreed with the inhibit state\n");
+			return 1;
+		}
+	}
+
+	// --- Case K: the CW decoder, fed by rx_audio_process() ---------------
+	// A carrier on the dial (0 Hz baseband), keyed with "CQ DE KB2ML K" at
+	// 20 WPM with 5 ms edges, in a little noise: the decoder, tapped after
+	// stage 2 at the BFO's pitch, has to read it back.
+	{
+		printf("\nK. The CW decoder, through rx_audio_process()\n");
+		rx_audio_set_demod(RX_DEMOD_CW);
+		cw_decoder_init();
+		char buf[CW_DECODER_TEXT_KEEP + 1];
+		uint32_t seq = cw_decoder_read(UINT32_MAX, buf, 1);
+		static const char *const code[] = {"-.-.", "--.-", " ", "-..", ".", " ", "-.-", "-...",
+		                                   "..---", "--", ".-..", " ", "-.-", NULL};
+		const double u = 1.2 / 20 * TEST_FS;           // samples per dot
+		static double env[60 * 96000];
+		long len = (long)(1.0 * TEST_FS);              // a second of silence first
+		for (int c = 0; code[c]; c++) {
+			if (code[c][0] == ' ') {
+				len += (long)(4 * u);                  // 3 already after the character
+				continue;
+			}
+			for (int e = 0; code[c][e]; e++) {
+				long m = (long)((code[c][e] == '.' ? 1 : 3) * u);
+				for (long k = 0; k < m; k++)
+					env[len + k] = 1.0;
+				len += m + (long)u;
+			}
+			len += (long)(2 * u);
+		}
+		len += 3 * 96000;                              // and three after, for the pause
+		long rise = 96000 / 200;                       // 5 ms raised-cosine edges
+		for (long k = 1; k < len; k++)
+			if (env[k] != env[k - 1]) {
+				int up = env[k] > env[k - 1];
+				for (long r = 0; r < rise && k + r < len; r++)
+					env[k + r] = up ? 0.5 - 0.5 * cos(M_PI * r / rise)
+					                : 0.5 + 0.5 * cos(M_PI * r / rise);
+				k += rise;
+			}
+		double i_s[RX_FILTER_BLOCK_LEN], q_s[RX_FILTER_BLOCK_LEN];
+		int32_t out[RX_FILTER_BLOCK_LEN];
+		char text[256] = "";
+		unsigned noise = 1;
+		for (long b = 0; b + RX_FILTER_BLOCK_LEN <= len; b += RX_FILTER_BLOCK_LEN) {
+			for (int k = 0; k < RX_FILTER_BLOCK_LEN; k++) {
+				noise = noise * 1103515245u + 12345u;
+				double nz = ((noise >> 8) / 16777216.0 - 0.5) * 0.02;
+				i_s[k] = 0.1 * env[b + k] + nz;
+				q_s[k] = nz;
+			}
+			rx_audio_process(i_s, q_s, RX_FILTER_BLOCK_LEN, out, NULL);
+			seq = cw_decoder_read(seq, buf, sizeof(buf));
+			if (strlen(text) + strlen(buf) < sizeof(text))
+				strcat(text, buf);
+		}
+		printf("   decoded: \"%s\"\n", text);
+		if (strncmp(text, "CQ DE KB2ML K", 13) != 0) {
+			fprintf(stderr, "   FAIL: wanted \"CQ DE KB2ML K\"\n");
 			return 1;
 		}
 	}
