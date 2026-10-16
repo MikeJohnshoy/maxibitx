@@ -7,14 +7,18 @@
 //      down to 0 Hz, summed 16 samples at a time to 6 kHz, lowpassed at
 //      150 Hz (4th-order Butterworth, on I and Q) and its magnitude taken
 //      every 6th sample.
-//   2. Mark or gap, every 1 ms: half way between a tracked peak and a
-//      tracked noise floor, with 10% hysteresis. The peak follows the
-//      signal down over 0.5 s in marks and 10 s in gaps; the floor learns
-//      in gaps only, quickly down, slowly up (and quickly both ways for
-//      the first WARMUP_MS, which decide nothing). Nothing is a mark while the
-//      peak is less than SQUELCH_RATIO times the floor. The time constants
-//      are fixed, never tied to the speed being decoded, so the timing
-//      stays true whatever the decoder thinks the speed is.
+//   2. Mark or gap, every 1 ms: THRESHOLD_FRAC of the way, in dB, from
+//      the mean noise level up to a tracked peak, with HYSTERESIS of that
+//      span either side. Measured in dB, the threshold sits well below a
+//      strong signal, so a fade of 10 or 15 dB still clears it; the peak
+//      follows the signal down over 0.5 s in marks and 10 s in gaps, too
+//      slowly to help in a short fade. The noise level is a 0.5 s mean in
+//      gaps; a floor (quickly down, slowly up, in gaps) is what the peak
+//      falls toward. Both are learned quickly in the first WARMUP_MS,
+//      which decides nothing. Nothing is a mark while the peak is less
+//      than SQUELCH_RATIO times the noise level. The time constants are
+//      fixed, never tied to the speed being decoded, so the timing stays
+//      true whatever the decoder thinks the speed is.
 //   3. Marks and gaps to text. The last MARK_HIST mark lengths and
 //      GAP_HIST gap lengths (in log ms) are each split in two by the
 //      threshold that best separates them (Otsu: the largest
@@ -64,7 +68,9 @@
 #define PEAK_GAP_TAU_MS 10000.0
 #define FLOOR_DOWN_TAU_MS 50.0
 #define FLOOR_UP_TAU_MS 1000.0
-#define HYSTERESIS 0.1f
+#define THRESHOLD_FRAC 0.4f         // of the way, in dB, from the noise to the peak
+#define HYSTERESIS 0.1f             // of the same span, either side
+#define TINY 1e-20f                 // keeps logf() finite in digital silence
 #define SQUELCH_RATIO 4.0f
 #define NOISE_TAU_MS 500.0
 #define WARMUP_MS 300               // floor learned fast first, no marks yet
@@ -295,7 +301,10 @@ static void update_thresholds(void) {
   d.t_word_ms = (int)ceilf(expf(d.t_word));
   float p = PAUSE_OVER_WORD * expf(d.t_word);
   d.pause_ms = p > PAUSE_MS ? (int)p : PAUSE_MS;
-  atomic_store(&wpm_now, ready() ? (int)lroundf(1200.0f / d.dot_ms) : 0);
+  // the speed from a dot and the gap inside a character together: the
+  // threshold lengthens one as much as it shortens the other
+  float unit_ms = (d.dot_ms + expf(intra)) / 2;
+  atomic_store(&wpm_now, ready() ? (int)lroundf(1200.0f / unit_ms) : 0);
 }
 
 static void finish_char(void) {
@@ -468,15 +477,17 @@ static void detector_tick(float e) {
   if (++tk % 1000 == 0)
     TRACE("[%.1f %.1f] ", d.peak / d.noise, d.peak / d.floor_);
 #endif
-  float span = d.peak - d.floor_;
-  float mid = d.floor_ + 0.5f * span;
+  // in dB: THRESHOLD_FRAC of the way from the noise up to the peak
+  float l_noise = logf(d.noise + TINY), l_e = logf(e + TINY);
+  float span = logf(d.peak + TINY) - l_noise;
+  float mid = l_noise + THRESHOLD_FRAC * span;
   float h = HYSTERESIS * span;
   int m = d.mark;
   if (d.peak < SQUELCH_RATIO * d.noise)
     m = 0;
-  else if (d.mark && e < mid - h)
+  else if (d.mark && l_e < mid - h)
     m = 0;
-  else if (!d.mark && e > mid + h)
+  else if (!d.mark && l_e > mid + h)
     m = 1;
   d.mark = m;
   event_tick(m);
