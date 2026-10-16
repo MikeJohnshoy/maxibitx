@@ -609,6 +609,44 @@ gaps with gaps), but the speed read from the dot alone came out 1 to 2
 WPM low. `cw_decoder_get_wpm()` takes the unit from a dot and the gap
 inside a character together, so the two errors cancel.
 
+### The same for KB2ML (sbitx `decoder_fix`)
+
+KB2ML with the §7 detector fix had the same weakness: a linear threshold
+(0.55 and 0.45 of the way from noise to peak) and a peak that falls over
+8 s in gaps. Its fix follows maxibitx's, with two additions:
+
+- **Warm-up.** KB2ML starts with its noise floor at a fixed 200, far below
+  the real noise. A dB threshold measured from there sits under the
+  noise and marks forever, so the first ~300 ms (112 hops) now only
+  learn the noise. The noise floor learns in gaps only, so a faded mark
+  can't raise it.
+- **Edge compensation.** KB2ML's envelope ramps over its 10.67 ms window
+  (4 hops), and a threshold low on the ramp makes each mark up to 4 hops
+  long and the gap after it as much short. Its timing logic minded:
+  steady signals went from 7.2% to 17.1% CER on the fade bench. Each mark
+  is now shortened by (1 - f_on - f_off) × 4 hops, f being where the
+  two thresholds sit as fractions of that mark's peak, and the gap after
+  it is lengthened by the same. That alone gave back the steady signals.
+  2 hops more (MARK_EXTRA_HOPS) was measured, not derived: KB2ML's timing
+  logic, with its pull toward the WPM setting, does better on it at speed.
+
+The fade bench (the §9 cases, through the study's audio chain with a good
+fist at 12, 20 and 30 WPM, KB2ML's setting at 20), and the grid at 15 dB:
+
+| | Fix of §7 | dB, warm-up | and edges | and 2 hops (built) |
+|---|---|---|---|---|
+| Steady, 15 dB | 7.2% | 17.1% | 7.6% | 5.6% |
+| Steady, 6 dB | 6.8% | 13.5% | 8.5% | 4.3% |
+| Mean over the fades | 67.2% | 17.9% | 11.9% | 8.5% |
+| Grid, setting at 20 | 26.4% | | 27.4% | 22.6% |
+| Grid, setting at the sender's speed | 19.0% | | 20.1% | 17.0% |
+
+By cell, 2 hops helps most at 30 and 35 WPM (good fist at 35 WPM: 38.4%
+to 16.6%) and costs a little at 10 WPM (good fist: 7.8% to 9.7%). 3 hops
+helped speed more and slow speeds less, so 2 was kept. 0.4 of the way,
+with 0.1 hysteresis, was again the best placement; 0.5 lost the deep
+fades again, and 0.3 or other hysteresis was no better.
+
 ## Caveats
 
 - The fists are a model; their spreads are my estimates.
