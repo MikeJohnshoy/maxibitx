@@ -144,74 +144,131 @@ static atomic_int wpm_now = 0;
 static char text_ring[CW_DECODER_TEXT_KEEP];
 static atomic_uint text_head = 0;   // characters written since start
 
-// ---------------------------------------------------------------- text
+// The rest of the file is in the order above: stage 1, 2, 3, then the text,
+// then setup and control. These are called before they are defined.
+static void reset_all(void);
+static void detector_tick(float e);
+static void event_tick(int m);
+static void put_char(int c);
+static void put_space(void);
+static void put_newline(void);
 
-static void put_text(const char *s) {
-  unsigned h = atomic_load_explicit(&text_head, memory_order_relaxed);
-  for (; *s; s++) {
-    text_ring[h % CW_DECODER_TEXT_KEEP] = *s;
-    h++;
-    atomic_store_explicit(&text_head, h, memory_order_release);
-  }
+// -------------------------------------------------------------------------
+// stage 1 
+// -------------------------------------------------------------------------
+static void biquad_lowpass(struct biquad *b, double fc, double fs, double q) {
+  double k = tan(M_PI * fc / fs);
+  double norm = 1.0 / (1.0 + k / q + k * k);
+  b->b0 = (float)(k * k * norm);
+  b->b1 = 2 * b->b0;
+  b->b2 = b->b0;
+  b->a1 = (float)(2.0 * (k * k - 1.0) * norm);
+  b->a2 = (float)((1.0 - k / q + k * k) * norm);
+  b->z1 = b->z2 = 0;
 }
 
-static void put_char(int c) {
-  if (c < 0) {
-    put_text("*");
-  } else if (morse_prosign_name((unsigned char)c)) {
-    char buf[8] = "<";
-    strcat(buf, morse_prosign_name((unsigned char)c));
-    strcat(buf, ">");
-    put_text(buf);
-  } else {
-    char buf[2] = {(char)c, 0};
-    put_text(buf);
-  }
-  d.line_used = 1;
-  d.last_space = 0;
+static inline float biquad_run(struct biquad *b, float x) {
+  float y = b->b0 * x + b->z1;
+  b->z1 = b->b1 * x - b->a1 * y + b->z2;
+  b->z2 = b->b2 * x - b->a2 * y;
+  return y;
 }
 
-static void put_space(void) {
-  if (d.line_used && !d.last_space) {
-    put_text(" ");
-    d.last_space = 1;
-  }
+static void set_pitch(int hz) {
+  d.pitch_hz = hz;
+  double w = 2.0 * M_PI * hz / FS;
+  d.step_re = cos(w);
+  d.step_im = -sin(w);           // e^{-jw}: mixes the tone down to 0 Hz
 }
 
-static void put_newline(void) {
-  if (d.line_used) {
-    put_text("\n");
-    d.line_used = 0;
-    d.last_space = 0;
+void cw_decoder_process(const float *audio, int n, int pitch_hz) {
+  if (atomic_exchange(&reset_request, 0)) {
+    put_newline();
+    reset_all();
   }
+  if (!atomic_load_explicit(&enabled, memory_order_relaxed))
+    return;
+  if (pitch_hz != d.pitch_hz && pitch_hz > 0)
+    set_pitch(pitch_hz);
+  for (int k = 0; k < n; k++) {
+    float a = audio[k];
+    d.acc_i += a * (float)d.osc_re;
+    d.acc_q += a * (float)d.osc_im;
+    double re = d.osc_re * d.step_re - d.osc_im * d.step_im;
+    d.osc_im = d.osc_re * d.step_im + d.osc_im * d.step_re;
+    d.osc_re = re;
+    if (++d.box_n < BOX)
+      continue;
+    float i = biquad_run(&d.lp_i[1], biquad_run(&d.lp_i[0], d.acc_i));
+    float q = biquad_run(&d.lp_q[1], biquad_run(&d.lp_q[0], d.acc_q));
+    d.acc_i = d.acc_q = 0;
+    d.box_n = 0;
+    if (++d.lo_n < TICK_LO)
+      continue;
+    d.lo_n = 0;
+    detector_tick(sqrtf(i * i + q * q));
+  }
+  double r = 1.0 / sqrt(d.osc_re * d.osc_re + d.osc_im * d.osc_im);
+  d.osc_re *= r;
+  d.osc_im *= r;
 }
 
-uint32_t cw_decoder_read(uint32_t since, char *buf, int len) {
-  unsigned h = atomic_load_explicit(&text_head, memory_order_acquire);
-  if (since > h)
-    since = h;
-  if (h - since > CW_DECODER_TEXT_KEEP)
-    since = h - CW_DECODER_TEXT_KEEP;
-  int n = (int)(h - since);
-  if (len < 1)
-    return since;
-  if (n > len - 1)
-    n = len - 1;
-  for (int i = 0; i < n; i++)
-    buf[i] = text_ring[(since + i) % CW_DECODER_TEXT_KEEP];
-  buf[n] = '\0';
-  // if the writer lapped the ring while we copied, drop what it overwrote
-  unsigned h2 = atomic_load_explicit(&text_head, memory_order_acquire);
-  if (h2 - since > CW_DECODER_TEXT_KEEP) {
-    int over = (int)(h2 - since - CW_DECODER_TEXT_KEEP);
-    if (over > n)
-      over = n;
-    memmove(buf, buf + over, (size_t)(n - over + 1));
+// -------------------------------------------------------------------------
+// stage 2
+// -------------------------------------------------------------------------
+
+static float tau_alpha(double tau_ms) { return (float)exp(-1.0 / tau_ms); }
+
+static void detector_tick(float e) {
+  if (!d.primed) {
+    d.floor_ = d.noise = e;
+    d.primed = 1;
   }
-  return since + (uint32_t)n;
+  if (d.warm_ms < WARMUP_MS) {
+    // learn the noise floor quickly before deciding anything
+    float a = tau_alpha(WARMUP_TAU_MS);
+    d.floor_ = a * d.floor_ + (1 - a) * e;
+    d.noise = d.floor_;
+    d.peak = d.floor_;
+    d.warm_ms++;
+    event_tick(0);
+    return;
+  }
+  if (e > d.peak)
+    d.peak = e;
+  else if (d.mark)
+    d.peak = d.a_peak_mark * d.peak + (1 - d.a_peak_mark) * e;
+  else
+    d.peak = d.a_peak_gap * d.peak + (1 - d.a_peak_gap) * d.floor_;
+  if (!d.mark) {
+    float a = e < d.floor_ ? d.a_floor_down : d.a_floor_up;
+    d.floor_ = a * d.floor_ + (1 - a) * e;
+    d.noise = d.a_noise * d.noise + (1 - d.a_noise) * e;
+  }
+#ifdef CW_DECODER_TRACE
+  static int tk;
+  if (++tk % 1000 == 0)
+    TRACE("[%.1f %.1f] ", d.peak / d.noise, d.peak / d.floor_);
+#endif
+  // in dB: THRESHOLD_FRAC of the way from the noise up to the peak
+  float l_noise = logf(d.noise + TINY), l_e = logf(e + TINY);
+  float span = logf(d.peak + TINY) - l_noise;
+  float mid = l_noise + THRESHOLD_FRAC * span;
+  float h = HYSTERESIS * span;
+  int m = d.mark;
+  if (d.peak < SQUELCH_RATIO * d.noise)
+    m = 0;
+  else if (d.mark && l_e < mid - h)
+    m = 0;
+  else if (!d.mark && l_e > mid + h)
+    m = 1;
+  d.mark = m;
+  event_tick(m);
 }
 
-// ---------------------------------------------------------------- stage 3
+// -------------------------------------------------------------------------
+// stage 3
+// -------------------------------------------------------------------------
 
 // The best two-way split of n values (Otsu). Returns 0 for fewer than 2.
 static int otsu(const float *v_in, int n, float *lo, float *hi) {
@@ -442,83 +499,78 @@ static void event_tick(int m) {
   }
 }
 
-// ---------------------------------------------------------------- stage 2
+// -------------------------------------------------------------------------
+// text out
+// -------------------------------------------------------------------------
 
-static float tau_alpha(double tau_ms) { return (float)exp(-1.0 / tau_ms); }
-
-static void detector_tick(float e) {
-  if (!d.primed) {
-    d.floor_ = d.noise = e;
-    d.primed = 1;
+static void put_text(const char *s) {
+  unsigned h = atomic_load_explicit(&text_head, memory_order_relaxed);
+  for (; *s; s++) {
+    text_ring[h % CW_DECODER_TEXT_KEEP] = *s;
+    h++;
+    atomic_store_explicit(&text_head, h, memory_order_release);
   }
-  if (d.warm_ms < WARMUP_MS) {
-    // learn the noise floor quickly before deciding anything
-    float a = tau_alpha(WARMUP_TAU_MS);
-    d.floor_ = a * d.floor_ + (1 - a) * e;
-    d.noise = d.floor_;
-    d.peak = d.floor_;
-    d.warm_ms++;
-    event_tick(0);
-    return;
+}
+
+static void put_char(int c) {
+  if (c < 0) {
+    put_text("*");
+  } else if (morse_prosign_name((unsigned char)c)) {
+    char buf[8] = "<";
+    strcat(buf, morse_prosign_name((unsigned char)c));
+    strcat(buf, ">");
+    put_text(buf);
+  } else {
+    char buf[2] = {(char)c, 0};
+    put_text(buf);
   }
-  if (e > d.peak)
-    d.peak = e;
-  else if (d.mark)
-    d.peak = d.a_peak_mark * d.peak + (1 - d.a_peak_mark) * e;
-  else
-    d.peak = d.a_peak_gap * d.peak + (1 - d.a_peak_gap) * d.floor_;
-  if (!d.mark) {
-    float a = e < d.floor_ ? d.a_floor_down : d.a_floor_up;
-    d.floor_ = a * d.floor_ + (1 - a) * e;
-    d.noise = d.a_noise * d.noise + (1 - d.a_noise) * e;
+  d.line_used = 1;
+  d.last_space = 0;
+}
+
+static void put_space(void) {
+  if (d.line_used && !d.last_space) {
+    put_text(" ");
+    d.last_space = 1;
   }
-#ifdef CW_DECODER_TRACE
-  static int tk;
-  if (++tk % 1000 == 0)
-    TRACE("[%.1f %.1f] ", d.peak / d.noise, d.peak / d.floor_);
-#endif
-  // in dB: THRESHOLD_FRAC of the way from the noise up to the peak
-  float l_noise = logf(d.noise + TINY), l_e = logf(e + TINY);
-  float span = logf(d.peak + TINY) - l_noise;
-  float mid = l_noise + THRESHOLD_FRAC * span;
-  float h = HYSTERESIS * span;
-  int m = d.mark;
-  if (d.peak < SQUELCH_RATIO * d.noise)
-    m = 0;
-  else if (d.mark && l_e < mid - h)
-    m = 0;
-  else if (!d.mark && l_e > mid + h)
-    m = 1;
-  d.mark = m;
-  event_tick(m);
 }
 
-// ---------------------------------------------------------------- stage 1
-
-static void biquad_lowpass(struct biquad *b, double fc, double fs, double q) {
-  double k = tan(M_PI * fc / fs);
-  double norm = 1.0 / (1.0 + k / q + k * k);
-  b->b0 = (float)(k * k * norm);
-  b->b1 = 2 * b->b0;
-  b->b2 = b->b0;
-  b->a1 = (float)(2.0 * (k * k - 1.0) * norm);
-  b->a2 = (float)((1.0 - k / q + k * k) * norm);
-  b->z1 = b->z2 = 0;
+static void put_newline(void) {
+  if (d.line_used) {
+    put_text("\n");
+    d.line_used = 0;
+    d.last_space = 0;
+  }
 }
 
-static inline float biquad_run(struct biquad *b, float x) {
-  float y = b->b0 * x + b->z1;
-  b->z1 = b->b1 * x - b->a1 * y + b->z2;
-  b->z2 = b->b2 * x - b->a2 * y;
-  return y;
+uint32_t cw_decoder_read(uint32_t since, char *buf, int len) {
+  unsigned h = atomic_load_explicit(&text_head, memory_order_acquire);
+  if (since > h)
+    since = h;
+  if (h - since > CW_DECODER_TEXT_KEEP)
+    since = h - CW_DECODER_TEXT_KEEP;
+  int n = (int)(h - since);
+  if (len < 1)
+    return since;
+  if (n > len - 1)
+    n = len - 1;
+  for (int i = 0; i < n; i++)
+    buf[i] = text_ring[(since + i) % CW_DECODER_TEXT_KEEP];
+  buf[n] = '\0';
+  // if the writer lapped the ring while we copied, drop what it overwrote
+  unsigned h2 = atomic_load_explicit(&text_head, memory_order_acquire);
+  if (h2 - since > CW_DECODER_TEXT_KEEP) {
+    int over = (int)(h2 - since - CW_DECODER_TEXT_KEEP);
+    if (over > n)
+      over = n;
+    memmove(buf, buf + over, (size_t)(n - over + 1));
+  }
+  return since + (uint32_t)n;
 }
 
-static void set_pitch(int hz) {
-  d.pitch_hz = hz;
-  double w = 2.0 * M_PI * hz / FS;
-  d.step_re = cos(w);
-  d.step_im = -sin(w);           // e^{-jw}: mixes the tone down to 0 Hz
-}
+// -------------------------------------------------------------------------
+// control
+// -------------------------------------------------------------------------
 
 static void reset_all(void) {
   int pitch = d.pitch_hz;
@@ -541,38 +593,6 @@ static void reset_all(void) {
 void cw_decoder_init(void) {
   reset_all();
   atomic_store(&wpm_now, 0);
-}
-
-void cw_decoder_process(const float *audio, int n, int pitch_hz) {
-  if (atomic_exchange(&reset_request, 0)) {
-    put_newline();
-    reset_all();
-  }
-  if (!atomic_load_explicit(&enabled, memory_order_relaxed))
-    return;
-  if (pitch_hz != d.pitch_hz && pitch_hz > 0)
-    set_pitch(pitch_hz);
-  for (int k = 0; k < n; k++) {
-    float a = audio[k];
-    d.acc_i += a * (float)d.osc_re;
-    d.acc_q += a * (float)d.osc_im;
-    double re = d.osc_re * d.step_re - d.osc_im * d.step_im;
-    d.osc_im = d.osc_re * d.step_im + d.osc_im * d.step_re;
-    d.osc_re = re;
-    if (++d.box_n < BOX)
-      continue;
-    float i = biquad_run(&d.lp_i[1], biquad_run(&d.lp_i[0], d.acc_i));
-    float q = biquad_run(&d.lp_q[1], biquad_run(&d.lp_q[0], d.acc_q));
-    d.acc_i = d.acc_q = 0;
-    d.box_n = 0;
-    if (++d.lo_n < TICK_LO)
-      continue;
-    d.lo_n = 0;
-    detector_tick(sqrtf(i * i + q * q));
-  }
-  double r = 1.0 / sqrt(d.osc_re * d.osc_re + d.osc_im * d.osc_im);
-  d.osc_re *= r;
-  d.osc_im *= r;
 }
 
 void cw_decoder_set_enabled(int on) {
