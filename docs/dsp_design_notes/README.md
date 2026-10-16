@@ -346,10 +346,12 @@ already used in `antialias_filter_design.md`.
   scale with its own dot estimate); §7 is a fix for it (sbitx
   `decoder_fix`: mean CER over the grid 66% → 26%). Splitting a character
   almost always gives valid characters, so validity can't choose; gap
-  statistics must. §8, the decoder as built: a 1 ms half-way detector,
-  then dots, dashes and the three gaps each learned from the signal (Otsu
-  splits of the last 32 marks and 64 gaps), no WPM setting; mean CER 10.1%
-  against the timing ceiling's 7.4%, machine and good fists decoded
-  perfectly from 10 to 35 WPM and Farnsworth 5/18. Text through rigctld
-  `\get_cw_text` and the panel. Status: **built**; on-air test and the
-  text prior still to do.
+  statistics must. §8, the decoder as built: a 1 ms detector with its
+  threshold in dB, then dots, dashes and the three gaps each learned from
+  the signal (Otsu splits of the last 32 marks and 64 gaps), no WPM
+  setting; mean CER 10.4% against the timing ceiling's 7.4%, machine and
+  good fists decoded perfectly from 10 to 35 WPM and Farnsworth 5/18. §9,
+  fading: a linear half-way threshold lost short 10-15 dB fades (67% CER
+  over the fade cases); the dB threshold, 3.3%. Text through rigctld
+  `\get_cw_text` and the panel. Status: **built**, decoding well on the
+  air; the text prior still to do.
