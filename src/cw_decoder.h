@@ -43,8 +43,9 @@ void cw_decoder_reset(void);
 #define CW_DECODER_TEXT_KEEP 1024
 uint32_t cw_decoder_read(uint32_t since, char *buf, int len);
 
-// The sender's speed as the decoder has learned it, in WPM (from the dot
-// length), or 0 before it has learned one.
+// The sender's speed as the decoder has learned it, in WPM (from the
+// lengths of a dot and of the gap inside a character), or 0 before it has
+// learned one.
 int cw_decoder_get_wpm(void);
 
 #endif /* CW_DECODER_H */
