@@ -1,9 +1,9 @@
 # A CW decoder for maxibitx: study
 
 Status: **built** - §8 is the decoder in maxibitx (`src/cw_decoder.c`)
-and its measurements. §1-6 are the study that led to it; §7 is a detector
-fix for the KB2ML decoder in sbitx (branch `decoder_fix`), measured on the
-same bench.
+and its measurements; §9 is how it handles fading. §1-6 are the study
+that led to it; §7 is a detector fix for the KB2ML decoder in sbitx
+(branch `decoder_fix`), measured on the same bench.
 
 The question: is it worth building a new CW decoder for maxibitx? The
 target is hand-sent code at 5 to 35 WPM, at good signal-to-noise ratios,
@@ -462,10 +462,12 @@ of the block's time.
      6 kHz, and lowpass at 150 Hz (4th-order Butterworth on I and Q).
    - Take the magnitude every millisecond.
 2. **Mark or gap**, every millisecond.
-   - Half way between a tracked peak and a tracked noise floor, with 10%
-     hysteresis.
-   - The peak falls over 0.5 s in marks and 10 s in gaps. The floor
-     learns in gaps only.
+   - 40% of the way, in dB, from the mean noise level up to a tracked
+     peak, with 10% of that span as hysteresis. Measured in dB, the
+     threshold sits well below a strong signal, so a short fade of 10 to
+     15 dB still clears it (§9).
+   - The peak falls over 0.5 s in marks and 10 s in gaps. The noise level
+     and a floor learn in gaps only.
    - The first 300 ms only learn the floor.
    - Nothing counts as a mark while the peak is under 4 times the mean
      noise level. 30 s of noise alone gives no text.
@@ -503,28 +505,31 @@ none. The ceiling is the mean.
 | Fist | KB2ML as it was | KB2ML, detector fix | maxibitx | ceiling |
 |---|---|---|---|---|
 | machine | 46.1% | 2.2% | **0.0%** | 0.0% |
-| good | 56.5% | 12.1% | **0.1%** | 0.0% |
-| average | 69.0% | 30.0% | **10.0%** | 8.9% |
-| poor | 80.8% | 57.5% | **42.9%** | 33.5% |
-| heavy | 85.1% | 43.4% | **5.0%** | 3.0% |
-| bug | 59.6% | 26.1% | **6.2%** | 3.0% |
-| Farnsworth, 5/18 and 10/18 | 74.8% | 6.8% | **2.0%** | 1.7% |
+| good | 56.5% | 12.1% | **0.0%** | 0.0% |
+| average | 69.0% | 30.0% | **10.4%** | 8.9% |
+| poor | 80.8% | 57.5% | **43.5%** | 33.5% |
+| heavy | 85.1% | 43.4% | **5.4%** | 3.0% |
+| bug | 59.6% | 26.1% | **6.1%** | 3.0% |
+| Farnsworth, 5/18 and 10/18 | 74.8% | 6.8% | **2.1%** | 1.7% |
 
-Over the whole grid the mean is 10.1% (11.7% with word breaks), against
-the ceiling's 7.4%. Per cell, every machine and good-fist run decodes
-perfectly at every speed except one good-fist cell at 20 WPM (0.5%).
-The rest of the maxibitx column:
+Over the whole grid the mean is 10.4% (12.0% with word breaks), against
+the ceiling's 7.4%. Every machine and good-fist run decodes perfectly at
+every speed. The rest of the maxibitx column:
 
 | Fist | 10 | 15 | 20 | 25 | 30 | 35 |
 |---|---|---|---|---|---|---|
-| average | 10.4 | 8.6 | 10.0 | 10.2 | 10.7 | 10.3 |
-| heavy | 4.9 | 4.1 | 5.5 | 5.4 | 4.9 | 5.1 |
-| bug | 7.4 | 4.6 | 4.9 | 6.4 | 5.7 | 8.1 |
+| average | 10.7 | 8.6 | 10.0 | 10.7 | 11.2 | 11.1 |
+| heavy | 5.1 | 4.1 | 5.0 | 5.9 | 6.6 | 5.7 |
+| bug | 7.4 | 4.6 | 4.4 | 6.4 | 5.7 | 8.1 |
 
-Farnsworth: good 0.0% at both; average 3.3% at 5/18 and 4.8% at 10/18.
+Farnsworth: good 0.0% at both; average 3.3% at 5/18 and 5.3% at 10/18.
 
-At 6 dB the grid's mean is 9.5% (ceiling 6.9%), with machine and good
-fists at 0 to 0.8%.
+At 6 dB the grid's mean is 9.7% (ceiling 6.9%).
+
+These are with the dB threshold of §9. With the first detector (half way
+between peak and floor, linear) they were 10.1% at 15 dB and 9.5% at 6 dB:
+the dB threshold costs a few tenths of a point on steady signals and
+saves most of the characters in a fade.
 
 **What's left.**
 
@@ -537,7 +542,8 @@ fists at 0 to 0.8%.
 - Changes of speed. A pause of 2 s or more, a retune or a mode change
   starts afresh. A speed change without a pause is followed as the
   32-mark window turns over, about ten characters.
-- Bench only: no on-air test yet, no fading, no QRM.
+- On the air it decodes well beside KB2ML with the detector fix. Short
+  fades lost characters until the dB threshold (§9). No QRM on the bench.
 
 **Tests.**
 
@@ -546,6 +552,7 @@ fists at 0 to 0.8%.
   - Farnsworth 5/18 and 10/18,
   - hand-sent (12% spread) at 12, 25 and 35 WPM,
   - 6 dB,
+  - fades: 15 dB dips every 3 s, and 10 dB dips every 1.5 s, at 20 dB,
   - noise alone,
   - a second station at another speed after a pause,
   - the text reader.
@@ -554,11 +561,59 @@ fists at 0 to 0.8%.
 - `cw_bench.py` runs the grid on `cw_decoder.c` as it is in the tree. Pass
   `--sbitx` to add KB2ML beside it.
 
+## 9. Fading
+
+On the air, short fades of one to four characters, still clear by ear,
+lost those characters. The first detector put its threshold half way
+between the peak and the floor on a linear scale (with hysteresis, a
+mark starts 4.4 dB below the peak), and the peak falls over 10 s in
+gaps. A fade of more than about 4 dB therefore stopped all new marks until the peak had
+caught up, seconds later.
+
+The test: `cw_decoder_test.c`'s keyer, 12, 20 and 30 WPM with an 8%
+spread, two runs each, the signal faded before the noise is added. A dip
+is smooth, so many dB deep, every so many seconds; the Rician cases are a
+steady part plus a scattered part (power ratio K) fading at the rate
+given. SNR is of the unfaded signal in 2500 Hz. Mean CER:
+
+| Case | linear, half way (first) | same, peak 1.5 s in gaps | dB, from the floor, 0.5 | dB, from the noise, 0.5 | dB, from the noise, 0.4 (built) |
+|---|---|---|---|---|---|
+| no fade, 20 dB | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% |
+| no fade, 6 dB | 0.0% | 0.0% | 2.4% | 0.0% | 0.0% |
+| 6 dB dips every 3 s | 0.2% | 0.0% | 0.0% | 0.0% | 0.0% |
+| 10 dB every 3 s | 69.3% | 0.0% | 0.0% | 0.0% | 0.0% |
+| 15 dB every 3 s | 82.2% | 74.6% | 0.0% | 3.9% | 0.0% |
+| 10 dB every 1.5 s | 79.0% | 62.9% | 0.0% | 0.0% | 0.0% |
+| 15 dB every 6 s | 53.2% | 0.2% | 0.1% | 0.0% | 0.0% |
+| 20 dB every 4 s, at 25 dB | 67.9% | 69.4% | 0.0% | 39.4% | 0.0% |
+| Rician K 4, 0.5 Hz | 42.9% | 30.0% | 1.7% | 3.9% | 1.7% |
+| Rician K 1, 0.3 Hz | 72.4% | 68.9% | 11.1% | 20.8% | 12.9% |
+| Rician K 1, 1 Hz | 121.5% | 161.8% | 17.9% | 50.7% | 17.7% |
+| 10 dB every 3 s, at 10 dB | 81.6% | 80.5% | 5.7% | 98.0% | 1.0% |
+| **mean over the fades** | **67.0%** | **54.8%** | **3.7%** | **21.7%** | **3.3%** |
+
+- A faster peak in gaps helps only shallow, slow fades.
+- Measuring the threshold in dB is what fixes them: with the peak 30 dB
+  above the noise, a mark now starts 15 dB below the peak, not 4.4.
+- Measured from the floor, the threshold sat too close to the noise at
+  6 dB SNR: on the grid, 13.0% at 6 dB against 9.5%. Measured from the
+  mean noise level (which sits above the floor) it doesn't: 9.7% at 6 dB
+  and 10.4% at 15 dB at 0.4 of the way. At 0.5 from the noise the deep
+  fades come back (21.7%); 0.45 gave 7.6%.
+- The Rician K 1 cases fade into the noise for part of the time; what is
+  lost there is lost to the ear too.
+
+A lower threshold makes each mark a few ms longer and each gap a few ms
+shorter. The classifier doesn't mind (it compares marks with marks and
+gaps with gaps), but the speed read from the dot alone came out 1 to 2
+WPM low. `cw_decoder_get_wpm()` takes the unit from a dot and the gap
+inside a character together, so the two errors cancel.
+
 ## Caveats
 
 - The fists are a model; their spreads are my estimates.
-- The noise is white, and the signal is steady: no fading, no QRM, no
-  chirp.
+- The noise is white, and there is no QRM and no chirp. The grid's
+  signal is steady; fading is tested only in §9.
 - The ceiling is an oracle (the true dot length and the best thresholds
   for each run). No decoder will quite reach it, but the simple
   detector's column shows detection is not what stands between a decoder
