@@ -182,6 +182,9 @@ unless `MAXIBITX_RIGCTL_TRACE=1` is in maxibitx's environment.
 | `\stop_morse` | `RPRT 0` | Stops text: the element being sent completes, the rest is dropped |
 | `u MORSE` | `1` | 1 while text is queued or being sent (extension, read-only) |
 | `u PADREV` / `U PADREV <0\|1>` | `0` / `RPRT 0` | Paddle reversal: 0 tip = dot, ring = dash (the default); 1 swaps them. No effect on a straight key, which keys from either contact (extension) |
+| `\get_cw_text <n>` | `153 9 CQ DE W1A` | The CW decoder's text from character number `n` on: the next number, the text's length, then the text, each after a space, on one line (extension). Characters are numbered from 0 since maxibitx started; send `0` first (the reply carries what it still holds, up to 1024 characters), then the number each reply gives. A number from the future gets nothing and the current number. Text is upper case, a space between words, prosigns as `<AR>` `<SK>` ..., `*` for a character the decoder couldn't read, and `\|` where a transmission ended (a pause of 2 s or more) or the decoder started afresh. The length is given because a client that strips the line loses a trailing space. The decoder runs in CW and CWR only. See [`dsp_design_notes/rx_cw_decoder_study.md`](dsp_design_notes/rx_cw_decoder_study.md) §8 |
+| `u CWDECODE` / `U CWDECODE <0\|1>` | `1` / `RPRT 0` | The CW decoder on (the default) or off. Turning it on starts afresh. It also starts afresh on entering CW or CWR from another mode, and when the receiver moves more than 300 Hz (a retune or RIT); a smaller move keeps what it has learned (extension) |
+| `l DECODEWPM` | `18` | The speed the decoder has learned from the signal, WPM (for Farnsworth spacing, the character speed), or 0 before it has learned one. Read-only (extension) |
 | `u TONE` / `U TONE <0\|1\|2>` | `0` / `RPRT 0` | TX test-tone generator: 0 off, 1 single tone (1 kHz from the dial; in CW and CWR at the CW pitch, so the carrier is on the dial), 2 two-tone 700 + 1900 Hz. Doesn't key the radio; any PTT does. Off after 30 s in TX. Out of range: `RPRT -1` (extension) |
 | `v` / `V <vfo>` | `VFOA` / `RPRT 0` | Single VFO; any `V` is accepted. |
 | `chk_vfo` | `0` | Not in VFO mode - send commands without a VFO argument. |
@@ -189,7 +192,8 @@ unless `MAXIBITX_RIGCTL_TRACE=1` is in maxibitx's environment.
 | `q`, `Q`, `quit` | (connection closes) | |
 
 Anything else replies `RPRT -1`. The extensions (`MICGAIN`, `ALC`,
-`NARROW`, `FFTFILT`, `CWWIDTH`, `XTALCENTER`, `TONE`, `PADREV`, `KEYER`, `MORSE`) aren't Hamlib names or aren't in Hamlib's
+`NARROW`, `FFTFILT`, `CWWIDTH`, `XTALCENTER`, `TONE`, `PADREV`, `KEYER`, `MORSE`, `CWDECODE`,
+`DECODEWPM`, `\get_cw_text`) aren't Hamlib names or aren't in Hamlib's
 units, so a stock Hamlib client won't use them, but they follow the same
 syntax. `AF`, `CWPITCH`, `KEYSPD`, `RFPOWER` and `STRENGTH` are real Hamlib levels and are
 advertised in `dump_state`.
@@ -494,3 +498,5 @@ What an application can't do today without changes to the daemon:
 - **HPSDR sample rates other than 96 kHz**, and more than one HPSDR
   client.
 - **TCI's 192 and 384 kHz I/Q**, second receiver, and line-out stream.
+- **Decoded CW over TCI or CAT.** The decoder's text is on rigctld only
+  (`\get_cw_text`).
