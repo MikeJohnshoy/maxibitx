@@ -8,6 +8,7 @@
 #include "sound.h"
 #include "cw.h"       // cw_set_pitch() - radio_set_cw_pitch() below
 #include "rx_audio.h" // rx_audio_set_demod() - radio_set_mode() below
+#include "cw_decoder.h" // cw_decoder_reset() - decoder_follow() below
 #include "hw_settings.h" // hw_settings_tx_allowed() - radio_tx_allowed() below
 #include <pthread.h>
 #include <stdatomic.h>
@@ -71,6 +72,20 @@ int radio_tx_freq(void) {
 // here. Why 95: docs/03_tx_processing_pipeline.md, TX_MASTER_VOL.
 #define TX_MASTER_VOL 95
 
+// The CW decoder learns one sender's timing. When the receiver moves far
+// enough that it is probably hearing another station, it starts afresh;
+// a small move (tuning onto the same signal) keeps what it learned.
+#define DECODER_RETUNE_HZ 300
+static int decoder_listen_hz = 0;
+
+static void decoder_follow(int listen_hz) {
+  int moved = listen_hz - decoder_listen_hz;
+  if (moved > DECODER_RETUNE_HZ || moved < -DECODER_RETUNE_HZ) {
+    cw_decoder_reset();
+    decoder_listen_hz = listen_hz;
+  }
+}
+
 void radio_tune_to(uint32_t f) {
   freq_hdr = f;
   // Clear RIT and XIT: an offset from the old frequency means nothing here.
@@ -84,6 +99,7 @@ void radio_tune_to(uint32_t f) {
   si5351bx_setfreq(2, f + xtal_filter_center);
   vfo_start(&lo, RX_IF_FREQ_HZ, lo.phase);
   radio_hw_tune(f); // the band's LPF, on a board whose LPFs are in the RX path
+  decoder_follow((int)f);
 }
 
 void radio_set_rit(int hz) {
@@ -94,6 +110,7 @@ void radio_set_rit(int hz) {
   if (!in_tx) {
     si5351bx_setfreq(2, freq_hdr + rit_applied_hz() + xtal_filter_center);
   }
+  decoder_follow(freq_hdr + rit_applied_hz());
   // In TX: stored only; radio_tx_apply() applies it when RX resumes. TX's
   // own clk2 never includes it.
 }
@@ -107,6 +124,7 @@ void radio_set_rit_enabled(int on) {
   if (!in_tx) {
     si5351bx_setfreq(2, freq_hdr + rit_applied_hz() + xtal_filter_center);
   }
+  decoder_follow(freq_hdr + rit_applied_hz());
 }
 
 int radio_rit_enabled(void) {
@@ -135,6 +153,11 @@ int radio_xit_enabled(void) {
 static enum radio_mode current_mode = RADIO_STARTUP_MODE;
 
 void radio_set_mode(enum radio_mode m) {
+  // Entering CW or CWR from another mode: what the decoder heard before
+  // wasn't CW.
+  int was_cw = current_mode == RADIO_MODE_CW || current_mode == RADIO_MODE_CWR;
+  if ((m == RADIO_MODE_CW || m == RADIO_MODE_CWR) && !was_cw)
+    cw_decoder_reset();
   current_mode = m;
   // Keep rx_audio.c's demodulator in step. DIGITAL receives as USB, the
   // FT8/digital convention (sound.c transmits it as USB too). CWR is the
