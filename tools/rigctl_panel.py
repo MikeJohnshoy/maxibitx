@@ -67,6 +67,12 @@ rigctld commands used:
     u TONE / U TONE         test tone: 0 off, 1 single, 2 two-tone
     b <text>, \\stop_morse   send CW text, stop it (CW/CWR only)
     u MORSE                 1 while text is queued or going out
+    \\get_cw_text <n>        the CW decoder's text from character n on
+    l DECODEWPM             the speed the decoder has learned
+
+In CW and CWR the waterfall is shorter, and two lines under it show what
+the CW decoder reads; the status line adds the speed it has learned. Tap
+the lines to clear them.
 
 Requires Python 3 with tkinter, and numpy. On Raspberry Pi OS:
 `sudo apt install python3-tk python3-numpy fonts-ibm-plex` (the fonts
@@ -228,6 +234,8 @@ AMBER = "#F4A93B"
 INK = "#1A1206"
 TRACE = "#8FD3F4"
 TX_RED = "#E5484D"
+DECODE_LINES = 2
+DECODE_KEEP = 2000                  # characters of decoded text kept on screen
 RIT_GREEN = "#7FE0A0"            # the RIT marker; XIT's is TX_RED
 
 
@@ -1135,6 +1143,54 @@ class Panel(tk.Tk):
         self.waterfall_image = None
         self.canvas.bind("<Configure>", self.on_canvas_resized)
 
+        # The CW decoder's text, under the waterfall in CW and CWR only.
+        self.decode_text = tk.Text(spec, height=DECODE_LINES, wrap="char", bg=PANEL, fg=TEXT,
+                                   font=(self.ui, usz(13)), relief="flat", bd=0,
+                                   highlightthickness=0, padx=6, pady=2, cursor="arrow",
+                                   takefocus=0)
+        self.decode_text.tag_configure("wpm", foreground=MUTED)
+        self.decode_text.configure(state="disabled")
+        self.decode_text.bind("<Button-1>", lambda e: self.clear_decode())
+        self.decode_seq = 0
+        self.decode_ok = True              # False on a maxibitx without the decoder
+        self.status_wpm = 0
+
+    def show_decode(self, on):
+        if on and self.decode_ok:
+            self.decode_text.grid(row=2, column=0, sticky="ew", pady=(4, 0))
+        else:
+            self.decode_text.grid_remove()
+
+    def clear_decode(self):
+        self.decode_text.configure(state="normal")
+        self.decode_text.delete("1.0", "end")
+        self.decode_text.configure(state="disabled")
+
+    def apply_decode(self, reply, wpm):
+        """A \\get_cw_text reply: the next character number, the text's
+        length and the text, with '|' for each line break. The reply was
+        stripped, so the length restores a trailing space."""
+        parts = reply.split(" ", 2)
+        try:
+            seq, length = int(parts[0]), int(parts[1])
+        except (ValueError, IndexError):
+            self.decode_ok = False        # RPRT -1: no decoder in this maxibitx
+            self.show_decode(False)
+            return
+        self.decode_seq = seq
+        text = (parts[2] if len(parts) > 2 else "").ljust(length)
+        t = self.decode_text
+        t.configure(state="normal")
+        if text:
+            t.insert("end", text.replace("|", "\n"))
+            excess = int(t.count("1.0", "end", "chars")[0]) - DECODE_KEEP
+            if excess > 0:
+                t.delete("1.0", f"1.0 + {excess} chars")
+        t.see("end")
+        t.configure(state="disabled")
+        if wpm is not None:
+            self.status_wpm = wpm
+
     def build_mode_row(self):
         holder = ttk.Frame(self, padding=(6, 6, 6, 0))
         holder.grid(row=3, column=0, sticky="ew")
@@ -1233,6 +1289,7 @@ class Panel(tk.Tk):
                 frame.grid(row=0, column=0, sticky="ew")
             else:
                 frame.grid_remove()
+        self.show_decode(key == "cw")
         cw_state = ["!disabled"] if key == "cw" else ["disabled"]
         for w in (self.cw_entry, self.send_button, self.stop_button):
             w.state(cw_state)
@@ -1386,6 +1443,13 @@ class Panel(tk.Tk):
                     self.after(0, self.disconnect)
                     return
                 replies[cmd] = r
+            if self.mode in ("CW", "CWR") and self.decode_ok:
+                r = self.client.query(f"\\get_cw_text {self.decode_seq}")
+                if r is None:
+                    self.after(0, self.disconnect)
+                    return
+                w = self.client.query("l DECODEWPM") if full else None
+                self.after(0, lambda r=r, w=w: self.apply_decode(r, self.parse_int(w)))
             if full:
                 self.after(0, lambda r=replies: self.apply_poll(r))
             else:
@@ -1432,6 +1496,13 @@ class Panel(tk.Tk):
                 self.apply_int(r["u MUTE"], lambda v: self.show_mute(v != 0))
         finally:
             self.syncing = False
+
+    @staticmethod
+    def parse_int(reply):
+        try:
+            return int(float(reply))
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def apply_int(reply, setter):
@@ -1990,6 +2061,8 @@ class Panel(tk.Tk):
             readout = f"peak {peak_db:.0f} dB"
             if self.noise_db is not None and self.auto_floor_var.get():
                 readout += f"   noise {self.noise_db:.0f} dB"
+        if self.mode in ("CW", "CWR") and self.decode_ok and self.status_wpm:
+            readout += f"   decoding {self.status_wpm} WPM"
         if self.status_message and time.monotonic() < self.status_until:
             self.status_label.configure(text=self.status_message)
         else:
