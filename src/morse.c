@@ -56,6 +56,26 @@ const char *morse_prosign_name(unsigned char c) {
   return NULL;
 }
 
+int morse_decode(const char *pattern) {
+  if (!pattern || !pattern[0])
+    return -1;
+  for (int i = 0; i < 26; i++)
+    if (strcmp(pattern, letters[i]) == 0)
+      return 'A' + i;
+  for (int i = 0; i < 10; i++)
+    if (strcmp(pattern, digits[i]) == 0)
+      return '0' + i;
+  // prosigns before punctuation: AR, AS and BT share their patterns with
+  // + & and =, and on the air they are usually the prosigns
+  for (int i = 0; i < MORSE_PROSIGN_END - MORSE_AR; i++)
+    if (strcmp(pattern, prosigns[i].pattern) == 0)
+      return MORSE_AR + i;
+  for (size_t i = 0; i < sizeof(punctuation) / sizeof(punctuation[0]); i++)
+    if (strcmp(pattern, punctuation[i].pattern) == 0)
+      return (unsigned char)punctuation[i].c;
+  return -1;
+}
+
 static void note_skipped(char *skipped, int skip_max, char c) {
   if (!skipped || skip_max <= 0)
     return;
