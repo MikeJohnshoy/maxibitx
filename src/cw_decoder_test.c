@@ -5,7 +5,7 @@
 // decoder 1024 samples at a time as rx_audio.c does, and scores the text by
 // edit distance (character error rate, spaces ignored). The fists are
 // simple: element and gap lengths spread by a lognormal of the given
-// relative size. tools/cw_study/cw_bench.py is the full bench.
+// relative size. Fading is a dip of so many dB every so many seconds. tools/cw_study/cw_bench.py is the full bench.
 
 #include "cw_decoder.h"
 #include <math.h>
@@ -102,6 +102,14 @@ static void add_noise(double snr_db) {
     audio[i] += (float)(sigma * gauss());
 }
 
+// Fade the signal (before the noise): a dip of depth_db, smooth, every period_s.
+static void fade(double depth_db, double period_s) {
+  for (long i = 0; i < n_audio; i++) {
+    double x = 0.5 - 0.5 * cos(2 * M_PI * i / FS / period_s);
+    audio[i] *= (float)pow(10, -depth_db / 20 * x);
+  }
+}
+
 static char decoded[8192];
 static int learned_wpm;
 
@@ -171,17 +179,21 @@ static void check(int ok, const char *what) {
     failures++;
 }
 
+static double fade_db, fade_s;       // a fade for run_text(), if fade_db
+
 static void run_text(const char *name, const char *text, double wpm, double farns, double sd,
                      double snr, double max_cer) {
   memset(audio, 0, sizeof(float) * (size_t)MAX_S * FS);
   n_audio = 0;
   key(text, wpm, farns, sd, 1.0);
   put_tone(2.0, 0);
+  if (fade_db)
+    fade(fade_db, fade_s);
   add_noise(snr);
   decode();
   double c = cer(text, decoded);
   char what[160];
-  snprintf(what, sizeof(what), "%-34s CER %5.1f%% (limit %.0f%%), %d WPM learned",
+  snprintf(what, sizeof(what), "%-40s CER %5.1f%% (limit %.0f%%), %d WPM learned",
            name, 100 * c, 100 * max_cer, learned_wpm);
   check(c <= max_cer, what);
   if (c > max_cer) {
@@ -206,6 +218,11 @@ int main(void) {
   run("hand-sent, 25 WPM, spread 12%", 25, 0, 0.12, 15, 0.03);
   run("hand-sent, 35 WPM, spread 12%", 35, 0, 0.12, 15, 0.03);
   run("machine, 20 WPM, 6 dB", 20, 0, 0.0, 6, 0.02);
+  fade_db = 15, fade_s = 3;
+  run("20 WPM, 20 dB, 15 dB dips every 3 s", 20, 0, 0.08, 20, 0.02);
+  fade_db = 10, fade_s = 1.5;
+  run("20 WPM, 20 dB, 10 dB dips every 1.5 s", 20, 0, 0.08, 20, 0.02);
+  fade_db = 0;
 
   // noise only: no text
   memset(audio, 0, sizeof(float) * (size_t)MAX_S * FS);
