@@ -23,6 +23,10 @@
 // from radio.c rather than here.
 //   4. AGC, then rx_volume for out[] only.
 //
+// In CW and CWR, stage 2's output also goes to the CW decoder
+// (cw_decoder.c), before stage 3, so what it decodes doesn't depend on the
+// narrow filter's setting: it does its own filtering at the pitch.
+//
 // The AGC measures the RAW input magnitude, not any stage's output: its
 // envelope has to be frequency-independent, or the gain undoes the very
 // selectivity stages 1 and 3 provide. The consequence, by design: a
@@ -36,6 +40,7 @@
 
 #include "rx_audio.h"
 #include "cw.h"
+#include "cw_decoder.h"
 #include "narrow_filter_bank.h"
 #include "rx_filter.h"
 #include "vfo.h"
@@ -747,6 +752,10 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
         // Stage 3, elliptic - always run, so its state is warm if selected.
         elliptic_buf[k] = (float)narrow_filter_apply(&narrow_filter, audio);
     }
+
+    // The CW decoder takes stage 2's output (see the file header).
+    if (demod == RX_DEMOD_CW || demod == RX_DEMOD_CWR)
+        cw_decoder_process(audio_buf, n, narrow_bank_pitch_hz[narrow_pitch_idx]);
 
     // Stage 3, FFT - block-based, and also always run. rx_filter needs
     // exactly RX_FILTER_BLOCK_LEN samples (sound.c's PERIOD_FRAMES); any
