@@ -53,6 +53,12 @@ The screen, top to bottom:
   above it goes to signals; the status line shows the noise level next
   to the peak. Off, the bottom is fixed at −100 dB. The top stays at
   `SPECTRUM_DB_CEILING`.
+- **Decoded CW:** in CW and CWR the waterfall is shorter, and two lines
+  under it show what maxibitx's CW decoder reads (`\get_cw_text`, polled
+  four times a second); the status line adds the speed it has learned
+  (`l DECODEWPM`). A new line starts when a transmission ends. Tap the
+  lines to clear them. Against a maxibitx without the decoder the lines
+  don't appear.
 - **By mode:** in CW, ten macro buttons; in USB/LSB, mic gain and the ALC
   meter; in DIGI, a note that the digital-mode program has the audio.
 - **Bottom row:** keyer type, WPM, the CW text field, Send and Stop,
