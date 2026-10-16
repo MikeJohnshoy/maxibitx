@@ -28,6 +28,7 @@
 #include "keyer.h"
 #include "knobs.h"
 #include "rx_audio.h"
+#include "cw_decoder.h"
 #include "tone_gen.h"
 #include <stdio.h>
 #include <time.h>
@@ -147,6 +148,8 @@ int main(int argc, char **argv) {
   // table above already built, same as cw_init(); no hardware of its
   // own to fail to open, so nothing to report but success.
   rx_audio_init();
+  // The CW decoder (src/cw_decoder.c), fed by rx_audio.c in CW and CWR.
+  cw_decoder_init();
   // radio_get_cw_pitch(), not CW_PITCH_HZ: rx_audio_init() selects the
   // filter-bank entry nearest that constant, so printing the constant would
   // report a pitch the radio isn't using if the bank's rungs ever change.
