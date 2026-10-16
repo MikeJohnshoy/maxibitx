@@ -17,6 +17,7 @@
 #include "cw.h"
 #include "radio.h"    // freq_hdr, in_tx, tuning, PTT, RIT, mode
 #include "rx_audio.h"
+#include "cw_decoder.h" // u/U CWDECODE, l DECODEWPM, \get_cw_text below
 #include "sound.h"    // mic gain, TX power and the ALC reading - l/L below
 #include "tone_gen.h" // u/U TONE below
 #include "hw_settings.h" // tx_band_scales[] - dump_state TX ranges
@@ -354,6 +355,13 @@ static int handle_line(int fd, char *line)
             snprintf(buf, sizeof(buf), "%d\n", rx_audio_get_narrow_width());
             send_line(fd, buf);
             get_log("rigctl: l CWWIDTH -> %d Hz\n", rx_audio_get_narrow_width());
+        } else if (strcmp(level_name, "DECODEWPM") == 0) {
+            // Extension, read-only: the received speed the CW decoder has
+            // learned, in WPM (the character speed, for Farnsworth), or 0.
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%d\n", cw_decoder_get_wpm());
+            send_line(fd, buf);
+            get_log("rigctl: l DECODEWPM -> %d\n", cw_decoder_get_wpm());
         } else if (strcmp(level_name, "XTALCENTER") == 0) {
             // Extension: xtal_filter_center in Hz, for tools/xtal_sweep.py.
             char buf[16];
@@ -480,6 +488,11 @@ static int handle_line(int fd, char *line)
             snprintf(buf, sizeof(buf), "%d\n", rx_audio_get_mute());
             send_line(fd, buf);
             get_log("rigctl: u MUTE -> %d\n", rx_audio_get_mute());
+        } else if (strcmp(func_name, "CWDECODE") == 0) {
+            char buf[8];
+            snprintf(buf, sizeof(buf), "%d\n", cw_decoder_get_enabled());
+            send_line(fd, buf);
+            get_log("rigctl: u CWDECODE -> %d\n", cw_decoder_get_enabled());
         } else {
             send_rprt(fd, -1);
             printf("rigctl: u %s -> unsupported function\n", func_name);
@@ -529,6 +542,11 @@ static int handle_line(int fd, char *line)
                 send_rprt(fd, 0);
                 printf("rigctl: U KEYER %d -> keyer %s\n", val, keyer_mode_name((enum keyer_mode)val));
             }
+        } else if (strcmp(func_name, "CWDECODE") == 0) {
+            // The CW decoder (cw_decoder.h), on or off; on starts afresh.
+            cw_decoder_set_enabled(val != 0);
+            send_rprt(fd, 0);
+            printf("rigctl: U CWDECODE %d -> CW decoder %s\n", val, val ? "on" : "off");
         } else if (strcmp(func_name, "MUTE") == 0) {
             // The local speaker; the volume is kept and returns on unmute.
             rx_audio_set_mute(val != 0);
@@ -593,6 +611,29 @@ static int handle_line(int fd, char *line)
                 printf(" (skipped, not in the Morse table: %s)", skipped);
             printf("\n");
         }
+        return 0;
+    }
+
+    if (strncmp(cmd, "\\get_cw_text", 12) == 0 && (cmd[12] == '\0' || cmd[12] == ' ')) {
+        // Extension: the CW decoder's text from character number <since>
+        // on (cw_decoder_read()). Reply: the next number, the text's length
+        // and the text, each after a space, on one line, with each line
+        // break as '|'. The length is there because a client that strips
+        // the reply would lose a trailing space. Pass 0 first (the decoder
+        // returns what it still holds), then the number each reply gives.
+        unsigned long since = 0;
+        if (cmd[12] == ' ')
+            since = strtoul(cmd + 13, NULL, 10);
+        char text[CW_DECODER_TEXT_KEEP + 1];
+        uint32_t next = cw_decoder_read((uint32_t)since, text, sizeof(text));
+        for (char *c = text; *c; c++)
+            if (*c == '\n')
+                *c = '|';
+        char buf[CW_DECODER_TEXT_KEEP + 24];
+        snprintf(buf, sizeof(buf), "%u %zu %s\n", (unsigned)next, strlen(text), text);
+        send_line(fd, buf);
+        get_log("rigctl: \\get_cw_text %lu -> %u, %zu characters\n", since, (unsigned)next,
+                strlen(text));
         return 0;
     }
 
