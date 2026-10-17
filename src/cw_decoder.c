@@ -5,7 +5,7 @@
 //
 //   1. Envelope, every 1 ms. The audio (the CW tone at the pitch) is mixed
 //      down to 0 Hz, summed 16 samples at a time to 6 kHz, lowpassed at
-//      150 Hz (4th-order Butterworth, on I and Q) and its magnitude taken
+//      LPF_HZ (4th-order Butterworth, on I and Q) and its magnitude taken
 //      every 6th sample.
 //   2. Mark or gap, every 1 ms: THRESHOLD_FRAC of the way, in dB, from
 //      the mean noise level up to a tracked peak, with HYSTERESIS of that
@@ -30,9 +30,14 @@
 //      one kind of mark (E, T, S, O...) is told dot or dash by comparing it
 //      with the gaps inside characters, which are one unit long. Nothing
 //      is decoded until MIN_MARKS marks and MIN_GAPS gaps have been seen;
-//      what came before is decoded then. A mark or gap shorter than
-//      BLIP_DOTS of a dot (MIN_BLIP_MS at least) is noise and joins the
-//      event before it. A gap of PAUSE_MS, and PAUSE_OVER_WORD word gaps,
+//      what came before is decoded then. A mark shorter than
+//      MARK_BLIP_DOTS of a dot (MIN_MARK_BLIP_MS at least), or a gap
+//      shorter than GAP_BLIP_DOTS (MIN_GAP_BLIP_MS), is noise and joins
+//      the event before it. Marks get the larger limit: a noise crash
+//      makes short false marks, and if they were learned as dots the speed
+//      estimate would jump to 60-100 WPM and real dots read as dashes.
+//      Gaps keep the smaller one, since a heavy fist's gaps inside a
+//      character can be a fraction of its long dots. A gap of PAUSE_MS, and PAUSE_OVER_WORD word gaps,
 //      ends the transmission: the timing is learned afresh, since the next
 //      may be another station.
 //
@@ -61,7 +66,7 @@
 #define BOX 16                      // 96 kHz -> 6 kHz
 #define FS_LO (FS / BOX)
 #define TICK_LO (FS_LO / 1000)      // low-rate samples per 1 ms tick
-#define LPF_HZ 150.0
+#define LPF_HZ 100.0               // passes 55 WPM; narrower costs heavy fists
 
 // stage 2
 #define PEAK_MARK_TAU_MS 500.0
@@ -84,8 +89,10 @@
 #define PENDING_MAX 96
 #define CHAR_FRAC 0.42f
 #define WORD_FRAC 0.5f
-#define BLIP_DOTS 0.15f
-#define MIN_BLIP_MS 6
+#define MARK_BLIP_DOTS 0.25f
+#define MIN_MARK_BLIP_MS 10         // a 55 WPM dot is 22 ms
+#define GAP_BLIP_DOTS 0.15f
+#define MIN_GAP_BLIP_MS 6
 #define PAUSE_MS 2000
 #define PAUSE_OVER_WORD 2.5f
 #define MAX_CODE 9                  // HH is 8 elements
@@ -437,9 +444,17 @@ static void commit(int mark, int ms) {
   classify(mark, ms);
 }
 
+// The shortest mark or gap that counts, for the event being measured.
 static int blip_ms(void) {
-  int b = (int)(BLIP_DOTS * d.dot_ms);
-  return b > MIN_BLIP_MS ? b : MIN_BLIP_MS;
+  int b, min;
+  if (d.cur_mark) {
+    b = (int)(MARK_BLIP_DOTS * d.dot_ms);
+    min = MIN_MARK_BLIP_MS;
+  } else {
+    b = (int)(GAP_BLIP_DOTS * d.dot_ms);
+    min = MIN_GAP_BLIP_MS;
+  }
+  return b > min ? b : min;
 }
 
 // One 1 ms tick of the mark/gap decision from stage 2.
