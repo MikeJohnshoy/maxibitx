@@ -302,7 +302,7 @@ sees doesn't depend on the speaker volume. `sound.c` decimates it to
 **The CW decoder.** In CW and CWR, stage 2's output also goes to
 `cw_decoder.c`, before stage 3, so what it decodes doesn't depend on the
 narrow filter's setting. It mixes the tone down from the pitch, filters
-it to 150 Hz, decides mark or gap every millisecond, and learns the
+it to 100 Hz, decides mark or gap every millisecond, and learns the
 sender's timing from the signal itself, with no WPM setting. Its text
 reaches clients through rigctld's `\get_cw_text`, and the control panel
 shows it under the waterfall
