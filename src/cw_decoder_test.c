@@ -5,7 +5,8 @@
 // decoder 1024 samples at a time as rx_audio.c does, and scores the text by
 // edit distance (character error rate, spaces ignored). The fists are
 // simple: element and gap lengths spread by a lognormal of the given
-// relative size. Fading is a dip of so many dB every so many seconds. tools/cw_study/cw_bench.py is the full bench.
+// relative size. Fading is a dip of so many dB every so many seconds; QRN
+// is short bursts of noise (2 to 15 ms, Hann-shaped) at random times. tools/cw_study/cw_bench.py is the full bench.
 
 #include "cw_decoder.h"
 #include <math.h>
@@ -110,7 +111,24 @@ static void fade(double depth_db, double period_s) {
   }
 }
 
+// QRN: rate bursts a second, each lo_db to hi_db above the tone, measured
+// in 500 Hz.
+static void add_qrn(double rate, double lo_db, double hi_db) {
+  double inband = sqrt(500.0 / (FS / 2.0));
+  long n_bursts = (long)(rate * n_audio / FS);
+  for (long b = 0; b < n_bursts; b++) {
+    long at = (long)(uniform() * n_audio);
+    long len = (long)((0.002 + 0.013 * uniform()) * FS);
+    double amp = pow(10, (lo_db + (hi_db - lo_db) * uniform()) / 20) / inband / sqrt(2.0);
+    for (long i = 0; i < len && at + i < n_audio; i++) {
+      double w = 0.5 - 0.5 * cos(2 * M_PI * i / (len - 1));
+      audio[at + i] += (float)(amp * w * gauss());
+    }
+  }
+}
+
 static char decoded[8192];
+static int max_wpm;                  // the highest speed the decoder reported
 static int learned_wpm;
 
 static void decode(void) {
@@ -118,6 +136,7 @@ static void decode(void) {
   size_t used = 0;
   decoded[0] = 0;
   learned_wpm = 0;
+  max_wpm = 0;
   cw_decoder_init();
   uint32_t seq = cw_decoder_read(UINT32_MAX, buf, 1);  // from now on
   for (long i = 0; i + 1024 <= n_audio + 2 * FS; i += 1024) {
@@ -127,6 +146,8 @@ static void decode(void) {
     cw_decoder_process(block, 1024, (int)PITCH);
     if (cw_decoder_get_wpm())
       learned_wpm = cw_decoder_get_wpm();
+    if (learned_wpm > max_wpm)
+      max_wpm = learned_wpm;
     seq = cw_decoder_read(seq, buf, sizeof(buf));
     size_t l = strlen(buf);
     if (used + l < sizeof(decoded)) {
@@ -180,6 +201,7 @@ static void check(int ok, const char *what) {
 }
 
 static double fade_db, fade_s;       // a fade for run_text(), if fade_db
+static double qrn_rate;              // QRN for run_text(), 0 to 20 dB, if qrn_rate
 
 static void run_text(const char *name, const char *text, double wpm, double farns, double sd,
                      double snr, double max_cer) {
@@ -190,6 +212,8 @@ static void run_text(const char *name, const char *text, double wpm, double farn
   if (fade_db)
     fade(fade_db, fade_s);
   add_noise(snr);
+  if (qrn_rate)
+    add_qrn(qrn_rate, 0, 20);
   decode();
   double c = cer(text, decoded);
   char what[160];
@@ -223,6 +247,14 @@ int main(void) {
   fade_db = 10, fade_s = 1.5;
   run("20 WPM, 20 dB, 10 dB dips every 1.5 s", 20, 0, 0.08, 20, 0.02);
   fade_db = 0;
+  run("hand-sent, 55 WPM, spread 8%", 55, 0, 0.08, 15, 0.02);
+  run("machine, 20 WPM, 0 dB", 20, 0, 0.0, 0, 0.05);
+
+  // QRN: short noise crashes mustn't be learned as dots
+  qrn_rate = 2;
+  run("15 WPM, QRN 2 a second, 0-20 dB over", 15, 0, 0.08, 15, 0.05);
+  check(max_wpm <= 22, "  ... and the speed it reported stayed under 1.5 x 15 WPM");
+  qrn_rate = 0;
 
   // noise only: no text
   memset(audio, 0, sizeof(float) * (size_t)MAX_S * FS);
