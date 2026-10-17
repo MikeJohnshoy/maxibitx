@@ -349,9 +349,12 @@ already used in `antialias_filter_design.md`.
   statistics must. §8, the decoder as built: a 1 ms detector with its
   threshold in dB, then dots, dashes and the three gaps each learned from
   the signal (Otsu splits of the last 32 marks and 64 gaps), no WPM
-  setting; mean CER 10.4% against the timing ceiling's 7.4%, machine and
+  setting; mean CER 10.6% against the timing ceiling's 7.4%, machine and
   good fists decoded perfectly from 10 to 35 WPM and Farnsworth 5/18. §9,
   fading: a linear half-way threshold lost short 10-15 dB fades (67% CER
-  over the fade cases); the dB threshold, 3.3%. Text through rigctld
+  over the fade cases); the dB threshold, 3.3%. §10, noise crashes: short
+  false marks learned as dots sent the speed estimate to 60-100 WPM;
+  marks now need 0.25 dot and 10 ms (light QRN at 15 WPM: 108% → 6%), and
+  a 100 Hz envelope filter decodes 0 dB SNR (20 WPM: 16% → 0.8%). Text through rigctld
   `\get_cw_text` and the panel. Status: **built**, decoding well on the
   air; the text prior still to do.
