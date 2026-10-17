@@ -1,7 +1,8 @@
 # A CW decoder for maxibitx: study
 
 Status: **built** - §8 is the decoder in maxibitx (`src/cw_decoder.c`)
-and its measurements; §9 is how it handles fading. §1-6 are the study
+and its measurements; §9 is how it handles fading, §10 noise crashes
+and weaker signals. §1-6 are the study
 that led to it; §7 is a detector fix for the KB2ML decoder in sbitx
 (branch `decoder_fix`), measured on the same bench.
 
@@ -459,7 +460,8 @@ of the block's time.
 
 1. **Envelope.**
    - Mix the tone down from the pitch, sum 16 samples at a time to
-     6 kHz, and lowpass at 150 Hz (4th-order Butterworth on I and Q).
+     6 kHz, and lowpass at 100 Hz (4th-order Butterworth on I and Q;
+     150 Hz until §10).
    - Take the magnitude every millisecond.
 2. **Mark or gap**, every millisecond.
    - 40% of the way, in dB, from the mean noise level up to a tracked
@@ -482,8 +484,9 @@ of the block's time.
      0.42 of the way up from the short centre, which the bench preferred to
      half way: gaps between characters spread more than gaps inside them.
      The long gaps split again, between characters and between words.
-   - **Blips:** a mark or gap shorter than 0.15 dot (6 ms at least) is
-     noise and joins the event before it.
+   - **Blips:** a mark shorter than 0.25 dot (10 ms at least), or a gap
+     shorter than 0.15 dot (6 ms at least), is noise and joins the event
+     before it (§10; both were 0.15 dot and 6 ms before).
    - **Start-up:** nothing is decoded until 4 marks and 4 gaps have been
      seen; those are then decoded with what was learned.
    - **Pauses:** a gap of 2 s, and 2.5 word gaps, ends the transmission. A
@@ -505,26 +508,31 @@ none. The ceiling is the mean.
 | Fist | KB2ML as it was | KB2ML, detector fix | maxibitx | ceiling |
 |---|---|---|---|---|
 | machine | 46.1% | 2.2% | **0.0%** | 0.0% |
-| good | 56.5% | 12.1% | **0.0%** | 0.0% |
+| good | 56.5% | 12.1% | **0.1%** | 0.0% |
 | average | 69.0% | 30.0% | **10.4%** | 8.9% |
-| poor | 80.8% | 57.5% | **43.5%** | 33.5% |
-| heavy | 85.1% | 43.4% | **5.4%** | 3.0% |
-| bug | 59.6% | 26.1% | **6.1%** | 3.0% |
+| poor | 80.8% | 57.5% | **44.0%** | 33.5% |
+| heavy | 85.1% | 43.4% | **6.7%** | 3.0% |
+| bug | 59.6% | 26.1% | **6.0%** | 3.0% |
 | Farnsworth, 5/18 and 10/18 | 74.8% | 6.8% | **2.1%** | 1.7% |
 
-Over the whole grid the mean is 10.4% (12.0% with word breaks), against
+Over the whole grid the mean is 10.6% (12.3% with word breaks), against
 the ceiling's 7.4%. Every machine and good-fist run decodes perfectly at
-every speed. The rest of the maxibitx column:
+every speed but one good-fist cell (0.5% at 20 WPM). The rest of the
+maxibitx column:
 
 | Fist | 10 | 15 | 20 | 25 | 30 | 35 |
 |---|---|---|---|---|---|---|
-| average | 10.7 | 8.6 | 10.0 | 10.7 | 11.2 | 11.1 |
-| heavy | 5.1 | 4.1 | 5.0 | 5.9 | 6.6 | 5.7 |
-| bug | 7.4 | 4.6 | 4.4 | 6.4 | 5.7 | 8.1 |
+| average | 10.7 | 8.6 | 10.0 | 10.7 | 11.7 | 10.6 |
+| heavy | 5.6 | 4.6 | 6.0 | 5.9 | 8.3 | 9.6 |
+| bug | 7.4 | 4.6 | 4.4 | 6.4 | 5.2 | 8.0 |
 
 Farnsworth: good 0.0% at both; average 3.3% at 5/18 and 5.3% at 10/18.
 
-At 6 dB the grid's mean is 9.7% (ceiling 6.9%).
+At 6 dB the grid's mean is 9.8% (ceiling 6.9%).
+
+These include §10's changes. Before them (§9's decoder) the grid was
+10.4% at 15 dB and 9.7% at 6 dB; the difference is the heavy fist at 30
+and 35 WPM (6.6% and 5.7% then), which the narrower filter costs.
 
 These are with the dB threshold of §9. With the first detector (half way
 between peak and floor, linear) they were 10.1% at 15 dB and 9.5% at 6 dB:
@@ -647,11 +655,82 @@ helped speed more and slow speeds less, so 2 was kept. 0.4 of the way,
 with 0.1 hysteresis, was again the best placement; 0.5 lost the deep
 fades again, and 0.3 or other hysteresis was no better.
 
+## 10. Noise crashes, and weaker signals
+
+On the air, a burst of errors on an otherwise well-decoded signal came
+with a speed estimate of 60 to 100 WPM or more, and it took a while to
+recover. The bench had no impulse noise, so it never showed this.
+
+**QRN on the bench.** Bursts of white noise, 2 to 15 ms long and
+Hann-shaped, at random times, added before the receiver's 500 Hz
+filter: "light" is 2 a second at 0 to 20 dB above the tone (in 500 Hz),
+"heavy" 4 a second at 10 to 30 dB. With a good fist at 15 dB SNR, 6
+runs each (mean CER, and the share of the time the reported speed was
+over 1.5 times the sender's):
+
+| | §9 decoder | marks' blip limit raised | and 100 Hz filter (built) |
+|---|---|---|---|
+| light QRN, 15 WPM | 108% (82% of the time) | 1.1% (0.4%) | 6.0% (1.9%) |
+| light QRN, 25 WPM | 56% (36%) | 18% (0.2%) | 24% (0.6%) |
+| light QRN, 45 WPM | 37% (0.5%) | 31% (0%) | 13% (0%) |
+| heavy QRN, 15 WPM | 107% (47%) | 91% (23%) | 88% (26%) |
+| heavy QRN, 25 WPM | 88% (21%) | 92% (15%) | 88% (13%) |
+| text from 60 s of heavy QRN and noise | 158 characters | 90 | 112 |
+
+**The cause** is short false marks. A crash in a gap makes a mark of a
+few to fifteen ms; anything over 6 ms (or 0.15 dot) was learned, and a
+few of them give Otsu a new short class. The dot estimate falls to 10 to
+20 ms, which is the 60 to 120 WPM shown, and real dots are then read as
+dashes until the false marks leave the 32-mark window, about ten
+characters. Marks now have to last 0.25 dot, and 10 ms, to count; a 55 WPM
+dot is 22 ms. Gaps keep 0.15 dot and 6 ms: raising both broke the heavy
+fist (4.9% to 30%), whose gaps inside a character can be a fraction of
+its long dots. 0.35 dot for marks broke 45 WPM.
+
+Two other guards were tried and left out:
+
+- **A speed cap** (no mark under 0.6 of a 60 WPM dot learned) helped
+  (light QRN at 15 WPM: 94% to 37%), but the blip limit, which keeps the
+  false marks out of the decoded text as well as the timing, did better.
+- **A peak that only rises on a level that lasts 8 ms**, so a crash
+  can't lift the threshold above the signal. Applied always, it closed
+  the squelch at 0 dB SNR (100% CER); applied only once the peak is 8
+  times the noise, it helped heavy QRN at 45 WPM (94% to 37%) but
+  doubled it at 15 WPM.
+
+**The filter.** The envelope lowpass was 150 Hz, which passes about
+300 Hz of noise; a 20 WPM dot needs far less. Narrower filters, with the
+blip change, on the good fist (6 runs; 0 dB is SNR in 2500 Hz):
+
+| | 150 Hz | 100 Hz (built) | 75 Hz |
+|---|---|---|---|
+| 0 dB, 12 WPM | 23.7% | 0.0% | 0.0% |
+| 0 dB, 20 WPM | 16.2% | 0.8% | 0.7% |
+| -3 dB, 20 WPM | 99.9% | 99.3% | 90.2% |
+| heavy fist, 15 dB, 25 WPM | 5.7% | 6.5% | 9.3% |
+| good fist, 15 dB, 55 WPM | 0.0% | 0.0% | 0.0% |
+| 50 Hz off tune, 6 dB | 0.2% | 0.2% | 0.2% |
+| Rician K 1, 0.3 Hz | 10.1% | 8.8% | 8.1% |
+
+75 Hz decodes no more than 100 Hz at 0 dB and smears a heavy fist's short
+gaps more, so 100 Hz was kept. Neither moves the edge at -3 dB: there the
+squelch (peak at least 4 times the noise) closes, and lowering it to 2.5
+(with the 40 and 20 Hz filters tried) printed 400 to 700 characters a
+minute from noise alone. A filter narrow
+enough to need tuning help (about 20 Hz) gained another 3 dB in a first
+look, and would need a filter chosen by the speed and frequency
+tracking; that was not pursued.
+
+`make test-cw-decoder` adds 55 WPM, 0 dB, and 15 WPM in light QRN (CER
+under 5%, and the reported speed under 1.5 times the sender's); the §9
+decoder fails the QRN case at 82% and the 0 dB one at 8.2%.
+
 ## Caveats
 
 - The fists are a model; their spreads are my estimates.
 - The noise is white, and there is no QRM and no chirp. The grid's
-  signal is steady; fading is tested only in §9.
+  signal is steady; fading is tested only in §9, QRN only in §10, and
+  QRN is a model of my choosing (burst lengths, rates, levels).
 - The ceiling is an oracle (the true dot length and the best thresholds
   for each run). No decoder will quite reach it, but the simple
   detector's column shows detection is not what stands between a decoder
