@@ -25,7 +25,8 @@
 //
 // In CW and CWR, stage 2's output also goes to the CW decoder
 // (cw_decoder.c), before stage 3, so what it decodes doesn't depend on the
-// narrow filter's setting: it does its own filtering at the pitch.
+// narrow filter's setting: it does its own filtering at the pitch. The
+// same audio, summed to 6 kHz, fills SPOT's buffer (rx_audio_spot()).
 //
 // The AGC measures the RAW input magnitude, not any stage's output: its
 // envelope has to be frequency-independent, or the gain undoes the very
@@ -41,11 +42,13 @@
 #include "rx_audio.h"
 #include "cw.h"
 #include "cw_decoder.h"
+#include "cw_spot.h"
 #include "narrow_filter_bank.h"
 #include "rx_filter.h"
 #include "vfo.h"
 #include <math.h>
 #include <stdio.h>
+#include <stdatomic.h>
 #include <stdlib.h>   // abs(), for the bank's nearest-value snap
 
 #define SAMPLE_RATE_HZ 96000
@@ -610,6 +613,8 @@ static void narrow_select(int pitch_idx, int width_idx) {
     int pitch_hz = narrow_bank_pitch_hz[pitch_idx];
     int width_hz = narrow_bank_width_hz[width_idx];
 
+    if (pitch_idx != narrow_pitch_idx)
+        rx_audio_spot_reset();
     narrow_pitch_idx = pitch_idx;
     narrow_width_idx = width_idx;
     narrow_filter_load(pitch_idx, width_idx);
@@ -660,6 +665,8 @@ int rx_audio_narrow_width_at(int index) {
 void rx_audio_set_demod(enum rx_demod d) {
     // No filter reset: a mode change leaves at most one stage-1 length
     // (~3.4ms) of the previous sideband in flight.
+    if (d != demod)
+        rx_audio_spot_reset();
     demod = d;
 }
 
@@ -704,6 +711,82 @@ int rx_audio_get_strength_db(void) {
 
 // Largest block rx_audio_process() handles - matches sound.c's MAX_FRAMES.
 #define RX_AUDIO_MAX_BLOCK 4096
+
+// ---- SPOT (auto zero-beat) ----
+//
+// The last SPOT_RING samples of stage 2's audio in CW and CWR, summed
+// SPOT_DECIM at a time to CW_SPOT_RATE. The audio thread writes; an
+// interface thread reads the newest CW_SPOT_SAMPLES of them in
+// rx_audio_spot(). spot_fill counts the samples written since the last
+// reset, so a search never mixes audio from before a retune, a pitch or a
+// mode change; it is cleared in the audio thread, at the next block after
+// rx_audio_spot_reset() asks. The ring holds 2.7 s and a search reads 1.5
+// s, so the writer never reaches what a reader is copying.
+#define SPOT_DECIM (96000 / CW_SPOT_RATE)
+#define SPOT_RING 16384                 // a power of two, so the index can wrap
+#define SPOT_HALF_WIDE_HZ 300           // searched either side with stage 3 off
+static float spot_ring[SPOT_RING];
+static atomic_uint spot_head;           // samples written since start
+static atomic_uint spot_fill;           // since the last reset, up to SPOT_RING
+static atomic_int spot_reset_request;
+static float spot_acc;
+static int spot_n;
+
+void rx_audio_spot_reset(void) {
+    atomic_store(&spot_reset_request, 1);
+}
+
+static void spot_collect(const float *audio, int n) {
+    if (atomic_exchange(&spot_reset_request, 0)) {
+        atomic_store(&spot_fill, 0);
+        spot_acc = 0;
+        spot_n = 0;
+    }
+    unsigned head = atomic_load_explicit(&spot_head, memory_order_relaxed);
+    unsigned fill = atomic_load_explicit(&spot_fill, memory_order_relaxed);
+    for (int k = 0; k < n; k++) {
+        spot_acc += audio[k];
+        if (++spot_n < SPOT_DECIM)
+            continue;
+        spot_ring[head % SPOT_RING] = spot_acc * (1.0f / SPOT_DECIM);
+        head++;
+        if (fill < SPOT_RING)
+            fill++;
+        spot_acc = 0;
+        spot_n = 0;
+    }
+    atomic_store_explicit(&spot_fill, fill, memory_order_relaxed);
+    atomic_store_explicit(&spot_head, head, memory_order_release);
+}
+
+enum rx_spot_result rx_audio_spot(double *offset_hz) {
+    if (demod != RX_DEMOD_CW && demod != RX_DEMOD_CWR)
+        return RX_SPOT_NOT_CW;
+    if (atomic_load(&spot_reset_request) || atomic_load(&spot_fill) < CW_SPOT_SAMPLES)
+        return RX_SPOT_NOT_YET;
+    unsigned head = atomic_load_explicit(&spot_head, memory_order_acquire);
+    float *x = malloc(CW_SPOT_SAMPLES * sizeof(float));
+    if (!x)
+        return RX_SPOT_NO_SIGNAL;
+    for (int i = 0; i < CW_SPOT_SAMPLES; i++)
+        x[i] = spot_ring[(head - CW_SPOT_SAMPLES + i) % SPOT_RING];
+    int pitch = narrow_bank_pitch_hz[narrow_pitch_idx];
+    int half = narrow_filter_active() ? narrow_bank_width_hz[narrow_width_idx] / 2
+                                      : SPOT_HALF_WIDE_HZ;
+    double tone_hz;
+    int found = cw_spot_find(x, CW_SPOT_SAMPLES, pitch - half, pitch + half, &tone_hz);
+    free(x);
+    if (!found)
+        return RX_SPOT_NO_SIGNAL;
+    // CW hears a station d Hz above the listening frequency at the BFO's
+    // frequency + d, CWR one d Hz below it (rx_audio.h). The BFO is the
+    // pitch to vfo.c's 96000/65536 Hz steps (698.73 Hz for 700), and it is
+    // where a station on frequency is heard, so d is measured from it.
+    double bfo_hz = bfo.phase_increment * (96000.0 / 65536.0);
+    double d = tone_hz - bfo_hz;
+    *offset_hz = demod == RX_DEMOD_CWR ? -d : d;
+    return RX_SPOT_OK;
+}
 
 void rx_audio_process(const double *i_samples, const double *q_samples,
                        int n, int32_t *out, double *uac_out) {
@@ -753,9 +836,11 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
         elliptic_buf[k] = (float)narrow_filter_apply(&narrow_filter, audio);
     }
 
-    // The CW decoder takes stage 2's output (see the file header).
-    if (demod == RX_DEMOD_CW || demod == RX_DEMOD_CWR)
+    // The CW decoder and SPOT take stage 2's output (see the file header).
+    if (demod == RX_DEMOD_CW || demod == RX_DEMOD_CWR) {
         cw_decoder_process(audio_buf, n, narrow_bank_pitch_hz[narrow_pitch_idx]);
+        spot_collect(audio_buf, n);
+    }
 
     // Stage 3, FFT - block-based, and also always run. rx_filter needs
     // exactly RX_FILTER_BLOCK_LEN samples (sound.c's PERIOD_FRAMES); any
