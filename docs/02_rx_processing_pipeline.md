@@ -311,6 +311,15 @@ shows it under the waterfall
 It starts afresh on entering CW or CWR and when the receiver moves more
 than 300 Hz; see Retuning.
 
+**SPOT.** The same stage 2 audio, summed to 6 kHz, fills a 2.7 s ring for
+SPOT, auto zero-beat. On rigctld's `\spot` (the control panel's SPOT
+button), `rx_audio_spot()` searches the last 1.5 s for the strongest CW
+tone within the narrow filter's width of the pitch, and `radio_spot()`
+moves the dial so that station is heard exactly on the pitch, clearing RIT
+and keeping XIT. The search runs on rigctld's thread; the audio thread
+only fills the ring. Any retune, RIT, pitch or mode change empties it.
+([`dsp_design_notes/rx_cw_spot_design.md`](dsp_design_notes/rx_cw_spot_design.md).)
+
 Full design, bench data and history:
 [`dsp_design_notes/rx_audio_demod_design.md`](dsp_design_notes/rx_audio_demod_design.md)
 (the stages and AGC) and
