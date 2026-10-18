@@ -7,9 +7,10 @@
 #include "si5351.h"
 #include "sound.h"
 #include "cw.h"       // cw_set_pitch() - radio_set_cw_pitch() below
-#include "rx_audio.h" // rx_audio_set_demod() - radio_set_mode() below
+#include "rx_audio.h" // rx_audio_set_demod(), rx_audio_spot() - radio_set_mode(), radio_spot()
 #include "cw_decoder.h" // cw_decoder_reset() - decoder_follow() below
 #include "hw_settings.h" // hw_settings_tx_allowed() - radio_tx_allowed() below
+#include <math.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -100,6 +101,7 @@ void radio_tune_to(uint32_t f) {
   vfo_start(&lo, RX_IF_FREQ_HZ, lo.phase);
   radio_hw_tune(f); // the band's LPF, on a board whose LPFs are in the RX path
   decoder_follow((int)f);
+  rx_audio_spot_reset();
 }
 
 void radio_set_rit(int hz) {
@@ -111,6 +113,7 @@ void radio_set_rit(int hz) {
     si5351bx_setfreq(2, freq_hdr + rit_applied_hz() + xtal_filter_center);
   }
   decoder_follow(freq_hdr + rit_applied_hz());
+  rx_audio_spot_reset();
   // In TX: stored only; radio_tx_apply() applies it when RX resumes. TX's
   // own clk2 never includes it.
 }
@@ -125,7 +128,9 @@ void radio_set_rit_enabled(int on) {
     si5351bx_setfreq(2, freq_hdr + rit_applied_hz() + xtal_filter_center);
   }
   decoder_follow(freq_hdr + rit_applied_hz());
+  rx_audio_spot_reset();
 }
+
 
 int radio_rit_enabled(void) {
   return rit_enabled;
@@ -433,4 +438,30 @@ int radio_set_tx(int tx_on) {
   pthread_cond_signal(&tx_cond);
   pthread_mutex_unlock(&tx_mutex);
   return 0;
+}
+
+enum radio_spot_result radio_spot(int *moved_hz) {
+  if (current_mode != RADIO_MODE_CW && current_mode != RADIO_MODE_CWR)
+    return RADIO_SPOT_NOT_CW;
+  if (in_tx)
+    return RADIO_SPOT_TX;
+  double offset;
+  switch (rx_audio_spot(&offset)) {
+  case RX_SPOT_OK: break;
+  case RX_SPOT_NOT_CW: return RADIO_SPOT_NOT_CW;
+  case RX_SPOT_NOT_YET: return RADIO_SPOT_NOT_YET;
+  default: return RADIO_SPOT_NO_SIGNAL;
+  }
+  // The station is at the listening frequency (dial + RIT) plus the
+  // offset; the dial goes there and RIT is cleared, so the transmitter
+  // lands on it. XIT, a deliberate offset, survives the retune.
+  int old = freq_hdr;
+  int target = freq_hdr + rit_applied_hz() + (int)lround(offset);
+  int keep_xit = xit_offset, keep_xit_on = xit_enabled;
+  radio_tune_to((uint32_t)target);
+  xit_offset = keep_xit;
+  xit_enabled = keep_xit_on;
+  *moved_hz = target - old;
+  printf("radio: SPOT moved the dial %+d Hz to %d Hz\n", target - old, target);
+  return RADIO_SPOT_OK;
 }
