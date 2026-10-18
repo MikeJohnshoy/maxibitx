@@ -12,7 +12,7 @@ docs/06_api.md describes both.
 The screen, top to bottom:
 
     band menu, frequency, mode (CW CWR USB LSB DIGI), RX/TX, volume, gear
-    RIT and its steps          |  FILTER: on, width, centre, NR
+    RIT and its steps          |  FILTER: on, width, centre, SPOT
     span                                   status              S-meter
     spectrum, frequency scale, waterfall
     CW: ten macros  |  USB/LSB: mic gain and ALC  |  DIGI: a note
@@ -38,8 +38,14 @@ puts the receiver or the transmitter. The display stays centred on the
 dial, so a signal doesn't move when either does. A green marker shows
 where RIT has the receiver listening, a red "TX" marker where XIT will
 transmit (solid while transmitting); an arrow at the edge shows an
-offset beyond the span. NR is on the screen but disabled: maxibitx
-has none yet.
+offset beyond the span.
+
+SPOT (CW and CWR) is auto zero-beat, one shot: it finds the strongest CW
+tone in the narrow filter (300 Hz either side of the pitch with the
+filter off) over the last 1.5 s, moves the dial so the station sits
+exactly on the pitch, and clears RIT, so the next transmission lands on
+its frequency; XIT is kept. The status line says how far it moved, or
+why it didn't (\\spot).
 
 TUNE keys the transmitter with the single test tone (u TONE 1, then T
 1): in CW and CWR the carrier is on the dial (plus XIT), in the other
@@ -69,6 +75,7 @@ rigctld commands used:
     u MORSE                 1 while text is queued or going out
     \\get_cw_text <n>        the CW decoder's text from character n on
     l DECODEWPM             the speed the decoder has learned
+    \\spot                   SPOT: the dial onto the nearest CW signal, RIT cleared
 
 In CW and CWR the waterfall is shorter, and two lines under it show what
 the CW decoder reads; the status line adds the speed it has learned. Tap
@@ -156,6 +163,13 @@ FREQ_MIN_HZ, FREQ_MAX_HZ = 100000, 30000000   # what maxibitx tunes
 MAX_FIELDS = 8
 DEFAULT_FIELDS = (("MYCALL", ""), ("PARK", ""))
 FIELD_RE = re.compile(r"\{([A-Za-z0-9_]+)\}")
+# What the status line says when \spot doesn't move the dial (hamlib.c).
+SPOT_REFUSALS = {
+    "RPRT -12": "SPOT: no clear signal in the filter",
+    "RPRT -5": "SPOT: still listening after the last change - try again",
+    "RPRT -9": "SPOT: CW and CWR only, and not while transmitting",
+}
+
 DEFAULT_MACROS = (
     ("CQ POTA", "CQ POTA DE {MYCALL} {MYCALL} K"),
     ("QRZ?", "QRZ?"),
@@ -994,7 +1008,6 @@ class Panel(tk.Tk):
         self.fftfilt_var = tk.BooleanVar(value=True)
         self.pitch_var = tk.StringVar(value="700")
         self.width_var = tk.StringVar(value="300")
-        self.nr_var = tk.BooleanVar(value=False)
         self.span_var = tk.StringVar(value=self.span_label(SPECTRUM_DEFAULT_HALF_SPAN_HZ))
         self.micgain_var = tk.DoubleVar(value=1.0)
         self.keyer_var = tk.StringVar(value=KEYER_MODES[4])
@@ -1106,10 +1119,9 @@ class Panel(tk.Tk):
                                         width=4, state="readonly", font=(self.ui, usz(13)))
         self.pitch_combo.grid(row=0, column=4, padx=(3, 4))
         self.pitch_combo.bind("<<ComboboxSelected>>", self.on_pitch_selected)
-        self.nr_check = ttk.Checkbutton(flt, text="NR", variable=self.nr_var,
-                                        style="Toolbutton", width=-3)
-        self.nr_check.grid(row=0, column=5)
-        self.nr_check.state(["disabled"])  # maxibitx has no NR yet
+        self.spot_button = ttk.Button(flt, text="SPOT", style="Step.TButton", width=-5,
+                                      command=self.on_spot)
+        self.spot_button.grid(row=0, column=5)
 
     def build_spectrum(self):
         spec = ttk.Frame(self, padding=(6, 6, 6, 0))
@@ -1296,7 +1308,7 @@ class Panel(tk.Tk):
                 frame.grid_remove()
         self.show_decode(key == "cw")
         cw_state = ["!disabled"] if key == "cw" else ["disabled"]
-        for w in (self.cw_entry, self.send_button, self.stop_button):
+        for w in (self.cw_entry, self.send_button, self.stop_button, self.spot_button):
             w.state(cw_state)
         # The radio holds the CW filter out of circuit in DIGITAL whatever
         # it is set to; the controls say so rather than look live.
@@ -1720,6 +1732,27 @@ class Panel(tk.Tk):
             self.send_xit(self.xit_hz + delta)
         else:
             self.send_rit(self.rit_hz + delta)
+
+    def on_spot(self):
+        """SPOT: the dial onto the strongest CW tone near the pitch."""
+        self.query_async("\\spot", self.apply_spot)
+
+    def apply_spot(self, reply):
+        """A \\spot reply: the dial's move and the new dial frequency, or
+        RPRT and why it didn't move."""
+        parts = (reply or "").split()
+        try:
+            moved, hz = int(parts[0]), int(parts[1])
+        except (ValueError, IndexError):
+            self.say(SPOT_REFUSALS.get((reply or "").strip(),
+                                       "SPOT: this maxibitx doesn't have it"))
+            return
+        self.rit_hz = 0
+        self.rit_hold_until = time.monotonic() + 1.5
+        self.current_freq_hz = hz
+        self.freq_display.set_hz(hz)
+        self.show_rit()
+        self.say(f"SPOT {moved:+d} Hz" if moved else "SPOT: already on frequency")
 
     def send_offset(self, hz):
         if self.ritmode_var.get() == "XIT":
