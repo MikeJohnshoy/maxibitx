@@ -65,6 +65,15 @@ void rx_audio_set_demod(enum rx_demod d) { (void)d; }
 void rx_audio_inhibit_narrow_filter(int on) { (void)on; }
 static int decoder_resets = 0;
 void cw_decoder_reset(void) { decoder_resets++; }
+// SPOT's receive half: what the search "found" is set by each check.
+static enum rx_spot_result spot_result = RX_SPOT_OK;
+static double spot_offset = 0;
+static int spot_resets = 0;
+enum rx_spot_result rx_audio_spot(double *offset_hz) {
+  *offset_hz = spot_offset;
+  return spot_result;
+}
+void rx_audio_spot_reset(void) { spot_resets++; }
 // One band, 14.000-14.350 MHz.
 int hw_settings_tx_allowed(int f) { return f >= 14000000 && f <= 14350000; }
 
@@ -147,6 +156,43 @@ int main(void) {
   radio_set_mode(RADIO_MODE_USB);
   radio_set_mode(RADIO_MODE_CW);
   check(decoder_resets == r0 + 2, "USB back to CW: the decoder starts afresh");
+
+  printf("SPOT\n");
+  radio_set_mode(RADIO_MODE_CW);
+  radio_tune_to(14050000);
+  radio_set_rit(100);
+  radio_set_xit(200);
+  spot_result = RX_SPOT_OK;
+  spot_offset = 37.4;              // the station, above where RIT listens
+  int moved = 0, s0 = spot_resets;
+  check(radio_spot(&moved) == RADIO_SPOT_OK, "a tone found: SPOT moves");
+  check(freq_hdr == 14050137 && moved == 137,
+        "the dial moves to where RIT was listening, plus the tone's offset: +137 Hz");
+  check(!radio_rit_enabled() && radio_get_rit() == 0, "RIT is cleared");
+  check(radio_xit_enabled() && radio_get_xit() == 200 && radio_tx_freq() == 14050337,
+        "XIT is kept");
+  check(clk[2] == 14050137 + C, "the receive clock follows the dial");
+  check(spot_resets > s0, "the audio it searched is forgotten, so a second press waits");
+  spot_offset = -12.6;
+  check(radio_spot(&moved) == RADIO_SPOT_OK && freq_hdr == 14050124 && moved == -13,
+        "a tone below: the dial moves down, rounded to 1 Hz");
+  spot_result = RX_SPOT_NO_SIGNAL;
+  radio_set_rit(50);
+  check(radio_spot(&moved) == RADIO_SPOT_NO_SIGNAL && freq_hdr == 14050124 &&
+        radio_get_rit() == 50, "nothing found: nothing moves, RIT stays");
+  spot_result = RX_SPOT_NOT_YET;
+  check(radio_spot(&moved) == RADIO_SPOT_NOT_YET && freq_hdr == 14050124,
+        "too soon after a retune: nothing moves");
+  spot_result = RX_SPOT_OK;
+  spot_offset = 20;
+  check(tx(1) == 0, "transmitting ...");
+  check(radio_spot(&moved) == RADIO_SPOT_TX && freq_hdr == 14050124, "... SPOT refused");
+  tx(0);
+  radio_set_mode(RADIO_MODE_USB);
+  check(radio_spot(&moved) == RADIO_SPOT_NOT_CW && freq_hdr == 14050124, "USB: SPOT refused");
+  radio_set_mode(RADIO_MODE_CWR);
+  check(radio_spot(&moved) == RADIO_SPOT_OK && freq_hdr == 14050194,
+        "CWR: moves by the offset rx_audio_spot() gives (its sign is rx_audio.c's job)");
 
   printf("\n%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);
   return failures ? 1 : 0;
