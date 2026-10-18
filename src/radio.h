@@ -150,6 +150,26 @@ void radio_set_mode(enum radio_mode m);
 // The current mode.
 enum radio_mode radio_get_mode(void);
 
+// SPOT (auto zero-beat), one shot: in CW or CWR, finds the strongest
+// tone near the pitch in the last 1.5 s (rx_audio_spot()) and moves the
+// dial so the station is heard exactly on the pitch, which puts the
+// transmitter on its frequency. RIT is cleared, since the dial does its
+// job; XIT is kept, being an offset the operator chose. Returns
+// RADIO_SPOT_OK with the dial's move in *moved_hz, or why it didn't move:
+//   RADIO_SPOT_NOT_CW     not in CW or CWR
+//   RADIO_SPOT_TX         transmitting
+//   RADIO_SPOT_NOT_YET    under 1.5 s since the last retune; try again
+//   RADIO_SPOT_NO_SIGNAL  nothing clearly above the noise
+// Prints one console line when it moves. Not for the audio thread.
+enum radio_spot_result {
+  RADIO_SPOT_OK = 0,
+  RADIO_SPOT_NOT_CW,
+  RADIO_SPOT_TX,
+  RADIO_SPOT_NOT_YET,
+  RADIO_SPOT_NO_SIGNAL,
+};
+enum radio_spot_result radio_spot(int *moved_hz);
+
 // Moves the CW pitch, everywhere it has to move, and returns the pitch
 // actually selected - the request snapped to the pitches rx_audio.c's
 // filter bank carries, so a caller asking for 725 gets 700 back and should
