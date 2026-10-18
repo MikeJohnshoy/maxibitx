@@ -64,7 +64,7 @@ SRC := src/maxibitx.c src/radio.c src/radio_hw.c src/interfaces/hpsdr_p1.c src/i
      src/si5351v2.c src/sound.c src/vfo.c src/interfaces/hamlib.c src/hw_settings.c src/antialias.c src/decim48k.c src/cw.c \
      src/rx_audio.c src/gpio.c src/interfaces/iq_stream.c src/fft_filter.c src/tx_pipeline.c src/rx_filter.c src/upsample48k.c src/tone_gen.c \
      src/key_input.c src/encoder.c src/knobs.c src/$(KEYER).c src/morse.c src/interfaces/tci.c src/interfaces/tci_stream.c \
-     src/interfaces/tci_ws.c src/interfaces/tci_cw.c src/cw_decoder.c
+     src/interfaces/tci_ws.c src/interfaces/tci_cw.c src/cw_decoder.c src/cw_spot.c
 OBJ := $(SRC:.c=.o)
 
 all: maxibitx
@@ -101,7 +101,7 @@ check-filters:
 # end of its log. Run it before uploading a change; `make` itself doesn't.
 TESTS := test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse \
 	test-upsample48k test-cw test-key-input test-radio test-encoder test-keyer \
-	test-keyer-straight test-radio-hw test-tci-ws test-tci test-cw-decoder
+	test-keyer-straight test-radio-hw test-tci-ws test-tci test-cw-decoder test-cw-spot
 KEYERS := keyer keyer_straight
 OBJ_NO_KEYER := $(filter-out src/$(KEYER).o,$(OBJ))
 
@@ -125,7 +125,7 @@ test:
 	if [ $$fail -eq 0 ]; then echo "all passed"; else echo "$$fail FAILED - see test-logs/"; exit 1; fi
 
 clean:
-	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw test-key-input test-keyer test-keyer-straight test-tci-ws test-tci test-radio-hw test-encoder test-radio test-cw-decoder \
+	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw test-key-input test-keyer test-keyer-straight test-tci-ws test-tci test-radio-hw test-encoder test-radio test-cw-decoder test-cw-spot \
 		src/fft_filter.o src/fft_filter_test.o src/tx_pipeline.o src/tx_pipeline_test.o \
 		src/rx_filter.o src/rx_filter_test.o src/rx_audio_test.o src/rx_audio_impulse_test.o src/upsample48k_test.o \
 		$(KEYERS:%=src/%.o)
@@ -173,8 +173,8 @@ test-rx-filter: src/rx_filter.c src/rx_filter_test.c src/rx_filter.h src/fft_fil
 # (no hardware deps - see vfo.c's own #include list) alongside
 # rx_audio.c/fft_filter.c/rx_filter.c; cw.h is header-only here too
 # (CW_PITCH_HZ), same as the other harnesses.
-test-rx-audio: src/rx_audio.c src/rx_audio_test.c src/rx_audio.h src/vfo.c src/vfo.h src/fft_filter.c src/rx_filter.c src/cw.h src/cw_decoder.c src/cw_decoder.h src/morse.c
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/rx_audio.c src/vfo.c src/fft_filter.c src/rx_filter.c src/cw_decoder.c src/morse.c src/rx_audio_test.c -o $@ -lfftw3f -lm $(TEST_LIBS)
+test-rx-audio: src/rx_audio.c src/rx_audio_test.c src/rx_audio.h src/vfo.c src/vfo.h src/fft_filter.c src/rx_filter.c src/cw.h src/cw_decoder.c src/cw_decoder.h src/morse.c src/cw_spot.c src/cw_spot.h
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/rx_audio.c src/vfo.c src/fft_filter.c src/rx_filter.c src/cw_decoder.c src/morse.c src/cw_spot.c src/rx_audio_test.c -o $@ -lfftw3f -lm $(TEST_LIBS)
 
 # Stage 3 and stage 4 together, which neither test-rx-filter (the filter
 # alone) nor test-rx-audio (the plumbing) can see: rx_audio.c derives its AGC
@@ -183,8 +183,8 @@ test-rx-audio: src/rx_audio.c src/rx_audio_test.c src/rx_audio.h src/vfo.c src/v
 # different amount per filter realization. Measures what that does to an
 # interferer the filter removes, and to a keyed CW element's own onset. See
 # docs/dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md.
-test-rx-audio-impulse: src/rx_audio.c src/rx_audio_impulse_test.c src/rx_audio.h src/vfo.c src/vfo.h src/fft_filter.c src/rx_filter.c src/cw.h src/cw_decoder.c src/cw_decoder.h src/morse.c
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/rx_audio.c src/vfo.c src/fft_filter.c src/rx_filter.c src/cw_decoder.c src/morse.c src/rx_audio_impulse_test.c -o $@ -lfftw3f -lm $(TEST_LIBS)
+test-rx-audio-impulse: src/rx_audio.c src/rx_audio_impulse_test.c src/rx_audio.h src/vfo.c src/vfo.h src/fft_filter.c src/rx_filter.c src/cw.h src/cw_decoder.c src/cw_decoder.h src/morse.c src/cw_spot.c src/cw_spot.h
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/rx_audio.c src/vfo.c src/fft_filter.c src/rx_filter.c src/cw_decoder.c src/morse.c src/cw_spot.c src/rx_audio_impulse_test.c -o $@ -lfftw3f -lm $(TEST_LIBS)
 
 # WSJT-X TX audio bridge: upsample48k.c/.h's own standalone bench harness
 # (upsample48k_test.c) against synthetic tones, the interpolation-side
@@ -245,6 +245,12 @@ test-encoder: src/encoder.c src/encoder.h src/knobs.c src/knobs.h src/encoder_te
 # the full bench.
 test-cw-decoder: src/cw_decoder.c src/cw_decoder.h src/cw_decoder_test.c src/morse.c src/morse.h
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/cw_decoder.c src/morse.c src/cw_decoder_test.c -o $@ -lm $(TEST_LIBS)
+
+# SPOT's tone finder (cw_spot.c) on synthetic CW: steady and keyed tones,
+# weak ones, two at once, one just outside the band, noise alone, and what
+# a search costs.
+test-cw-spot: src/cw_spot.c src/cw_spot.h src/cw_spot_test.c
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/cw_spot.c src/cw_spot_test.c -o $@ -lm $(TEST_LIBS)
 
 test-keyer: src/keyer.c src/keyer.h src/morse.c src/morse.h src/keyer_test.c src/key_input.h tools/keyer_study/keyer_spec_model.c
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Itools/keyer_study src/keyer.c src/morse.c src/keyer_test.c -o $@ -lpthread $(TEST_LIBS)
