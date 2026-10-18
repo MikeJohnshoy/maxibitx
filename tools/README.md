@@ -93,8 +93,11 @@ band memory are kept in `~/.maxibitx_panel.json`.
 **Tune** keys the transmitter with the single test tone at the power set
 beside it. In CW and CWR the carrier is on the dial (plus XIT), where a
 key-down goes; in USB and DIGI it is 1 kHz above the dial, in LSB 1 kHz
-below; maxibitx drops it after 30 s. **NR** is on the screen but
-disabled: maxibitx doesn't have it yet.
+below; maxibitx drops it after 30 s. **SPOT** (CW and CWR, in the
+FILTER group) is auto zero-beat, one shot: it finds the strongest CW
+signal in the narrow filter over the last 1.5 s, moves the dial so it sits
+exactly on the pitch, and clears RIT, so you answer on its frequency;
+XIT is kept. The status line shows the move, or why there wasn't one.
 
 The panel connects at start-up to the last host used (127.0.0.1 the first
 time, which is right on the Pi) and keeps trying every 5 s while it
