@@ -1103,7 +1103,7 @@ class Panel(tk.Tk):
                        command=lambda d=d: self.on_rit_step(d)).grid(row=0, column=5 + i, padx=1)
 
         flt = ttk.LabelFrame(row, text="FILTER", padding=(4, 0, 4, 4))
-        flt.grid(row=0, column=1, sticky="nsew", padx=(80, 0))
+        flt.grid(row=0, column=1, sticky="nsew", padx=(75, 0))
         self.filter_frame = flt
         self.narrow_check = ttk.Checkbutton(flt, text="ON", variable=self.narrow_var,
                                             style="Toolbutton", width=-3,
