@@ -614,6 +614,26 @@ static int handle_line(int fd, char *line)
         return 0;
     }
 
+    if (strcmp(cmd, "\\spot") == 0) {
+        // Extension: SPOT, auto zero-beat (radio_spot()). Moves the dial so
+        // the strongest CW tone near the pitch is heard on it, clears RIT
+        // and keeps XIT. Reply: the dial's move in Hz and the new dial
+        // frequency, or RPRT -9 when not in CW/CWR or transmitting, RPRT -5
+        // when under 1.5 s has passed since the last retune (try again),
+        // RPRT -12 when no signal stands clearly above the noise.
+        int moved = 0;
+        enum radio_spot_result r = radio_spot(&moved);
+        if (r == RADIO_SPOT_OK) {
+            char buf[48];
+            snprintf(buf, sizeof(buf), "%d %d\n", moved, freq_hdr);
+            send_line(fd, buf);
+        } else {
+            send_rprt(fd, r == RADIO_SPOT_NOT_YET ? -5 : r == RADIO_SPOT_NO_SIGNAL ? -12 : -9);
+        }
+        get_log("rigctl: \\spot -> %d (%+d Hz)\n", (int)r, moved);
+        return 0;
+    }
+
     if (strncmp(cmd, "\\get_cw_text", 12) == 0 && (cmd[12] == '\0' || cmd[12] == ' ')) {
         // Extension: the CW decoder's text from character number <since>
         // on (cw_decoder_read()). Reply: the next number, the text's length
