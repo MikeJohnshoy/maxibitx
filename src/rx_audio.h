@@ -236,6 +236,28 @@ enum rx_demod {
 void rx_audio_set_demod(enum rx_demod d);
 enum rx_demod rx_audio_get_demod(void);
 
+// SPOT (auto zero-beat), the receive half. In CW and CWR, searches the
+// last 1.5 s of audio for the strongest tone within the narrow filter's
+// width of the pitch (300 Hz either side with the filter out) and gives
+// the station's offset from the frequency being listened to, in Hz, + for
+// above it. radio_spot() (radio.h) does the tuning.
+//   RX_SPOT_NOT_CW     not in CW or CWR
+//   RX_SPOT_NOT_YET    less than 1.5 s of audio since the last reset
+//   RX_SPOT_NO_SIGNAL  no tone clearly above the noise (cw_spot.h)
+// Any thread but the audio thread: it takes a few ms.
+enum rx_spot_result {
+    RX_SPOT_OK = 0,
+    RX_SPOT_NOT_CW,
+    RX_SPOT_NOT_YET,
+    RX_SPOT_NO_SIGNAL,
+};
+enum rx_spot_result rx_audio_spot(double *offset_hz);
+
+// Forget the audio SPOT holds, from the next block: for a retune or a
+// change of what is heard. A pitch or mode change does this itself. Any
+// thread.
+void rx_audio_spot_reset(void);
+
 // Demodulates one block's worth of already-mixed baseband I/Q (the same
 // i_samples[]/q_samples[] sound.c's sound_process() already computes for
 // hpsdr_send_iq()) into n real PCM samples ready for the codec's local
