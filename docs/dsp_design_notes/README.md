@@ -337,6 +337,13 @@ already used in `antialias_filter_design.md`.
   CW-tuned MMSE-LSA spectral NR, 128-point at 6 kHz (≈ 22.5 ms latency,
   ≈ 4% of stage 1), off by default. Status: **proposed** - a study, nothing
   built.
+- [`rx_cw_spot_design.md`](rx_cw_spot_design.md) — SPOT, auto zero-beat
+  for CW, one shot: the strongest tone in the narrow filter over the last
+  1.5 s (averaged half-second Goertzel scans, 10 dB over the median), the
+  dial moved onto it, RIT cleared, XIT kept. Searches 150 Hz beyond the
+  filter, since a strong station's keying sidebands are still 13 dB up 55
+  Hz away; measures from the BFO's real 698.73 Hz, not 700. Within 0.1 Hz
+  down to −6 dB SNR in tests. Status: **built**; not yet tried on the air.
 - [`rx_cw_decoder_study.md`](rx_cw_decoder_study.md) — maxibitx's CW
   decoder (`src/cw_decoder.c`), for hand-sent code at 5-35 WPM (Farnsworth
   at the slow end), and the study behind it, measured with
