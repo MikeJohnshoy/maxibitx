@@ -94,6 +94,36 @@ static double rms(const int32_t *out, int n) {
 // transient is by definition brief.
 static double last_peak;
 
+// Case L: dots at 20 WPM on a carrier d_hz from the dial (+ above it),
+// with 5 ms edges, through rx_audio_process() for the given seconds, then
+// SPOT's search. Returns what rx_audio_spot() said, its offset in *found.
+static enum rx_spot_result spot_run(double d_hz, double seconds, double *found) {
+	double i_s[RX_FILTER_BLOCK_LEN], q_s[RX_FILTER_BLOCK_LEN];
+	int32_t out[RX_FILTER_BLOCK_LEN];
+	static long t = 0;
+	const long dot = (long)(0.06 * TEST_FS), rise = TEST_FS / 200;
+	unsigned noise = 7;
+	for (long b = 0; b < (long)(seconds * TEST_FS); b += RX_FILTER_BLOCK_LEN) {
+		for (int k = 0; k < RX_FILTER_BLOCK_LEN; k++, t++) {
+			long in = t % (2 * dot);
+			double env = in < dot ? 1.0 : 0.0;
+			if (in < rise)
+				env = 0.5 - 0.5 * cos(M_PI * in / rise);
+			else if (in >= dot && in < dot + rise)
+				env = 0.5 + 0.5 * cos(M_PI * (in - dot) / rise);
+			// a station d Hz above the dial sits at -d in the I/Q (rx_audio.h)
+			double ph = -2.0 * M_PI * d_hz * t / TEST_FS;
+			noise = noise * 1103515245u + 12345u;
+			double nz = ((noise >> 8) / 16777216.0 - 0.5) * 0.01;
+			i_s[k] = 0.1 * env * cos(ph) + nz;
+			q_s[k] = 0.1 * env * sin(ph) + nz;
+		}
+		rx_audio_process(i_s, q_s, RX_FILTER_BLOCK_LEN, out, NULL);
+	}
+	*found = 0;
+	return rx_audio_spot(found);
+}
+
 static double run_tone(int n, int blocks, double freq_hz) {
 	double i_samples[RX_FILTER_BLOCK_LEN > 4096 ? RX_FILTER_BLOCK_LEN : 4096];
 	double q_samples[RX_FILTER_BLOCK_LEN > 4096 ? RX_FILTER_BLOCK_LEN : 4096];
@@ -575,6 +605,50 @@ int main(void)
 			fprintf(stderr, "   FAIL: wanted \"CQ DE KB2ML K\"\n");
 			return 1;
 		}
+	}
+
+	// --- Case L: SPOT, through rx_audio_process() -------------------------
+	{
+		printf("\nL. SPOT: the offset of a keyed station, through rx_audio_process()\n");
+		double f;
+		struct { enum rx_demod demod; int pitch, narrow, width; double d, secs;
+		         enum rx_spot_result want; const char *what; } c[] = {
+			{ RX_DEMOD_CW,  700, 1, 300,  45.3, 2.0, RX_SPOT_OK, "CW, 45.3 Hz above" },
+			{ RX_DEMOD_CW,  700, 1, 300, -88.7, 2.0, RX_SPOT_OK, "CW, 88.7 Hz below" },
+			{ RX_DEMOD_CWR, 700, 1, 300, -45.3, 2.0, RX_SPOT_OK, "CWR, 45.3 Hz below" },
+			{ RX_DEMOD_CWR, 700, 1, 300,  61.0, 2.0, RX_SPOT_OK, "CWR, 61 Hz above" },
+			{ RX_DEMOD_CW,  600, 1, 300,  30.0, 2.0, RX_SPOT_OK, "CW at a 600 Hz pitch, 30 Hz above" },
+			{ RX_DEMOD_CW,  700, 1, 150, 100.0, 2.0, RX_SPOT_NO_SIGNAL,
+			  "150 Hz filter, station 100 Hz above: outside it" },
+			{ RX_DEMOD_CW,  700, 0, 150, 100.0, 2.0, RX_SPOT_OK, "the filter off: found" },
+			{ RX_DEMOD_CW,  700, 1, 300,  20.0, 1.0, RX_SPOT_NOT_YET, "only 1 s since a change" },
+		};
+		for (unsigned i = 0; i < sizeof(c) / sizeof(c[0]); i++) {
+			rx_audio_set_demod(c[i].demod);
+			rx_audio_set_narrow_pitch(c[i].pitch);
+			rx_audio_set_narrow_width(c[i].width);
+			rx_audio_set_narrow_filter(c[i].narrow);
+			rx_audio_spot_reset();
+			enum rx_spot_result r = spot_run(c[i].d, c[i].secs, &f);
+			int ok = r == c[i].want && (r != RX_SPOT_OK || fabs(f - c[i].d) < 1.0);
+			printf("   %s %-48s result %d, offset %+.2f Hz\n", ok ? "ok  " : "FAIL", c[i].what,
+			       (int)r, f);
+			if (!ok) {
+				fprintf(stderr, "   FAIL: wanted result %d, offset %+.1f\n", (int)c[i].want, c[i].d);
+				return 1;
+			}
+		}
+		rx_audio_set_demod(RX_DEMOD_USB);
+		{
+			enum rx_spot_result r = rx_audio_spot(&f);
+			printf("   %s USB: result %d\n", r == RX_SPOT_NOT_CW ? "ok  " : "FAIL", (int)r);
+			if (r != RX_SPOT_NOT_CW)
+				return 1;
+		}
+		rx_audio_set_demod(RX_DEMOD_CW);
+		rx_audio_set_narrow_pitch(CW_PITCH_HZ);
+		rx_audio_set_narrow_width(300);
+		rx_audio_set_narrow_filter(1);
 	}
 
 	printf("\nAll cases completed without a crash or out-of-range sample.\n");
