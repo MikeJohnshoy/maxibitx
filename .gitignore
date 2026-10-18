@@ -17,6 +17,7 @@ test-radio-hw
 test-encoder
 test-radio
 test-cw-decoder
+test-cw-spot
 src/*.o
 test-logs/
 *.o
