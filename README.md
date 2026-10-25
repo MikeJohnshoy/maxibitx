@@ -6,7 +6,7 @@ A headless, all-mode (CW, USB, LSB, DIGITAL) radio daemon for the
 Raspberry Pi inside an [sBitx](https://github.com/afarhan/sbitx). It
 brings up the radio hardware, runs the receive and transmit signal
 chains, and serves external software. There's no user interface in
-the process: SDR apps, WSJT-X, FLRig and a small desktop control panel
+the process: SDR apps, WSJT-X, FLRig and a small separate desktop control panel
 provide the display and controls, over the network or USB.
 
 ## Where it came from
