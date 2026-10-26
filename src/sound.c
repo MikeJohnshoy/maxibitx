@@ -12,6 +12,7 @@
 
 #include "antialias.h"
 #include "capture_dump.h"
+#include "codec_check.h"
 #include "cw.h"
 #include "decim48k.h"
 #include "hpsdr_p1.h"
@@ -934,6 +935,7 @@ static void *audio_loop(void *arg) {
     int64_t read_ns = ns_between(&t_read0, &t_read1);
     if (frames < 0) {
       xrun_note(&capture_xrun, "capture");
+      codec_check_gap(); // frames lost: the check's 128-sample phase with them
       if (xrun_recover(pcm_capture, (int)frames) < 0) {
         fprintf(stderr, "sound: capture recovery failed\n");
         break;
@@ -945,6 +947,9 @@ static void *audio_loop(void *arg) {
     if (n > MAX_FRAMES)
       n = MAX_FRAMES;
     capture_dump_block(cap_buf, n); // the raw capture, when asked (SIGUSR1)
+    // the codec's sampling state, at start-up; the right channel is the
+    // quiet mic line in receive (codec_check.h)
+    codec_check_block(cap_buf, n, CHANNELS, !in_tx && !cw_tx_active());
 
     for (int i = 0; i < n; i++) {
       rx_buf[i] = cap_buf[i * 2];
@@ -1272,6 +1277,11 @@ int sound_thread_start(const char *device_name) {
   }
 
   printf("sound: running (%s)\n", dev);
+
+  // Checks that the codec didn't start with its sample timing patterned
+  // (ghosts on every signal), and restarts its interface if it did
+  if (codec_check_start(codec_check_wm8731_restart) != 0)
+    printf("sound: codec start-up check unavailable\n");
   return 0;
 }
 
