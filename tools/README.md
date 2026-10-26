@@ -3,7 +3,26 @@
 Client-side utilities that talk to a running maxibitx over the network -
 none of these run on the Pi as part of maxibitx itself, and none require
 changes to build/run maxibitx (beyond whatever server-side support they
-depend on, noted per tool below) - plus one developer check.
+depend on, noted per tool below) - plus one developer check, and a
+reader for the raw-capture dump.
+
+## `capture_check.py`
+
+Reads the raw-capture dump maxibitx writes on SIGUSR1
+(`/tmp/maxibitx_capture_<date>_<time>.wav`: one second of the codec's
+capture, both channels, before any processing; `src/capture_dump.h`).
+For each channel it prints the level and DC, how many low bits are always
+zero, the share of positive samples, the even samples' RMS against the
+odd ones' and how often a sample repeats its neighbour; for L, how far
+the spectrum mirrors itself about the 24 kHz IF, with the strongest
+signals and the level at their mirror; and the L-R correlation. What the
+numbers mean when the receiver shows ghosts:
+[`../docs/08_troubleshooting_and_bringup.md`](../docs/08_troubleshooting_and_bringup.md),
+"A spectrum full of mirrors". Runs anywhere; Python 3 with numpy.
+
+```
+python3 tools/capture_check.py /tmp/maxibitx_capture_20261026_174829.wav
+```
 
 ## `check_comments.py`
 
