@@ -307,8 +307,10 @@ start-up (`src/codec_check.h`). A second after the audio starts it
 measures the pattern on the right channel, the mic line, which is quiet
 in receive: the power of its sample-to-sample differences, folded over
 the 128-sample cycle, has a strong 5th harmonic in this state (about 0.9
-of the mean) and almost none otherwise (under 0.01). One of these lines
-follows `sound: running`:
+of the mean) and almost none otherwise (under 0.01). One of these comes
+between `sound: running` and the `ready to serve!` line, which waits up
+to 5 s for it (if the check can't decide by then - transmitting at
+start-up, say - its line follows later):
 
 ```
 codec: sampling clean (0.002)
