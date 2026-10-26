@@ -15,10 +15,12 @@ For each channel it prints the level and DC, how many low bits are always
 zero, the share of positive samples, the even samples' RMS against the
 odd ones' and how often a sample repeats its neighbour; for L, how far
 the spectrum mirrors itself about the 24 kHz IF, with the strongest
-signals and the level at their mirror; and the L-R correlation. What the
+signals and the level at their mirror; the L-R correlation; and the
+codec's 128-sample timing pattern on R, measured as maxibitx's start-up
+check measures it (under 0.01 clean, about 0.9 patterned). What the
 numbers mean when the receiver shows ghosts:
 [`../docs/08_troubleshooting_and_bringup.md`](../docs/08_troubleshooting_and_bringup.md),
-"A spectrum full of mirrors". Runs anywhere; Python 3 with numpy.
+"A spectrum full of ghosts". Runs anywhere; Python 3 with numpy.
 
 ```
 python3 tools/capture_check.py /tmp/maxibitx_capture_20261026_174829.wav
