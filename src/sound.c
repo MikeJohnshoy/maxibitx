@@ -11,6 +11,7 @@
 //             R = exciter feed
 
 #include "antialias.h"
+#include "capture_dump.h"
 #include "cw.h"
 #include "decim48k.h"
 #include "hpsdr_p1.h"
@@ -943,6 +944,7 @@ static void *audio_loop(void *arg) {
     int n = (int)frames;
     if (n > MAX_FRAMES)
       n = MAX_FRAMES;
+    capture_dump_block(cap_buf, n); // the raw capture, when asked (SIGUSR1)
 
     for (int i = 0; i < n; i++) {
       rx_buf[i] = cap_buf[i * 2];
@@ -1164,11 +1166,25 @@ static void *audio_loop(void *arg) {
   return NULL;
 }
 
+// The radio's state, for capture_dump.c's console line with each file.
+static void describe_for_capture(char *out, int max) {
+  static const char *const modes[] = {"CW", "CWR", "USB", "LSB", "DIGI"};
+  enum radio_mode m = radio_get_mode();
+  snprintf(out, (size_t)max, "%d Hz %s%s, crystal filter centre %d Hz", freq_hdr,
+           (unsigned)m < 5 ? modes[m] : "?", in_tx ? " (TX)" : "", xtal_filter_center);
+}
+
 /* ------------------------------------------------------------------ */
 /*  Public API                                                        */
 /* ------------------------------------------------------------------ */
 int sound_thread_start(const char *device_name) {
   const char *dev = device_name ? device_name : "hw:0,0";
+
+  // SIGUSR1 writes a second of the raw capture to /tmp (capture_dump.h)
+  if (capture_dump_init("/tmp", SAMPLE_RATE, CHANNELS) == 0)
+    capture_dump_set_describer(describe_for_capture);
+  else
+    printf("sound: raw-capture dump unavailable\n");
 
   pcm_capture = open_pcm(dev, SND_PCM_STREAM_CAPTURE, CAPTURE_PERIODS, NULL);
   if (!pcm_capture)
