@@ -305,8 +305,10 @@ have landed at 21,190.6 Hz; on the bench it's 70 dB down
 **WM8731 DAC.** The right channel carries the pipeline output at the
 calibrated TX amplitude - this is the exciter feed, and the only place
 in the chain that sets output power. The left channel carries the
-unprocessed TX audio (sidetone or mic) at a fixed, low level
-(`SIDETONE_PEAK_AMPLITUDE`) for the local speaker only.
+unprocessed TX audio (sidetone, mic, or the host's audio in DIGITAL or
+over TCI) at a fixed, low level (`SIDETONE_PEAK_AMPLITUDE`, or
+`DIGITAL_MONITOR_PEAK_AMPLITUDE` for a host's audio) for the local
+speaker only.
 
 **Mixer 2 — clk1 at `bfo_freq`.** While transmitting, clk1 is
 `bfo_freq`, not its RX value. The DAC output drives a single balanced
@@ -476,7 +478,15 @@ clamped. The constants (`sound.c` unless noted):
   still hasn't been checked on a wattmeter (`ARCHITECTURE.md` §10
   step 10).
 - **`SIDETONE_PEAK_AMPLITUDE`** — the local monitor level on the left
-  channel. It has no effect on transmitted power.
+  channel: the CW sidetone, the mic, and the test tones. It has no
+  effect on transmitted power and doesn't follow the volume control.
+- **`DIGITAL_MONITOR_PEAK_AMPLITUDE`** — the same for a host's transmit
+  audio (WSJT-X over the USB gadget, a TCI client's), 15 dB lower:
+  those programs send near full scale for the whole transmission, and
+  WSJT-X's Pwr slider at 100% would otherwise put the tones about 10 dB
+  above received signals at the default volume. Over the USB gadget it
+  still follows WSJT-X's Pwr slider, which scales the audio itself; over
+  TCI the Pwr slider sends `drive` instead and the monitor stays put.
 
 `tx_pipeline.c` has unity gain for a steady tone, which is why CW's
 calibration carries over from the old scheme. Speech and FT8 audio have
