@@ -96,6 +96,10 @@ static int rx_mute_by_switch = 1;
 // Deliberately independent of TX_GAIN_CORRECTION; see
 // docs/03_tx_processing_pipeline.md.
 #define SIDETONE_PEAK_AMPLITUDE 10000000.0
+// The monitor's peak for a host's transmit audio (DIGITAL over the USB
+// gadget, or a TCI client's), 15 dB under SIDETONE_PEAK_AMPLITUDE: WSJT-X
+// and JTDX send their tones near full scale for the whole transmission.
+#define DIGITAL_MONITOR_PEAK_AMPLITUDE (SIDETONE_PEAK_AMPLITUDE * 0.178)
 
 // Fixed unit conversion: a raw S32_LE mic sample (full int32 range) to
 // tx_pipeline.c's ~[-1,1] input, full scale = 1.0 - the mic counterpart to
@@ -1032,6 +1036,7 @@ static void *audio_loop(void *arg) {
 
         enum radio_mode tx_mode = mode_now;
         enum tx_pipeline_signal signal = TX_PIPELINE_CW;
+        double monitor_peak = SIDETONE_PEAK_AMPLITUDE; // the local speaker's level
 
         if (tone_on) {
           // Test tones replace the mode's own source; the sideband still
@@ -1076,6 +1081,7 @@ static void *audio_loop(void *arg) {
           // DIGITAL is always USB (the FT8/digital convention); TCI audio
           // in USB or LSB follows the mode.
           signal = (tx_mode == RADIO_MODE_LSB) ? TX_PIPELINE_LSB : TX_PIPELINE_USB;
+          monitor_peak = DIGITAL_MONITOR_PEAK_AMPLITUDE;
         } else {
           // USB/LSB: mic audio, through the fixed unit conversion and the
           // live mic gain. (cw_poll_key() only asserts TX for CW, USB and
@@ -1122,9 +1128,10 @@ static void *audio_loop(void *arg) {
           if (raw_tx < -TX_SAMPLE_CLAMP)
             raw_tx = -TX_SAMPLE_CLAMP;
 
-          // L: local monitor - CW sidetone or a copy of the mic audio, at a
-          // fixed level (SIDETONE_PEAK_AMPLITUDE). Never reaches the PA.
-          double raw_side = tx_audio_buf[i] * SIDETONE_PEAK_AMPLITUDE;
+          // L: local monitor - CW sidetone, a copy of the mic audio, or
+          // the host's transmit audio, at a fixed level (monitor_peak).
+          // Never reaches the PA.
+          double raw_side = tx_audio_buf[i] * monitor_peak;
           if (raw_side > TX_SAMPLE_CLAMP)
             raw_side = TX_SAMPLE_CLAMP;
           if (raw_side < -TX_SAMPLE_CLAMP)
