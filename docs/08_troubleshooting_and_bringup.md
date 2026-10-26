@@ -17,9 +17,10 @@ Hardware bring-up gotchas that don't belong in the design docs proper:
 - maxibitx refusing to start because `hw_settings.ini` doesn't name the
   board, and the zBitx's `RX_LINE` needing the UART off
   ([below](#the-radio-board-at-startup)).
-- A receiver whose spectrum is full of mirrored images, and the
-  raw-capture dump for looking at what the codec delivers
-  ([below](#a-spectrum-full-of-mirrors)).
+- A receiver whose spectrum is full of ghosts: the codec's start-up
+  timing pattern, maxibitx's check for it, and the raw-capture dump for
+  looking at what the codec delivers
+  ([below](#a-spectrum-full-of-ghosts)).
 - Anything else discovered during bring-up on real hardware that would
   otherwise get rediscovered the hard way a second time.
 
@@ -285,17 +286,52 @@ JTDX and WSJT-X Improved should produce (they key with source `tci`).
 without it - check its TCI audio setting. A client that disconnects while
 transmitting releases TX and says so.
 
-## A spectrum full of mirrors
+## A spectrum full of ghosts
 
-Now and then (about one start in 25 on one sBitx) the receiver comes up
-with a wavy spectrum: real signals, but many ghosts and birdies that tune
-backwards. A transmission doesn't clear it; restarting maxibitx does.
-Signals that tune backwards are mirror images about the dial, which means
-the codec's samples themselves carry an image about the 24 kHz IF: the
-software LO is at exactly fs/4, so maxibitx's own I/Q can't make one.
+Now and then (about one start in 25 on one sBitx) the WM8731 starts with
+its sample timing modulated in a pattern that repeats every 128 samples.
+It makes 96 kHz from a 12 MHz crystal in its USB mode, 125 clocks a
+sample (`/sys/kernel/debug/regmap/1-001a/registers`: register 8 = 0x1d),
+and in this state its sampling instants wobble with that cycle. Every
+received signal then gets copies at multiples of 750 Hz, the strongest
+3750 Hz away: a strong station off the side of the display throws a
+picket fence of them across it, and the copies pushed past either end of
+the codec's band fold back and tune backwards. The spectrum looks wavy,
+with real signals among many ghosts. A transmission doesn't clear it;
+restarting maxibitx usually does.
 
-To see what the codec is delivering, send maxibitx SIGUSR1 while the
-fault is showing:
+The codec's registers are the same in this state as in a good start.
+What clears it is restarting the codec's digital interface (register 9,
+ACTIVE, off and on), and maxibitx checks for it and does that at
+start-up (`src/codec_check.h`). A second after the audio starts it
+measures the pattern on the right channel, the mic line, which is quiet
+in receive: the power of its sample-to-sample differences, folded over
+the 128-sample cycle, has a strong 5th harmonic in this state (about 0.9
+of the mean) and almost none otherwise (under 0.01). One of these lines
+follows `sound: running`:
+
+```
+codec: sampling clean (0.002)
+```
+
+```
+codec: started with a 128-sample timing pattern (0.935) - every signal would have ghosts every 750 Hz; restarting its interface
+codec: sampling clean after 1 interface restart (0.003)
+```
+
+It tries up to three restarts. If it says `still patterned` or `couldn't
+restart its interface`, restart maxibitx. The restart can also be done
+by hand while maxibitx runs (the bus is the number in the regmap
+directory's name, `1-001a`; `-f` because the kernel driver owns the
+device):
+
+```
+sudo i2cset -f -y 1 0x1a 0x12 0x00    # register 9, ACTIVE = 0
+sudo i2cset -f -y 1 0x1a 0x12 0x01    # ACTIVE = 1
+```
+
+It was found with the raw-capture dump. To see what the codec is
+delivering, send maxibitx SIGUSR1:
 
 ```
 pkill -USR1 maxibitx
@@ -317,11 +353,16 @@ compare. What each fault looks like:
 
 | `capture_check.py` shows | in a good capture | points to |
 |---|---|---|
+| timing pattern on R about 0.9; mirror on L well above 0, a strong signal's copies 3750 Hz apart | under 0.01 | the codec's timing pattern, above |
 | mirror about 24 kHz | about 0, signals 70 dB or more above their mirrors | - |
 | mirror near 1, every signal the same few dB above its mirror; even RMS several dB from odd | even and odd within 0.1 dB | a gain difference between alternate samples |
 | mirror near 1; a sample repeats the one before it most of the time, on even or on odd samples | about 0% | the codec running at half the rate, each sample sent twice |
 | far fewer or more low bits always 0 than the codec's (8 for 24 bits in 32), nearly all samples positive, high level | 8, half positive | the I2S frame read a bit clock off |
 | L and R correlated, or the mic on L | about 0 | the channels swapped or mixed |
+
+Two things show in every capture, good or bad, and are not faults: the
+noise floor rippling with an 8 kHz period, and hum at multiples of
+93.75 Hz (96000/1024, the audio block rate) on both channels.
 
 ## What the console shows
 
