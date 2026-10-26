@@ -64,7 +64,7 @@ SRC := src/maxibitx.c src/radio.c src/radio_hw.c src/interfaces/hpsdr_p1.c src/i
      src/si5351v2.c src/sound.c src/vfo.c src/interfaces/hamlib.c src/hw_settings.c src/antialias.c src/decim48k.c src/cw.c \
      src/rx_audio.c src/gpio.c src/interfaces/iq_stream.c src/fft_filter.c src/tx_pipeline.c src/rx_filter.c src/upsample48k.c src/tone_gen.c \
      src/key_input.c src/encoder.c src/knobs.c src/$(KEYER).c src/morse.c src/interfaces/tci.c src/interfaces/tci_stream.c \
-     src/interfaces/tci_ws.c src/interfaces/tci_cw.c src/cw_decoder.c src/cw_spot.c
+     src/interfaces/tci_ws.c src/interfaces/tci_cw.c src/cw_decoder.c src/cw_spot.c src/capture_dump.c
 OBJ := $(SRC:.c=.o)
 
 all: maxibitx
@@ -101,7 +101,7 @@ check-filters:
 # end of its log. Run it before uploading a change; `make` itself doesn't.
 TESTS := test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse \
 	test-upsample48k test-cw test-key-input test-radio test-encoder test-keyer \
-	test-keyer-straight test-radio-hw test-tci-ws test-tci test-cw-decoder test-cw-spot
+	test-keyer-straight test-radio-hw test-tci-ws test-tci test-cw-decoder test-cw-spot test-capture-dump
 KEYERS := keyer keyer_straight
 OBJ_NO_KEYER := $(filter-out src/$(KEYER).o,$(OBJ))
 
@@ -125,7 +125,7 @@ test:
 	if [ $$fail -eq 0 ]; then echo "all passed"; else echo "$$fail FAILED - see test-logs/"; exit 1; fi
 
 clean:
-	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw test-key-input test-keyer test-keyer-straight test-tci-ws test-tci test-radio-hw test-encoder test-radio test-cw-decoder test-cw-spot \
+	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw test-key-input test-keyer test-keyer-straight test-tci-ws test-tci test-radio-hw test-encoder test-radio test-cw-decoder test-cw-spot test-capture-dump \
 		src/fft_filter.o src/fft_filter_test.o src/tx_pipeline.o src/tx_pipeline_test.o \
 		src/rx_filter.o src/rx_filter_test.o src/rx_audio_test.o src/rx_audio_impulse_test.o src/upsample48k_test.o \
 		$(KEYERS:%=src/%.o)
@@ -251,6 +251,11 @@ test-cw-decoder: src/cw_decoder.c src/cw_decoder.h src/cw_decoder_test.c src/mor
 # a search costs.
 test-cw-spot: src/cw_spot.c src/cw_spot.h src/cw_spot_test.c
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/cw_spot.c src/cw_spot_test.c -o $@ -lm $(TEST_LIBS)
+
+# The raw-capture dump (capture_dump.c): SIGUSR1 to the process, a second
+# of fed frames read back from the WAV file.
+test-capture-dump: src/capture_dump.c src/capture_dump.h src/capture_dump_test.c
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/capture_dump.c src/capture_dump_test.c -o $@ -lpthread $(TEST_LIBS)
 
 test-keyer: src/keyer.c src/keyer.h src/morse.c src/morse.h src/keyer_test.c src/key_input.h tools/keyer_study/keyer_spec_model.c
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Itools/keyer_study src/keyer.c src/morse.c src/keyer_test.c -o $@ -lpthread $(TEST_LIBS)
