@@ -22,6 +22,11 @@ codec or I2S fault from a quiet band:
   L and R     correlation between the channels, at no lag and one sample
               either way - a channel slip shows as one channel's audio in
               the other
+  timing      (R, the quiet mic line) the codec's 128-sample timing
+              pattern, measured as maxibitx's start-up check measures it
+              (src/codec_check.h): under 0.01 clean, about 0.9 when the
+              WM8731 has started patterned and every signal has copies
+              every 750 Hz (strongest at 3750 Hz)
 
 Usage:
     tools/capture_check.py FILE.wav [FILE.wav ...]
@@ -38,6 +43,9 @@ IF_HZ_OF_RATE = 0.25  # the RX IF sits at fs/4
 MIRROR_SPAN_HZ = 20000  # each side of the IF compared
 MIRROR_SKIP_HZ = 300  # around the IF itself (the carrier, the LO's leak)
 PEAKS = 8
+TIMING_PERIOD = 128  # codec_check.h's CODEC_CHECK_PERIOD, _HARMONIC and _BAD
+TIMING_HARMONIC = 5
+TIMING_BAD = 0.3
 SIGNAL_DB = 20  # above the noise: a signal, for the mirror measures
 
 
@@ -153,6 +161,17 @@ def mirror(x, rate, bits):
     return corr, floor, peaks
 
 
+def timing_pattern(x):
+    """The 5th harmonic of the power of successive-sample differences,
+    folded over a 128-sample cycle, over its mean (codec_check_score())."""
+    m = (len(x) - 1) // TIMING_PERIOD * TIMING_PERIOD
+    d = np.diff(x[: m + 1].astype(np.float64))
+    power = (d**2).reshape(-1, TIMING_PERIOD).sum(0)
+    k = np.arange(TIMING_PERIOD)
+    h = np.sum(power * np.exp(-2j * np.pi * TIMING_HARMONIC * k / TIMING_PERIOD))
+    return float(2 * abs(h) / TIMING_PERIOD / np.mean(power)) if power.any() else 0.0
+
+
 def lag_corr(a, b, lag):
     a = a.astype(np.float64) - np.mean(a)
     b = b.astype(np.float64) - np.mean(b)
@@ -195,6 +214,9 @@ def check(path):
                 lag_corr(x[:, 0], x[:, 1], -1)
             )
         )
+        t = timing_pattern(x[:, 1])
+        verdict = "patterned: ghosts every 750 Hz" if t >= TIMING_BAD else "clean"
+        print(f"  timing     the codec's 128-sample pattern on R: {t:.3f} ({verdict})")
 
 
 def main():
