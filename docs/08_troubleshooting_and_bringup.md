@@ -17,6 +17,9 @@ Hardware bring-up gotchas that don't belong in the design docs proper:
 - maxibitx refusing to start because `hw_settings.ini` doesn't name the
   board, and the zBitx's `RX_LINE` needing the UART off
   ([below](#the-radio-board-at-startup)).
+- A receiver whose spectrum is full of mirrored images, and the
+  raw-capture dump for looking at what the codec delivers
+  ([below](#a-spectrum-full-of-mirrors)).
 - Anything else discovered during bring-up on real hardware that would
   otherwise get rediscovered the hard way a second time.
 
@@ -281,6 +284,44 @@ JTDX and WSJT-X Improved should produce (they key with source `tci`).
 `audio from the USB gadget` or `no TCI stream` means the client keyed
 without it - check its TCI audio setting. A client that disconnects while
 transmitting releases TX and says so.
+
+## A spectrum full of mirrors
+
+Now and then (about one start in 25 on one sBitx) the receiver comes up
+with a wavy spectrum: real signals, but many ghosts and birdies that tune
+backwards. A transmission doesn't clear it; restarting maxibitx does.
+Signals that tune backwards are mirror images about the dial, which means
+the codec's samples themselves carry an image about the 24 kHz IF: the
+software LO is at exactly fs/4, so maxibitx's own I/Q can't make one.
+
+To see what the codec is delivering, send maxibitx SIGUSR1 while the
+fault is showing:
+
+```
+pkill -USR1 maxibitx
+```
+
+It records the next second of the raw capture (both channels, exactly as
+`snd_pcm_readi()` gave them, before any processing) and writes it to
+`/tmp`, saying so on the console:
+
+```
+capture_dump: SIGUSR1 - recording 1 s of the raw capture
+capture_dump: wrote /tmp/maxibitx_capture_20261026_174829.wav - 1 s, 96000 Hz, 2 channels, S32, 14074000 Hz DIGI, crystal filter centre 40012400 Hz
+```
+
+The radio carries on as before. The file is a 32-bit stereo WAV (L = the
+RX IF, R = the mic), 768 kB. `tools/capture_check.py` reads it (on the Pi
+or anywhere). Take one from a good start too, on the same band, to
+compare. What each fault looks like:
+
+| `capture_check.py` shows | in a good capture | points to |
+|---|---|---|
+| mirror about 24 kHz | about 0, signals 70 dB or more above their mirrors | - |
+| mirror near 1, every signal the same few dB above its mirror; even RMS several dB from odd | even and odd within 0.1 dB | a gain difference between alternate samples |
+| mirror near 1; a sample repeats the one before it most of the time, on even or on odd samples | about 0% | the codec running at half the rate, each sample sent twice |
+| far fewer or more low bits always 0 than the codec's (8 for 24 bits in 32), nearly all samples positive, high level | 8, half positive | the I2S frame read a bit clock off |
+| L and R correlated, or the mic on L | about 0 | the channels swapped or mixed |
 
 ## What the console shows
 
