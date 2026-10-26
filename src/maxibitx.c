@@ -13,6 +13,7 @@
 // Mike Johnshoy, KB2ML
 
 #include "capture_dump.h"
+#include "codec_check.h"
 #include "hpsdr_p1.h"
 #include "iq_stream.h"
 #include "si5351.h"
@@ -38,6 +39,10 @@
  
 // Standard rigctld TCP port
 #define HAMLIB_PORT 4532
+
+// The longest the ready line waits for the codec check's verdict: its
+// settle time, a measurement, and its restarts with room to spare.
+#define READY_WAITS_FOR_CODEC_MS 5000
  
 // set a flag when we get a SIGINT/SIGTERM - the idle loop
 // below does the actual teardown once it notices
@@ -249,6 +254,16 @@ int main(int argc, char **argv) {
     return -1;
   }
   printf("init: audio capture running (hw:0,0 @ 96000 Hz)\n");
+
+  // The codec's start-up check (codec_check.h) says whether its sampling
+  // is clean, restarting its interface if not, about a second and a
+  // quarter after the audio starts; its line comes before the ready line.
+  // If it can't decide by then (transmitting at start-up, no receive
+  // audio), its line follows whenever it does.
+  for (int ms = 0; ms < READY_WAITS_FOR_CODEC_MS && !shutdown_requested &&
+                   codec_check_outcome() == CODEC_CHECK_RUNNING;
+       ms += 50)
+    usleep(50000);
 
   // nothing left to start-up or initialize
   printf("maxiBitx: radio hardware initialization complete, ready to serve!\n");
