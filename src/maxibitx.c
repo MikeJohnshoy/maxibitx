@@ -12,6 +12,7 @@
 //
 // Mike Johnshoy, KB2ML
 
+#include "capture_dump.h"
 #include "hpsdr_p1.h"
 #include "iq_stream.h"
 #include "si5351.h"
@@ -66,6 +67,11 @@ int main(int argc, char **argv) {
   (void)argc;
   (void)argv;
   printf("Starting maxiBitx radio hardware and control interfaces ...\n");
+
+  // Before any thread starts, so every thread inherits it: SIGUSR1 (the
+  // raw-capture dump, capture_dump.h) is blocked everywhere and taken by
+  // its own thread with sigwait(), interrupting nothing.
+  capture_dump_block_signal();
  
   // prepare to receive shutdown signal
   struct sigaction sa = {0};
