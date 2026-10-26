@@ -54,7 +54,7 @@ enum {
   CODEC_CHECK_RUNNING,    // not yet decided
   CODEC_CHECK_CLEAN,      // clean, at once or after restarts
   CODEC_CHECK_BAD_STATE,  // still patterned, or couldn't restart it
-  CODEC_CHECK_UNMEASURED, // no receive audio to measure
+  CODEC_CHECK_UNMEASURED, // no receive audio to measure, or the check couldn't start
 };
 int codec_check_outcome(void);
 
