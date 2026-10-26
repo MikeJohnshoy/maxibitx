@@ -19,6 +19,7 @@ test-radio
 test-cw-decoder
 test-cw-spot
 test-capture-dump
+test-codec-check
 src/*.o
 test-logs/
 *.o
