@@ -376,7 +376,7 @@ static struct vfo bfo;
 // rx_volume.
 #define RX_VOLUME_MAX 0.20
 #define RX_VOLUME_RANGE_DB 50.0
-#define RX_VOLUME_DEFAULT_PERCENT 67
+#define RX_VOLUME_DEFAULT_PERCENT 40
 
 static double volume_percent_to_gain(int percent) {
     if (percent <= 0)
