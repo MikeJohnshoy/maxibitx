@@ -481,7 +481,7 @@ clamped. The constants (`sound.c` unless noted):
   channel: the CW sidetone, the mic, and the test tones. It has no
   effect on transmitted power and doesn't follow the volume control.
 - **`DIGITAL_MONITOR_PEAK_AMPLITUDE`** — the same for a host's transmit
-  audio (WSJT-X over the USB gadget, a TCI client's), 15 dB lower:
+  audio (WSJT-X over the USB gadget, a TCI client's), 20 dB lower:
   those programs send near full scale for the whole transmission, and
   WSJT-X's Pwr slider at 100% would otherwise put the tones about 10 dB
   above received signals at the default volume. Over the USB gadget it
