@@ -72,8 +72,11 @@ The screen, top to bottom:
   within 10 kHz of the centre, clear of the crystal filter's skirts), 6 dB
   below it, so the noise sits just off the bottom on any band and the height
   above it goes to signals; the status line shows the noise level next
-  to the peak. Off, the bottom is fixed at −100 dB. The top stays at
-  `SPECTRUM_DB_CEILING`.
+  to the peak. Off, the bottom is fixed at −100 dB. The trace's top stays
+  at `SPECTRUM_DB_CEILING`. The waterfall has its own top, set in
+  Settings (20 to 80 dB above the floor, 40 to start with): its colours
+  run from dark blue at the floor through cyan and yellow to white at the
+  top, so a lower top puts everyday signals in the warm colours.
 - **Decoded CW:** in CW and CWR the waterfall is shorter, and two lines
   under it show what maxibitx's CW decoder reads (`\get_cw_text`, polled
   four times a second); the status line adds the speed it has learned
@@ -102,7 +105,7 @@ does. A maxibitx without knob support simply doesn't answer `n` or
 `u MUTE`, and the panel carries on without them.
 
 **Settings** open from the gear at the top right (or the RX/TX button):
-the connection, the peak line and auto floor, paddle reversal, the CW filter type (FFT
+the connection, the peak line, auto floor and the waterfall's top, paddle reversal, the CW filter type (FFT
 or elliptic), the TX test tones with their Transmit switch, the ten
 macros (a button label and the text sent), and the macro fields. A field
 is a name and a value: MYCALL and PARK to start with, and up to eight of
