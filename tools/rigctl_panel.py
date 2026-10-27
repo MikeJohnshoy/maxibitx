@@ -212,6 +212,14 @@ AUTO_FLOOR_MIN_RANGE_DB = 30.0 # never closer than this to the ceiling
 # ceiling flat-tops and the trace says "over scale": the display's
 # limit, not the radio's - the codec's is 0 dBFS, 30 dB higher.
 SPECTRUM_DB_CEILING = -30.0
+# The waterfall's brightest colour, in dB above the display floor (a
+# setting). Its own top, not the trace's ceiling, so that everyday
+# signals reach the warm colours: at 40 dB, an S9 signal on a quiet band
+# is near white, a weak CW signal blue to yellow.
+WATERFALL_TOP_DEFAULT_DB = 40
+WATERFALL_TOP_MIN_DB = 20
+WATERFALL_TOP_MAX_DB = 80
+WATERFALL_TOP_STEP_DB = 5
 # Displayed half-spans. The FFT always covers the full +-48 kHz at
 # 46.875 Hz/bin; these crop it, so a narrow span spreads the same bins
 # wider rather than resolving finer. The widest stays inside the crystal
@@ -862,9 +870,23 @@ class SettingsDialog(tk.Toplevel):
                         command=p.save_settings).grid(row=0, column=0, sticky="w")
         ttk.Checkbutton(disp, text="Auto floor", variable=p.auto_floor_var, style="Toolbutton",
                         command=p.save_settings).grid(row=0, column=1, sticky="w", padx=(4, 0))
-        ttk.Label(disp, text=f"peak line falls {PEAK_DECAY_DB_PER_S:g} dB/s; auto floor follows "
-                  f"the band noise (off: {SPECTRUM_DB_FLOOR:g} dB)",
-                  style="PanelMuted.TLabel").grid(row=0, column=2, sticky="w", padx=(10, 0))
+        # The waterfall's top on the same line: the dialog fills an
+        # 800x480 screen with no room for another row.
+        ttk.Label(disp, text="Waterfall top", style="PanelMuted.TLabel").grid(row=0, column=2,
+                                                                           padx=(16, 0))
+
+        def top_moved(v):
+            step = WATERFALL_TOP_STEP_DB
+            p.wf_top_var.set(int(round(float(v) / step) * step))
+            top_label.configure(text=f"{p.wf_top_var.get()} dB above floor")
+
+        top_scale = ttk.Scale(disp, from_=WATERFALL_TOP_MIN_DB, to=WATERFALL_TOP_MAX_DB,
+                              variable=p.wf_top_var, length=150, command=top_moved)
+        top_scale.grid(row=0, column=3, padx=8)
+        top_scale.bind("<ButtonRelease-1>", lambda e: p.save_settings())
+        top_label = ttk.Label(disp, text=f"{p.wf_top_var.get()} dB above floor",
+                              style="PanelMuted.TLabel", width=16)
+        top_label.grid(row=0, column=4, sticky="w")
 
         f.columnconfigure(0, weight=1)
         f.columnconfigure(1, weight=1)
@@ -995,6 +1017,11 @@ class Panel(tk.Tk):
         self.band_memory = dict(cfg.get("band_memory", {}))
         self.peak_var = tk.BooleanVar(value=cfg.get("peak_line", True))
         self.auto_floor_var = tk.BooleanVar(value=cfg.get("auto_floor", True))
+        top = cfg.get("waterfall_top_db", WATERFALL_TOP_DEFAULT_DB)
+        if not isinstance(top, (int, float)):
+            top = WATERFALL_TOP_DEFAULT_DB
+        self.wf_top_var = tk.IntVar(
+            value=int(min(max(top, WATERFALL_TOP_MIN_DB), WATERFALL_TOP_MAX_DB)))
         self.noise_db = None       # the auto floor's smoothed noise estimate
         self.noise_time = 0.0
         self.peak_db = None        # the peak line's levels, display bins
@@ -1432,6 +1459,7 @@ class Panel(tk.Tk):
             "band_memory": self.band_memory,
             "peak_line": self.peak_var.get(),
             "auto_floor": self.auto_floor_var.get(),
+            "waterfall_top_db": self.wf_top_var.get(),
         })
         save_config(self.cfg)
 
@@ -1934,7 +1962,7 @@ class Panel(tk.Tk):
         self.waterfall_image.configure(data=header + rows.tobytes(), format="PPM")
 
     def add_waterfall_row(self, frac):
-        """frac: the displayed bins, 0 (the floor) to 1 (the ceiling).
+        """frac: the displayed bins, 0 (the floor) to 1 (the waterfall's top).
         Each pixel shows the strongest bin under it, so a narrow CW signal
         isn't averaged away at the wide span."""
         w = self.waterfall_rows.shape[1]
@@ -2080,8 +2108,8 @@ class Panel(tk.Tk):
                 coords[1::2] = TRACE_H - 2 - to_frac(levels) * (TRACE_H - 6)
                 c.create_line(*coords.tolist(), fill=color, width=width, tags="trace")
 
-            frac = to_frac(db)
-            self.add_waterfall_row(frac)
+            # the waterfall's colours: the same floor, its own top
+            self.add_waterfall_row(np.clip((db - floor_db) / self.wf_top_var.get(), 0.0, 1.0))
             if self.peak_var.get():
                 trace(self.update_peak(db), PEAK_COLOR, 1)
             trace(db, TRACE, 1.5)
