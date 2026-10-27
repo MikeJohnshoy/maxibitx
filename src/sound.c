@@ -97,7 +97,7 @@ static int rx_mute_by_switch = 1;
 // docs/03_tx_processing_pipeline.md.
 #define SIDETONE_PEAK_AMPLITUDE 10000000.0
 // The monitor's peak for a host's transmit audio (DIGITAL over the USB
-// gadget, or a TCI client's), 15 dB under SIDETONE_PEAK_AMPLITUDE: WSJT-X
+// gadget, or a TCI client's), 20 dB under SIDETONE_PEAK_AMPLITUDE: WSJT-X
 // and JTDX send their tones near full scale for the whole transmission.
 #define DIGITAL_MONITOR_PEAK_AMPLITUDE (SIDETONE_PEAK_AMPLITUDE * 0.100)
 
