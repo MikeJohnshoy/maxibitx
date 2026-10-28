@@ -57,6 +57,29 @@ int radio_hw_gpio_init(void);
 // nothing.
 void radio_hw_tune(int freq_hz);
 
+// Holding one LPF in circuit regardless of the dial, for measuring the
+// filters through the receiver (rigctld's L LPF, tools/lpf_sweep.py).
+// Only on a board whose LPFs are in the receive path.
+enum {
+  RADIO_HW_LPF_AUTO, // the dial's band filter (no hold)
+  RADIO_HW_LPF_A,    // 18.5-30 MHz on the sBitx
+  RADIO_HW_LPF_B,    // 10.5-18.5 MHz
+  RADIO_HW_LPF_C,    // 5.5-10.5 MHz
+  RADIO_HW_LPF_D,    // below 5.5 MHz
+  RADIO_HW_LPF_NONE, // every LPF relay off
+};
+
+// Holds `which` (RADIO_HW_LPF_*) and switches the relays at once;
+// RADIO_HW_LPF_AUTO ends the hold and selects the dial's filter. Retuning
+// leaves a hold in place. Transmitting ends it: radio_hw_relays_tx(1, ...)
+// selects the transmit frequency's filter first. Returns 0, or -1 while
+// transmitting, for a value out of range, or on a board whose LPFs are
+// not in the receive path.
+int radio_hw_hold_lpf(int which);
+
+// The hold in force, RADIO_HW_LPF_*.
+int radio_hw_lpf_hold(void);
+
 // The selected board's knob k; a_pin is -1 if it has none.
 struct radio_hw_knob radio_hw_knob(enum radio_knob k);
 
