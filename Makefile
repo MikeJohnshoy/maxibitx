@@ -284,7 +284,7 @@ test-keyer-straight: src/keyer_straight.c src/keyer.h src/morse.c src/morse.h sr
 # zBitx cannot transmit - with gpio.c and i2c.c stubbed. See
 # docs/dsp_design_notes/zbitx_port_study.md §5.
 test-radio-hw: src/radio_hw.c src/radio_hw.h src/hw_settings.c src/hw_settings.h src/radio_hw_test.c
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces src/radio_hw.c src/hw_settings.c src/radio_hw_test.c -o $@ -lm $(TEST_LIBS)
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces src/radio_hw.c src/hw_settings.c src/radio_hw_test.c -o $@ -lm -lpthread $(TEST_LIBS)
 
 TCI_TEST_HDRS := src/interfaces/tci.h src/interfaces/tci_ws.h src/interfaces/tci_stream.h src/interfaces/ws_test_client.h
 
