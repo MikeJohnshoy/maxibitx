@@ -21,7 +21,7 @@
 #include "sound.h"    // mic gain, TX power and the ALC reading - l/L below
 #include "tone_gen.h" // u/U TONE below
 #include "hw_settings.h" // tx_band_scales[] - dump_state TX ranges
-#include "radio_hw.h"    // radio_hw_tx_permitted() - dump_state TX ranges
+#include "radio_hw.h"    // radio_hw_tx_permitted() - dump_state TX ranges; l/L LPF
 #include "key_input.h"   // u/U PADREV below
 #include "keyer.h"       // l/L KEYSPD, u/U KEYER, b and \stop_morse below
 #include "morse.h"       // b's text
@@ -368,6 +368,13 @@ static int handle_line(int fd, char *line)
             snprintf(buf, sizeof(buf), "%d\n", radio_get_xtal_filter_center());
             send_line(fd, buf);
             get_log("rigctl: l XTALCENTER -> %d Hz\n", radio_get_xtal_filter_center());
+        } else if (strcmp(level_name, "LPF") == 0) {
+            // Extension: the LPF hold, radio_hw.h's RADIO_HW_LPF_* (0 the
+            // dial's filter, 1-4 LPF_A-D, 5 none), for tools/lpf_sweep.py.
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%d\n", radio_hw_lpf_hold());
+            send_line(fd, buf);
+            get_log("rigctl: l LPF -> %d\n", radio_hw_lpf_hold());
         } else {
             send_rprt(fd, -1);
             printf("rigctl: l %s -> unsupported level\n", level_name);
@@ -429,6 +436,19 @@ static int handle_line(int fd, char *line)
             send_rprt(fd, ok ? 0 : -1);
             printf("rigctl: L XTALCENTER %.0f -> %s, %d Hz\n", val,
                    ok ? "ok" : "refused", radio_get_xtal_filter_center());
+        } else if (sscanf(cmd + 1, "%31s %lf", level_name, &val) == 2 &&
+                   strcmp(level_name, "LPF") == 0) {
+            // Extension: holds one LPF (or none) in circuit whatever the
+            // dial, until L LPF 0 or a transmission (radio_hw.h). Refused
+            // while transmitting, out of range, or on a board whose LPFs
+            // aren't in the receive path. Not logged: a sweep switches it
+            // thousands of times, and radio_hw.c says when a hold starts
+            // and ends.
+            int which = (int)val;
+            int ok = val == which && radio_hw_hold_lpf(which) == 0;
+            send_rprt(fd, ok ? 0 : -1);
+            if (!ok)
+                printf("rigctl: L LPF %g -> refused\n", val);
         } else {
             send_rprt(fd, -1);
             printf("rigctl: L %s -> unsupported level or bad args\n", cmd + 1);
