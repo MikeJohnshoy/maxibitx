@@ -10,6 +10,7 @@
 #include "hw_settings.h" // tx_ext_ptt_delay_ms, hw_i2c_bus
 #include "i2c.h"
 #include "radio_hw.h"
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -170,10 +171,21 @@ static void drive(int pin, int value) {
 
 static int prev_lpf = -1; // pin last selected; 0: none; -1: none since start-up
 
+// The LPF state, shared by the threads that retune, the TX worker and
+// rigctld's L LPF: the relays, the hold and whether the transmitter is up
+// change together under this lock, so a held filter can never be in
+// circuit while transmitting.
+static pthread_mutex_t lpf_lock = PTHREAD_MUTEX_INITIALIZER;
+static int lpf_hold = RADIO_HW_LPF_AUTO; // RADIO_HW_LPF_*
+static int lpf_dial_hz;                  // the last retune's frequency
+static int lpf_tx_up;                    // between relays_tx(1) and (0)
+
 int radio_hw_gpio_init(void) {
   for (int i = 0; i < MAX_BCM_PIN; i++)
     line[i] = -1;
   prev_lpf = -1;
+  lpf_hold = RADIO_HW_LPF_AUTO;
+  lpf_tx_up = 0;
 
   // Each line is driven to its receive state as part of its request, so it
   // never holds whatever the pin's power-on default was.
@@ -223,8 +235,52 @@ static void select_lpf(int freq_hz, int log) {
 }
 
 void radio_hw_tune(int freq_hz) {
-  if (board->lpf_in_rx_path)
+  pthread_mutex_lock(&lpf_lock);
+  lpf_dial_hz = freq_hz;
+  if (board->lpf_in_rx_path && lpf_hold == RADIO_HW_LPF_AUTO)
     select_lpf(freq_hz, 1);
+  pthread_mutex_unlock(&lpf_lock);
+}
+
+// The relays for a hold: one filter, or none. Called with lpf_lock held.
+static void hold_relays(int which) {
+  int pin = which == RADIO_HW_LPF_NONE ? 0 : board->lpf_pins[which - RADIO_HW_LPF_A];
+  if (pin == prev_lpf)
+    return;
+  lpfs_off();
+  if (pin)
+    drive(pin, 1);
+  prev_lpf = pin;
+}
+
+int radio_hw_hold_lpf(int which) {
+  if (which < RADIO_HW_LPF_AUTO || which > RADIO_HW_LPF_NONE || !board || !board->lpf_in_rx_path)
+    return -1;
+  pthread_mutex_lock(&lpf_lock);
+  if (lpf_tx_up) {
+    pthread_mutex_unlock(&lpf_lock);
+    return -1;
+  }
+  int was = lpf_hold;
+  lpf_hold = which;
+  if (which == RADIO_HW_LPF_AUTO) {
+    select_lpf(lpf_dial_hz, 0);
+    if (was != RADIO_HW_LPF_AUTO)
+      printf("LPF: following the dial again (pin %d for %d Hz)\n", prev_lpf, lpf_dial_hz);
+  } else {
+    hold_relays(which);
+    if (was == RADIO_HW_LPF_AUTO)
+      printf("LPF: held by rigctld's L LPF, not the dial, until L LPF 0 or a transmission\n");
+  }
+  pthread_mutex_unlock(&lpf_lock);
+  return 0;
+}
+
+int radio_hw_lpf_hold(void) {
+  pthread_mutex_lock(&lpf_lock);
+  int h = lpf_hold;
+  pthread_mutex_unlock(&lpf_lock);
+  return h;
 }
 
 /* ---- Relay half of the T/R sequence -------------------------------------- */
@@ -232,7 +288,21 @@ void radio_hw_tune(int freq_hz) {
 int radio_hw_relays_tx(int on, int freq_hz) {
   if (on && !board->tx_permitted)
     return -1;
-  return board->relays_tx(on, freq_hz);
+  pthread_mutex_lock(&lpf_lock);
+  if (on && lpf_hold != RADIO_HW_LPF_AUTO) {
+    // A held filter is never transmitted through: the transmit
+    // frequency's own goes in first, with the relay's settling time.
+    lpf_hold = RADIO_HW_LPF_AUTO;
+    int before = prev_lpf;
+    select_lpf(freq_hz, 0);
+    printf("LPF: hold released for transmit (pin %d for %d Hz)\n", prev_lpf, freq_hz);
+    if (prev_lpf != before)
+      usleep(LPF_SETTLE_MS * 1000);
+  }
+  int r = board->relays_tx(on, freq_hz);
+  lpf_tx_up = on && r == 0;
+  pthread_mutex_unlock(&lpf_lock);
+  return r;
 }
 
 // sBitx: the LPF is already selected for the band (it is in the receive
