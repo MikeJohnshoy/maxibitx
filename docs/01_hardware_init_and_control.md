@@ -274,6 +274,18 @@ Both boards have these four filters and no others.
 Selection is a no-op if the new relay matches the last one (tracked in a
 static `prev_lpf`), so retuning within a band doesn't chatter the relays.
 
+On the sBitx one filter, or none, can be held in circuit whatever the
+dial, for measuring the filters through the receiver: rigctld's
+`L LPF` (`radio_hw_hold_lpf()`, [`06_api.md`](06_api.md)), used by
+`tools/lpf_sweep.py`. Retuning leaves the hold in place; `L LPF 0` ends
+it. A hold is never transmitted through: the relay half of the T/R
+sequence ends it and selects the transmit frequency's filter, with the
+relay's 10 ms settling time, before EXT_PTT or TX_LINE moves, and a hold
+is refused while transmitting. The relays, the hold and the transmit
+state change under one lock in `radio_hw.c`. The console says when a
+hold starts and ends, not each change of a held relay. Refused on the
+zBitx, whose filters aren't in the receive path.
+
 ## INA260 power monitor
 
 `radio_hw_ina260_configure()` writes `0x6127` (continuous mode, default
