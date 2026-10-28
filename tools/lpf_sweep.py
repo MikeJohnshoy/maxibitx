@@ -61,7 +61,10 @@ low bands and less higher up: the passbands, the losses and the
 cutoffs, but little of the stopbands. A broadband noise generator at the
 antenna jack (with an attenuator if it overloads the receiver) gives
 40 dB or more. Where a filter's excess falls into the floor, the report
-says "below -N dB": the floor, not the filter.
+says "below -N dB": the floor, not the filter. Antenna noise is strong
+only in places (the low bands, the broadcast bands), and frequencies
+where LPF_A isn't 6 dB above the floor are stepped over; an edge that
+falls in such a gap is given as "between X and Y MHz".
 
 The sweep switches the relays about 800 times. maxibitx refuses to
 transmit through a held filter: a transmission releases the hold and
@@ -88,7 +91,7 @@ from xtal_sweep import (FREQS, IQ_RATE_HZ, IQ_STREAM_PORT, NFFT,  # noqa: E402
 STATES = ("A", "B", "C", "D", "none")   # L LPF 1..5
 FILTERS = STATES[:4]
 WINDOW_HZ = (1000.0, 10000.0)           # |offset| from the dial measured
-MIN_EXCESS_DB = 1.0                     # above the floor, or "below the floor"
+MIN_EXCESS_DB = 3.0                     # above the floor, or "below the floor"
 MIN_REF_DB = 6.0                        # LPF_A above the floor, to compare against
 A_FLAT_HZ = 28000000                    # LPF_A taken as flat up to here
 EDGE_HOLD_POINTS = 2                    # an edge: this many points in a row below
@@ -154,25 +157,40 @@ def at(freqs, values, hz):
 
 def edge(freqs, rel, bnd, drop, start_hz):
     """Where rel first falls `drop` dB below its passband (0 dB) above
-    start_hz, to stay there for EDGE_HOLD_POINTS points, interpolated
-    between the last point above and the first below. A point that fell
-    into the floor counts as below when its bound (bnd) is already below.
-    Returns (hz, "") or (None, why): it never falls that far, or the
-    source ran out (neither measured nor bounded) before it did."""
+    start_hz, to stay there for EDGE_HOLD_POINTS known points. A point
+    is known when it was measured, or fell into the floor with a bound
+    (bnd) already that far down; the rest - where the source was too weak
+    - are stepped over, so an edge is found in the next stretch the
+    source reaches. Returns (lo_hz, hi_hz, why): equal when interpolated
+    between neighbouring points, a range when the crossing lies in a gap,
+    or (None, None, why) if it never falls that far where measured."""
     below = np.where(np.isnan(rel), np.nan_to_num(bnd, nan=0.0) <= -drop, rel <= -drop)
-    unknown = np.isnan(rel) & np.isnan(bnd)
-    for i in np.nonzero(freqs > start_hz)[0]:
-        if unknown[i]:
-            return None, f"not measurable above {freqs[i - 1] / 1e6:.2f} MHz"
-        if i == 0 or below[i - 1] or not np.all(below[i:i + EDGE_HOLD_POINTS]
-                                               | unknown[i:i + EDGE_HOLD_POINTS]):
+    known = ~np.isnan(rel) | below
+    idx = [i for i in np.nonzero(known)[0] if freqs[i] > start_hz]
+    if not idx:
+        return None, None, "not measurable"
+    prev = None   # the last known point above the line
+    for n, i in enumerate(idx):
+        if not below[i]:
+            prev = i
             continue
-        a, b = rel[i - 1], rel[i]
-        if math.isnan(b):      # fell straight into the floor: by this point
-            return float(freqs[i]), ""
-        t = (a + drop) / (a - b)
-        return float(freqs[i - 1] + t * (freqs[i] - freqs[i - 1])), ""
-    return None, "not reached"
+        if prev is None or not all(below[j] for j in idx[n:n + EDGE_HOLD_POINTS]):
+            continue
+        if i == prev + 1 and not math.isnan(rel[i]):
+            a, b = rel[prev], rel[i]
+            hz = float(freqs[prev] + (a + drop) / (a - b) * (freqs[i] - freqs[prev]))
+            return hz, hz, ""
+        return float(freqs[prev]), float(freqs[i]), ""
+    return None, None, f"not reached where measured (to {freqs[idx[-1]] / 1e6:.2f} MHz)"
+
+
+def fmt_edge(drop, lo, hi, why):
+    if lo is None:
+        return f"-{drop} dB {why}"
+    star = "*" if hi > A_FLAT_HZ else ""
+    if lo == hi:
+        return f"-{drop} dB at {lo / 1e6:.2f} MHz{star}"
+    return f"-{drop} dB between {lo / 1e6:.2f} and {hi / 1e6:.2f} MHz{star}"
 
 
 def fmt_db(v, b):
@@ -215,9 +233,7 @@ def report(freqs, raw, prefix):
         rel, bnd = vs_a[x] - p0, bound[x] - p0
         points = []
         for drop in (3, 20):
-            e, why = edge(freqs, rel, bnd, drop, lo_hz)
-            star = "*" if e and e > A_FLAT_HZ else ""
-            points.append(f"-{drop} dB at {e / 1e6:.2f} MHz{star}" if e else f"-{drop} dB {why}")
+            points.append(fmt_edge(drop, *edge(freqs, rel, bnd, drop, lo_hz)))
         print(f"\nLPF_{x} (switched below {top / 1e6:g} MHz): passband {p0:+.1f} dB vs A "
               f"(scatter {np.std(pas):.1f} dB), " + ", ".join(points))
         for name, b_lo, b_hi in BANDS:
@@ -240,7 +256,7 @@ def report(freqs, raw, prefix):
             if np.any((freqs <= A_FLAT_HZ) & ~np.isnan(a_above)) else float("nan")
         print(f"\nLPF_A above the floor: {np.min(a_ok):.0f} to {np.max(a_ok):.0f} dB "
               f"(median {ref:.0f} dB below 28 MHz) - the depth this source allows")
-        e3, _ = edge(freqs, a_above - ref, np.full(len(freqs), np.nan), 3, A_FLAT_HZ / 2)
+        e3, _, _ = edge(freqs, a_above - ref, np.full(len(freqs), np.nan), 3, A_FLAT_HZ / 2)
         weak = freqs[~(a_above >= MIN_REF_DB)]
         if len(weak):
             print(f"LPF_A is less than {MIN_REF_DB:g} dB above the floor at {len(weak)} "
