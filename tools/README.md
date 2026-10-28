@@ -34,6 +34,43 @@ each source file's header names the file itself. Run it with
 `make check-comments` (files changed vs `origin/main`) or
 `make check-comments-all` (all of `src/`). Python 3, no extra modules.
 
+## `lpf_sweep.py`
+
+Measures the sBitx's four low-pass filters through its own receiver. On
+the sBitx the filters sit between the antenna and the first mixer, so at
+each dial frequency the tool holds LPF_A, B, C and D in turn, and then
+none (every relay off: the floor), with rigctld's `L LPF`, and reads the
+received noise from the I/Q stream (the median over 1 to 10 kHz either
+side of the dial, so a station there doesn't count). Everything but the
+filter is common to the five states, so each filter's excess over the
+floor, against LPF_A's (flat to about 30 MHz), is its response, with the
+antenna and the receiver taken out. The five states are measured within
+a couple of seconds, so the band rising and falling between
+frequencies cancels; `--passes 2` measures each twice, the second time
+in reverse order, which also cancels a drift within a frequency.
+
+It prints each filter's passband loss against A and how much it
+scatters, its -3 and -20 dB points, and its attenuation at the 2nd and
+3rd harmonics of the bands it carries, and writes a CSV, the raw levels
+(for `--replot`) and a plot if matplotlib is there. How deep it can see
+is how far the source is above the receiver's own noise: antenna noise
+gives the passbands, losses and cutoffs on the lower bands, a broadband
+noise generator at the antenna jack the stopbands too. Where the source
+runs out, it says so rather than drawing the floor as the filter.
+
+```
+python3 tools/lpf_sweep.py --host sbitx.local
+python3 tools/lpf_sweep.py --host sbitx.local --passes 2 --step 100000 --stop 32000000
+python3 tools/lpf_sweep.py --replot lpf_sweep_20261028_150000_raw.csv
+```
+
+The default, 1 to 40 MHz in 250 kHz steps, takes about 6 minutes and
+switches the relays about 800 times. maxibitx never transmits through a
+held filter: a transmission ends the hold. The hold is released and the
+dial restored at the end, also on Ctrl-C. Needs a maxibitx with
+`L LPF` on an sBitx, `xtal_sweep.py` beside it (it shares its rigctld
+and I/Q code) and numpy.
+
 ## `rigctl_panel.py`
 
 A touch-friendly control panel, laid out for the sBitx's 7-inch 800×480
