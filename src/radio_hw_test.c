@@ -6,7 +6,9 @@
 // Checks which pins each board claims and at what level, LPF selection on a
 // retune, the relay half of the T/R sequence in both directions (on the
 // zBitx, the transmit frequency's LPF chosen at transmit, and no transmit
-// where there is no LPF), and each board's front-panel knobs: their pins, and that no knob pin is one the
+// where there is no LPF), the sBitx's LPF hold (one filter whatever the
+// dial, released by transmit before the T/R relays move; refused on the
+// zBitx), and each board's front-panel knobs: their pins, and that no knob pin is one the
 // board drives, the key jack's, or the sBitx si5351's I2C pins.
 // docs/dsp_design_notes/zbitx_port_study.md §5 and §9.
 //
@@ -187,6 +189,10 @@ int main(void) {
   check(radio_hw_relays_tx(1, 31000000) < 0 && n_writes == 0 && high_pins() == BIT(15),
         "31 MHz, no LPF: refused, nothing switched");
   check(radio_hw_tx_settle_ms() == 10, "relay wait is the LPF's 10 ms");
+  n_writes = 0;
+  check(radio_hw_hold_lpf(RADIO_HW_LPF_B) < 0 && n_writes == 0 &&
+            radio_hw_lpf_hold() == RADIO_HW_LPF_AUTO,
+        "an LPF hold is refused (the LPFs aren't in the receive path)");
   check(radio_hw_knob(RADIO_KNOB_TUNING).a_pin < 0 && radio_hw_knob(RADIO_KNOB_VOLUME).a_pin < 0,
         "no knobs on the Pi's GPIO (the RP2040 panel has them)");
 
@@ -224,6 +230,49 @@ int main(void) {
             writes[1][1] == 0,
         "... EXT_PTT low, then TX_LINE low");
   check(high_pins() == BIT(8), "the band's LPF stays selected through T/R");
+
+  // The LPF hold (L LPF): one filter whatever the dial, released by a
+  // transmission before anything else moves.
+  check(radio_hw_lpf_hold() == RADIO_HW_LPF_AUTO, "no hold to start with");
+  static const struct { int which; unsigned high; const char *what; } holds[] = {
+      {RADIO_HW_LPF_A, BIT(24), "hold A: LPF_A (24) alone, at 7.074 MHz"},
+      {RADIO_HW_LPF_B, BIT(25), "hold B: LPF_B (25) alone"},
+      {RADIO_HW_LPF_C, BIT(8), "hold C: LPF_C (8) alone"},
+      {RADIO_HW_LPF_D, BIT(7), "hold D: LPF_D (7) alone"},
+      {RADIO_HW_LPF_NONE, 0, "hold none: every LPF off"},
+  };
+  for (size_t i = 0; i < sizeof(holds) / sizeof(holds[0]); i++) {
+    check(radio_hw_hold_lpf(holds[i].which) == 0 && high_pins() == holds[i].high &&
+              radio_hw_lpf_hold() == holds[i].which,
+          holds[i].what);
+  }
+  check(radio_hw_hold_lpf(RADIO_HW_LPF_NONE + 1) < 0 && radio_hw_hold_lpf(-1) < 0 &&
+            radio_hw_lpf_hold() == RADIO_HW_LPF_NONE,
+        "out-of-range holds refused, the hold unchanged");
+  radio_hw_hold_lpf(RADIO_HW_LPF_D);
+  radio_hw_tune(28060000);
+  check(high_pins() == BIT(7), "a retune leaves the hold in place (LPF_D at 28.060 MHz)");
+  check(radio_hw_hold_lpf(RADIO_HW_LPF_AUTO) == 0 && high_pins() == BIT(24) &&
+            radio_hw_lpf_hold() == RADIO_HW_LPF_AUTO,
+        "hold 0: back to the dial's filter, LPF_A for 28.060 MHz");
+  radio_hw_hold_lpf(RADIO_HW_LPF_D);
+  tx_ext_ptt_delay_ms = 0;
+  n_writes = 0;
+  int up = radio_hw_relays_tx(1, 28060000);
+  check(up == 0 && radio_hw_lpf_hold() == RADIO_HW_LPF_AUTO &&
+            high_pins() == (BIT(24) | BIT(12) | BIT(23)),
+        "transmit releases a hold: LPF_A for 28.060 MHz, EXT_PTT and TX_LINE high");
+  int order_ok = n_writes >= 2 && writes[n_writes - 2][0] == 12 && writes[n_writes - 1][0] == 23;
+  for (int k = 0; k < n_writes - 2; k++)
+    order_ok &= writes[k][0] == 24 || writes[k][0] == 25 || writes[k][0] == 8 || writes[k][0] == 7;
+  check(order_ok, "... the LPF relays switched before EXT_PTT and TX_LINE");
+  check(radio_hw_hold_lpf(RADIO_HW_LPF_B) < 0 && high_pins() == (BIT(24) | BIT(12) | BIT(23)),
+        "a hold is refused while transmitting, nothing switched");
+  radio_hw_relays_tx(0, 28060000);
+  check(radio_hw_hold_lpf(RADIO_HW_LPF_B) == 0 && high_pins() == BIT(25),
+        "back in receive, a hold is accepted again");
+  radio_hw_hold_lpf(RADIO_HW_LPF_AUTO);
+  radio_hw_tune(7074000);
   tx_ext_ptt_delay_ms = 20;
   check(radio_hw_tx_settle_ms() == 20, "relay wait is ext_ptt_delay_ms");
 
