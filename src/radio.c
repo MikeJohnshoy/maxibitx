@@ -269,6 +269,23 @@ int radio_get_xtal_filter_center(void) {
   return xtal_filter_center;
 }
 
+int radio_set_si5351_drive(int ma) {
+  if (in_tx)
+    return -1;
+  if (si5351_get_drive_ma() == ma)
+    return 0; // already: no clocks rewritten, nothing logged
+  if (si5351_set_drive_ma(ma) < 0)
+    return -1;
+  si5351bx_setfreq(1, xtal_filter_center + RX_IF_FREQ_HZ);
+  si5351bx_setfreq(2, freq_hdr + rit_applied_hz() + xtal_filter_center);
+  if (ma == 8)
+    printf("radio: si5351 drive back to 8 mA\n");
+  else
+    printf("radio: si5351 drive %d mA until restart (the TX power scales were "
+           "calibrated at 8 mA)\n", ma);
+  return 0;
+}
+
 // TX transitions run on this dedicated worker thread rather than
 // whatever thread calls radio_set_tx() - see
 // docs/05_process_and_threading_model.md for why (short version: cw.c
