@@ -1,8 +1,12 @@
 # Receiver artifacts, and a spur survey: a design study
 
-Status: **survey built** (`tools/spur_survey.py`, with rigctld's
-`L SIDRIVE` for comparing the si5351's drive) and run on the sBitx:
-four dummy-load runs on 29 October 2026 are in §2.5. §1–§3 review the kinds of
+Status: **parked** (29 October 2026). The survey is built
+(`tools/spur_survey.py`, with rigctld's `L SIDRIVE`, `L LPF` and
+`L CLK1DIV` for its comparisons) and was run on the sBitx; the
+measurements are in §2.5–§2.7. The loudest spurs heard are the clk1
+lattice (§2.7), which no si5351 setting tried changes; no easy software
+fix is left, and the remedies are in hardware, which other sBitx users
+are looking at. §6 lists where to pick it up. §1–§3 review the kinds of
 receiver artifact and the ones met so far on the sBitx; §4 is the
 design of `tools/spur_survey.py`; §6 records the decisions taken.
 
@@ -925,8 +929,16 @@ Taken (29 October 2026):
 6. `--audible` built to list them (§4.9), with 50 Hz as the bandwidth
    the antenna's noise is taken in. Checked by ear: the loudest four are
    S2–S4; the +300 Hz offset isn't a problem.
+7. Parked: no easy software fix is being missed. The heard spurs are
+   the clk1 lattice (§2.7) — PLL B's setting and the drive don't remove
+   them — and the 48 kHz comb; both want hardware work (the clock
+   lines' filtering and layout, shielding), which other users are
+   looking at. Clk1 on the low side, the one software idea left, would
+   trade nine band crossings for three of unknown strength and turn the
+   second IF's sideband round: not worth it without hardware results
+   first.
 
-Still open, the heard ones first:
+Still open, the heard ones first (for when it is picked up again):
 
 - The clk1 lattice (§2.7), the loudest heard (S4 at 29.5268 and
   10.1456 MHz, S2 at 14.3084): confirmed by ear; PLL B's setting doesn't
