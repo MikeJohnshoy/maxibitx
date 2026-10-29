@@ -19,7 +19,12 @@
 // tx_stream_audio_buffering requested ahead of what the audio thread has
 // still to play, and answers each with a TX audio frame. What arrives is
 // trusted by the header's length alone (JTDX leaves channels unset and pads
-// the payload): stereo is assumed, and the left channel is used.
+// the payload): stereo is assumed, and the left channel is used. If the
+// audio thread finds the ring short once audio has started arriving, it
+// plays silence for what is missing; the end of the transmission prints one
+// line saying how often and how long, and the longest wait between the
+// client's frames (MAXIBITX_TCI_TX_TIMING=1: a line for every TCI
+// transmission).
 // docs/dsp_design_notes/tci_design_study.md §4 and §7.
 
 #include "tci.h"
@@ -28,6 +33,7 @@
 #include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -51,6 +57,13 @@ static float iq_ring[2 * IQ_RING];
 static float tx_ring[TX_RING];
 static atomic_uint rx_head, rx_tail, iq_head, iq_tail, tx_head, tx_tail;
 static atomic_int want_rx, want_iq, tx_owned;
+
+// This transmission's shortfalls, counted by the audio thread in
+// tci_pull_audio_tx(): times the ring ran dry once audio had started, and
+// the 48 kHz frames of silence played. tci_stream_tx_begin() zeroes them and
+// bumps tx_gen, which tells the audio thread to start its count afresh.
+static atomic_uint tx_gen;
+static atomic_ulong dry_events, dry_frames;
 
 /* ---- Audio thread ------------------------------------------------------ */
 
@@ -86,9 +99,33 @@ void tci_push_iq(const double *i_samples, const double *q_samples, int n) {
 int tci_tx_audio_owned(void) { return atomic_load_explicit(&tx_owned, memory_order_relaxed); }
 
 int tci_pull_audio_tx(double *out, int n) {
+  // A shortfall counts only once audio has arrived (the start of a
+  // transmission waits for the first answers), and only once audio comes
+  // back (the end, where the client has stopped sending before it drops
+  // TX, isn't one).
+  static unsigned seen_gen;
+  static int started, dry;
+  static unsigned long pending;
+  unsigned gen = atomic_load_explicit(&tx_gen, memory_order_acquire);
+  if (gen != seen_gen) {
+    seen_gen = gen;
+    started = dry = 0;
+    pending = 0;
+  }
   unsigned tail = atomic_load_explicit(&tx_tail, memory_order_relaxed);
   unsigned head = atomic_load_explicit(&tx_head, memory_order_acquire);
   unsigned avail = head - tail;
+  if (started && avail < (unsigned)n) {
+    dry = 1;
+    pending += (unsigned)n - avail;
+  } else if (dry) {
+    atomic_fetch_add_explicit(&dry_events, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&dry_frames, pending, memory_order_relaxed);
+    dry = 0;
+    pending = 0;
+  }
+  if (avail > 0)
+    started = 1;
   if ((unsigned)n > avail)
     n = (int)avail;
   for (int k = 0; k < n; k++)
@@ -178,7 +215,11 @@ static struct {
   int buffering_ms;
   long outstanding; // frames asked for and not yet received
   long long last_ns;
+  long long begin_ns, first_ns, prev_ns, max_gap_ns; // TX audio frames' arrivals
 } tx;
+
+static int report_every; // MAXIBITX_TCI_TX_TIMING
+static struct tci_tx_stats last_stats;
 
 static long long now_ns(void) {
   struct timespec ts;
@@ -217,6 +258,8 @@ void tci_stream_init(void) {
   atomic_store(&want_rx, 0);
   atomic_store(&want_iq, 0);
   atomic_store(&tx_owned, 0);
+  const char *v = getenv("MAXIBITX_TCI_TX_TIMING");
+  report_every = v && *v && strcmp(v, "0");
 }
 
 void tci_stream_open(int slot, int ws_id) {
@@ -425,14 +468,40 @@ void tci_stream_tx_begin(int slot, int buffering_ms) {
   tx.slot = slot;
   tx.buffering_ms = buffering_ms;
   tx.outstanding = 0;
-  tx.last_ns = now_ns();
+  tx.last_ns = tx.begin_ns = now_ns();
+  tx.first_ns = tx.prev_ns = tx.max_gap_ns = 0;
+  atomic_store(&dry_events, 0);
+  atomic_store(&dry_frames, 0);
+  atomic_fetch_add(&tx_gen, 1);
   atomic_store(&tx_owned, 1);
 }
 
+static void tx_report(void) {
+  struct tci_tx_stats *s = &last_stats;
+  s->dry_events = atomic_load(&dry_events);
+  s->silence_ms = atomic_load(&dry_frames) / 48.0;
+  s->max_gap_ms = tx.max_gap_ns / 1e6;
+  s->first_audio_ms = tx.first_ns ? (tx.first_ns - tx.begin_ns) / 1e6 : -1.0;
+  if (!s->dry_events && !(report_every && tx.first_ns))
+    return;
+  if (s->dry_events)
+    printf("tci: TX audio ran dry %lu time%s this transmission, %.0f ms of silence; ",
+           s->dry_events, s->dry_events == 1 ? "" : "s", s->silence_ms);
+  else
+    printf("tci: TX audio never ran dry this transmission; ");
+  printf("longest wait between the client's audio frames %.0f ms, first audio %.0f ms after "
+         "TX on (%d ms asked for ahead)\n",
+         s->max_gap_ms, s->first_audio_ms, tx.buffering_ms + TCI_CHRONO_FRAMES / 48);
+}
+
 void tci_stream_tx_end(void) {
+  if (tx.active)
+    tx_report();
   tx.active = 0;
   atomic_store(&tx_owned, 0);
 }
+
+void tci_stream_tx_stats(struct tci_tx_stats *s) { *s = last_stats; }
 
 static uint32_t get_u32(const uint8_t *p) {
   return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
@@ -492,5 +561,11 @@ void tci_stream_tx_frame(int slot, const uint8_t *frame, size_t len) {
   tx.outstanding -= (long)frames;
   if (tx.outstanding < 0)
     tx.outstanding = 0;
-  tx.last_ns = now_ns();
+  long long now = now_ns();
+  tx.last_ns = now;
+  if (!tx.first_ns)
+    tx.first_ns = now;
+  else if (now - tx.prev_ns > tx.max_gap_ns)
+    tx.max_gap_ns = now - tx.prev_ns;
+  tx.prev_ns = now;
 }
