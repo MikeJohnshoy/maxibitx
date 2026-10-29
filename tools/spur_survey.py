@@ -45,7 +45,9 @@ dial, which an error in the slope barely moves, and fitted by least
 squares; a sighting may sit 35 Hz plus 5 Hz per unit of slope from its
 line, since a PLL product carries the si5351's fractional-setting error
 multiplied. A line needs three sightings (two where the step or the
-slope lets it cross the window in fewer). For fixed-RF spurs the report
+slope lets it cross the window in fewer, except a steep one: two
+sightings at neighbouring dials fit some whole-number slope by chance
+too often). For fixed-RF spurs the report
 lists clock harmonics within their tolerance (the codec's 12 MHz and
 96 kHz frame, the si5351's 25 MHz TCXO, the Pi's crystals, clk1 and its
 sub-multiples); for steep ones the PLL products whose crossing and
@@ -233,7 +235,12 @@ def anchor(s, dial, off):
 
 def min_sightings(s, step_hz):
     """Sightings a line needs: three, unless the step or the slope lets a
-    spur cross the window in fewer."""
+    spur cross the window in fewer. A steep line (slope over 4) always
+    needs three: two sightings at neighbouring dials fit some whole-number
+    slope about one time in five by chance, so two unrelated lines would
+    pass for one; a smaller step sees a real one three times or more."""
+    if abs(s) > 4.5:
+        return 3
     crossings = 2 * WINDOW_HZ / (step_hz * max(abs(s), 1.0)) if s != 0 else 99
     return 3 if crossings >= 3 else 2
 
@@ -288,6 +295,7 @@ def classify(cands, step_hz):
             votes.setdefault(key, set()).update((i, j))
     claimed = np.zeros(n, bool)
     spurs = []
+    steep_pairs = 0
     for (sq, aq), _members in sorted(votes.items(), key=lambda kv: -len(kv[1])):
         slopes = [sq] if abs(sq) <= 4.5 else [sq - 1, sq, sq + 1]
         pool = set()
@@ -307,6 +315,7 @@ def classify(cands, step_hz):
         members, s_fit, k = fit_line(dial, off, pool, fixed)
         s_cls = fixed if fixed is not None else quantise_slope(s_fit)
         if len(members) < min_sightings(s_cls, step_hz):
+            steep_pairs += abs(s_cls) > 4.5 and len(members) == 2
             continue
         claimed[members] = True
         top = max(members, key=lambda i: cands[i]["above_db"])
@@ -317,7 +326,7 @@ def classify(cands, step_hz):
                       "dial_lo": float(min(dial[members])), "dial_hi": float(max(dial[members])),
                       "rf_seen": [float(dial[i] + off[i]) for i in members]})
     singles = [cands[i] for i in range(n) if not claimed[i]]
-    return spurs, singles
+    return spurs, singles, steep_pairs
 
 
 # ---- the si5351's PLLs ---------------------------------------------------------
@@ -411,7 +420,7 @@ def spur_where(sp):
 
 
 def report(cands, dials, floors, step_hz, meta, prefix, spectra=None):
-    spurs, singles = classify(cands, step_hz)
+    spurs, singles, steep_pairs = classify(cands, step_hz)
     clk1 = meta.get("clk1_hz", 40036400.0)
     for sp in spurs:
         sp["suspects"] = suspects(sp, spurs, clk1)
@@ -473,6 +482,10 @@ def report(cands, dials, floors, step_hz, meta, prefix, spectra=None):
             print(f"  {spur_where(sp)}{slope}  {sp['above_db']:5.1f} dB over floor "
                   f"({sp['dbfs']:6.1f} dBFS)  x{sp['sightings']}  {sp['bands'] or '-':12} "
                   f"{sp['suspects']}")
+    if steep_pairs:
+        print(f"\n{steep_pairs} pair(s) of sightings at neighbouring dials could be steep "
+              f"lines (slope over 4) but none was seen three times: --range with a smaller "
+              f"--step would tell (a slope s needs a step under {2 * WINDOW_HZ // 3} / s Hz)")
     if singles:
         strong = sorted(singles, key=lambda c: -c["above_db"])[:10]
         print(f"\nseen once or twice ({len(singles)}; strongest {len(strong)}):")
