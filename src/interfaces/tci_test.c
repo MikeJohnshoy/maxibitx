@@ -19,6 +19,7 @@
 
 #define _GNU_SOURCE
 #include "tci.h"
+#include "tci_stream.h"
 #include "tci_ws.h"
 #include "ws_test_client.h"
 #include "cw.h"
@@ -616,6 +617,43 @@ static void test_tx(void) {
   usleep(50000);
   tci_tx_audio_idle();
   CHECK(tci_pull_audio_tx(out, 4096) == 0, "late audio after TX off never reaches the next TX");
+  drain(a);
+  drain(b);
+
+  // The audio running dry: the wait for the first answers doesn't count, a
+  // pull the client hasn't answered yet does, once the audio comes back.
+  send_text(a, "trx:0,true,tci;");
+  expect(b, "trx:0,true;", 1000);
+  n = chronos_within(a, 150, chronos, 8);
+  int before = tci_pull_audio_tx(out, 512);
+  value = 0.0f;
+  for (int k = 0; k < n && k < 8; k++) {
+    answer_chrono(a, &chronos[k], &value);
+    free(chronos[k].data);
+  }
+  usleep(100000);
+  got = tci_pull_audio_tx(out, 4096);
+  int more = chronos_within(a, 150, chronos, 8);
+  int dry = tci_pull_audio_tx(out, 512);
+  for (int k = 0; k < more && k < 8; k++) {
+    answer_chrono(a, &chronos[k], &value);
+    free(chronos[k].data);
+  }
+  usleep(100000);
+  int back = tci_pull_audio_tx(out, 512);
+  int tail = tci_pull_audio_tx(out, 8192); // the client stops before it drops TX
+  tail += tci_pull_audio_tx(out, 512);
+  send_text(a, "trx:0,false;");
+  expect(b, "trx:0,false;", 1000);
+  struct tci_tx_stats st;
+  tci_stream_tx_stats(&st);
+  CHECK(before == 0 && got == 4096 && more == 4 && dry == 0 && back == 512 && st.dry_events == 1 &&
+            fabs(st.silence_ms - 512 / 48.0) < 0.01 && st.max_gap_ms > 50 && st.first_audio_ms >= 0,
+        "TX audio ran dry %lu time(s), %.1f ms of silence (one 512-sample pull), longest wait %.0f ms "
+        "- the start and the end not counted",
+        st.dry_events, st.silence_ms, st.max_gap_ms);
+  (void)tail;
+  tci_tx_audio_idle();
   drain(a);
   drain(b);
 
