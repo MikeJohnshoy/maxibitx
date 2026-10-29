@@ -13,7 +13,8 @@
 // transmit frequency, so XIT can carry a transmission out of a band. And
 // when the CW decoder is told to start afresh: a move of more than 300 Hz,
 // or entering CW or CWR from another mode. And the si5351's drive
-// strength: both receive clocks rewritten, refused while transmitting.
+// strength and clk1's divider: the receive clocks rewritten, refused while
+// transmitting.
 
 #include "radio.h"
 #include "radio_hw.h"
@@ -48,6 +49,16 @@ int si5351_set_drive_ma(int ma) {
   return 0;
 }
 int si5351_get_drive_ma(void) { return drive_ma; }
+static int clk1_div = 0, pll_resets_done = 0;
+int si5351_set_clk1_divider(int div) {
+  if (div != 0 && div != 16 && div != 18 && div != 20 && div != 22)
+    return -1;
+  clk1_div = div;
+  return 0;
+}
+int si5351_get_clk1_divider(void) { return clk1_div; }
+int si5351_clk1_divider_for(uint32_t f) { (void)f; return clk1_div ? clk1_div : 18; }
+void si5351_reset(void) { pll_resets_done++; }
 void radio_hw_tune(int f) { (void)f; }
 int radio_hw_relays_tx(int on, int f) {
   if (on)
@@ -221,6 +232,26 @@ int main(void) {
         "... a drive change refused");
   tx(0);
   check(radio_set_si5351_drive(8) == 0 && drive_ma == 8, "back in receive: 8 mA again");
+
+  printf("clk1's divider\n");
+  check(radio_get_clk1_divider() == 18, "automatic: 18");
+  writes = clk_writes;
+  int pll_resets = pll_resets_done;
+  check(radio_set_clk1_divider(22) == 0 && clk1_div == 22 && radio_get_clk1_divider() == 22 &&
+            clk_writes == writes + 1 && clk[1] == C + RX_IF_FREQ_HZ && pll_resets_done == pll_resets + 1,
+        "22: set, clk1 rewritten at the same frequency, the PLLs reset");
+  writes = clk_writes;
+  check(radio_set_clk1_divider(22) == 0 && clk_writes == writes && pll_resets_done == pll_resets + 1,
+        "22 again: nothing rewritten");
+  check(radio_set_clk1_divider(19) < 0 && clk1_div == 22 && clk_writes == writes,
+        "19 refused, nothing changed");
+  check(tx(1) == 0, "transmitting ...");
+  writes = clk_writes;
+  check(radio_set_clk1_divider(0) < 0 && clk1_div == 22 && clk_writes == writes,
+        "... a divider change refused");
+  tx(0);
+  check(radio_set_clk1_divider(0) == 0 && radio_get_clk1_divider() == 18,
+        "back in receive: automatic again");
 
   printf("\n%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);
   return failures ? 1 : 0;
