@@ -16,8 +16,8 @@ already used in `antialias_filter_design.md`.
   so far on the sBitx, their causes, impacts and remedies; which are
   fixed by layout, shielding and supply filtering and which by design;
   and the design of a dummy-load spur survey that classifies internal
-  spurs by how they move. Status: survey built (`tools/spur_survey.py`),
-  not yet run on the radio.
+  spurs by how they move, with the first measured runs on the sBitx.
+  Status: survey built (`tools/spur_survey.py`) and in use.
 - [`antialias_filter_design.md`](antialias_filter_design.md) — measured
   crystal filter response and the FIR anti-alias filter spec derived
   from it for the RX chain. Status: implemented (`antialias.c`).
