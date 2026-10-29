@@ -385,7 +385,22 @@ python3 tools/spur_survey.py --host sbitx.local
 ```
 
 About 8 minutes for 80 m to 10 m. It prints each spur with its level
-over the floor and its suspects, and writes CSVs and a plot. Then, to
+over the floor and its suspects, and writes CSVs and a plot.
+
+Most of them are never heard: they are outside the passband at every
+dial, or under the antenna's noise. To list the ones that are, run the
+survey once more with the antenna connected (only its `_bands.csv`, each
+band's noise floor, is used) and judge the dummy-load run against it:
+
+```
+python3 tools/spur_survey.py --host sbitx.local --out antenna   # antenna connected
+python3 tools/spur_survey.py --audible spur_survey_20261029_140000_spurs.csv antenna_bands.csv
+```
+
+It lists each spur heard in the CW filter or the SSB passband, the dials
+where it is heard, and how far it is over the antenna's noise in 50 Hz,
+worst first. The antenna's noise changes with the time of day; a quiet
+band is the worst case. Then, to
 find where a spur comes from, run again with one thing changed and
 compare:
 
