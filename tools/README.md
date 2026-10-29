@@ -218,7 +218,11 @@ gets no I/Q is measured again. `--lpf-off` opens every LPF relay for the run and
 `--drive MA` sets the si5351's drive and `--clk1-div N` clk1's si5351
 divider (all restored after);
 `--compare` shows which spurs appear, vanish or change between two
-runs, and the change in each band's floor. See
+runs, and the change in each band's floor. `--audible SPURS_CSV
+ANTENNA_BANDS_CSV` lists the spurs you would hear — in the CW filter or
+the SSB passband at some dial, over the antenna's noise (a run made
+with the antenna connected) in 50 Hz — with the dials where each is
+heard, worst first. See
 [`../docs/08_troubleshooting_and_bringup.md`](../docs/08_troubleshooting_and_bringup.md),
 "The receiver's own spurs". Needs `xtal_sweep.py` beside it, and numpy.
 
