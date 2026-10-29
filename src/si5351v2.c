@@ -55,6 +55,12 @@ static int i2c_error_count = 0;       // counts I2C Errors
 // setup_multisynth().
 static uint8_t drive_strength = SI5351_CLK_DRIVE_STRENGTH_8MA;
 
+// clk1's output divider, 0 for the automatic one (si5351.h).
+static int clk1_divider = 0;
+
+#define SI_VCO_MIN_HZ 600000000u
+#define SI_VCO_MAX_HZ 900000000u
+
 #define SI5351_ADDR 0x60              // I2C address of Si5351   (typical)
 
 /*
@@ -221,20 +227,36 @@ static void set_freq_fixeddiv(int clk, int pll, uint32_t frequency, int divider,
   setup_multisynth(clk, pll, divider, 0, 1, SI_R_DIV_1, drive_strength);
 }
 
-void si5351bx_setfreq(uint8_t clk, uint32_t frequency){
-  int pll;
-
-  if (clk == 1)
-    pll = SI_SYNTH_PLL_B;
-  else
-    pll = SI_SYNTH_PLL_A;
-
-  // The smallest even divider above 650 MHz / frequency, so the PLL runs
-  // above 650 MHz. Unsigned 32-bit arithmetic: 650,000,000 fits, and a
-  // long is only 32 bits on a 32-bit OS.
+// The smallest even divider above 650 MHz / frequency, so the PLL runs
+// above 650 MHz. Unsigned 32-bit arithmetic: 650,000,000 fits, and a long
+// is only 32 bits on a 32-bit OS.
+static uint32_t automatic_divider(uint32_t frequency){
   uint32_t pll_div = 650000000u / frequency + 1;
   if (pll_div & 1)
     pll_div++;
+  return pll_div;
+}
+
+int si5351_clk1_divider_for(uint32_t frequency){
+  if (clk1_divider) {
+    uint64_t vco = (uint64_t)frequency * clk1_divider;
+    if (vco >= SI_VCO_MIN_HZ && vco <= SI_VCO_MAX_HZ)
+      return clk1_divider;
+  }
+  return automatic_divider(frequency);
+}
+
+void si5351bx_setfreq(uint8_t clk, uint32_t frequency){
+  int pll;
+  uint32_t pll_div;
+
+  if (clk == 1) {
+    pll = SI_SYNTH_PLL_B;
+    pll_div = si5351_clk1_divider_for(frequency);
+  } else {
+    pll = SI_SYNTH_PLL_A;
+    pll_div = automatic_divider(frequency);
+  }
 
    set_freq_fixeddiv(clk, pll, frequency, pll_div, drive_strength);
 //	set_frequency_fixedpll(clk, pll, PLLFREQ, frequency, SI_R_DIV_1, 
@@ -253,6 +275,17 @@ int si5351_set_drive_ma(int ma){
 
 int si5351_get_drive_ma(void){
   return 2 + 2 * (drive_strength & SI5351_CLK_DRIVE_STRENGTH_MASK);
+}
+
+int si5351_set_clk1_divider(int div){
+  if (div != 0 && div != 16 && div != 18 && div != 20 && div != 22)
+    return -1;
+  clk1_divider = div;
+  return 0;
+}
+
+int si5351_get_clk1_divider(void){
+  return clk1_divider;
 }
 
 void si5351_set_calibration(int32_t cal){
