@@ -106,7 +106,7 @@ From that, the predicted responses, each with what defends against it:
 | 11 | A comb of narrow spurs, harmonics of 48.0135 kHz, 3.6–29.7 MHz (30 of 10 m's 41 lines) | an unidentified crystal-stable clock, not the si5351's; coupled on the board after the LPFs | a line every 48 kHz, 10–25 dB in an 11.7 Hz bin; on the waterfall, rarely heard | **open**: find the clock (§2.5) |
 | 12 | si5351 spurs: 25.000, 10.1456 (30 m), 14.3084 (20 m) MHz and five lines at 28.98–29.71 MHz, 17–39 dB | the si5351's reference and products of its outputs, on the board | 30 m and 20 m lines inside the bands, 36–39 dB | **open**: fall 1.4–16 dB at lower drive; the cost of lower drive unmeasured |
 | 13 | Second-mixer images of those spurs, 11–14 dB weaker | the crystal filter only 11–14 dB down 48 kHz from its centre (inferred) | a strong station 48 kHz below the dial would make a backward ghost about that much weaker | **to confirm** with a carrier |
-| 14 | The strongest artifacts: narrow lines up to ~50 dB, each seen at a single dial (3.655, 5.308, 5.318, 5.362, 7.300, 28.62 MHz) | some are images or edge-truncated lines (60 m at 1 kHz steps); 60 m's near 5.362 MHz is PLL A, or clk2's 16th harmonic, beating with clk1's 18th harmonic — at PLL A − PLL B's frequency, but unmoved when PLL B moves (100 Hz-step runs at clk1 dividers 18 and 22); the others likely the same kind (inferred) | strong, but only within a few kilohertz of particular dials, sweeping 15 times as fast as the tuning | **open**: which of the two, and whether drive or filtering the clocks lowers it (§2.5); moving PLL B doesn't |
+| 14 | The strongest artifacts: narrow lines up to ~50 dB, each seen at a single dial (3.655, 5.308, 5.318, 5.362, 7.300, 28.62 MHz) | some are images or edge-truncated lines (60 m at 1 kHz steps); 60 m's near 5.362 MHz is PLL A, or clk2's 16th harmonic, beating with clk1's 18th harmonic — at PLL A − PLL B's frequency, but unmoved when PLL B moves (100 Hz-step runs at clk1 dividers 18 and 22); the others likely the same kind (inferred) | strong, but only within a few kilohertz of particular dials, sweeping 15 times as fast as the tuning | **open**: which of the two (clk2's divider, §2.5); moving PLL B doesn't, and 4 mA drive takes off only 3 dB |
 
 ### 2.1 The codec's timing pattern (1)
 
@@ -442,7 +442,8 @@ the two apart, and what might lower it:
   form moves to about 12.35 MHz, the second stays. Needs an `L CLK2DIV`
   like `L CLK1DIV`.
 - `--drive 4` over the same range: both forms should weaken with the
-  outputs' harmonics; how much says whether drive is a remedy.
+  outputs' harmonics; how much says whether drive is a remedy. (Done:
+  below.)
 - If it is the outputs' harmonics, a low-pass or series resistor on the
   clock lines (the 16th and 18th harmonics are at 720 MHz) and the
   layout around them — hardware, not software.
@@ -456,6 +457,36 @@ divider-18 run. Not explained.
 The table of crossings above still gives where products with PLL B in
 them would be; with none of them seen to move, it is not yet known
 whether any are strong.
+
+**At 4 mA.** The same range at divider 18 and 4 mA, against the two
+8 mA runs (dB over the floor):
+
+| Line | 8 mA (two runs) | 4 mA |
+|---|---|---|
+| +15, the beat (5.363786 MHz) | 35.1, 35.6 | 32.4 |
+| −15, its fold (5.360585 MHz) | 34.3, 34.1 | 35.9 |
+| +30 (5.362985 MHz) | 19.6, 19.0 | 12.4 |
+| −30 (5.361385 MHz) | 19.0, 18.4 | 15.9 |
+| −40, −12, +79 | 13–15 | not found |
+| fixed offset +8688 Hz | 12.4, 13.2 | not found |
+| the mirrored pair (±15, opposite slope) | not found | 13.8 and 9.3 |
+
+Halving the drive takes 3 dB off the beat and adds 1.6 dB to its fold:
+it is hardly weaker. The outputs' 16th and 18th harmonics come from
+their edges, which 4 mA slows, and the si5351's own harmonic lines fell
+by up to 16 dB at 4 mA (§2.5, survey B); a product of two of them, made
+in the board's mixers, would be expected to fall a lot more than 3 dB.
+That leans towards the first form, PLL A beating on the chip, though it
+doesn't prove it — the clk2 divider test does. If it is PLL A, the
+remedy is in software after all: clk2 on divider 14 or 18 on 60 m (PLL A
+at 635 or 817 MHz) puts the crossing at about 12.35 MHz or nowhere near
+HF. The drive does take out the weaker lines — −12, −40, +79 and the
++8688 Hz offset (so that one is the si5351's, as its steadiness
+suggested) — and the beat's second harmonic falls 3–7 dB. The mirrored
+pair, missing from both 8 mA runs at divider 18, was there at 4 mA as
+at divider 22: it comes and goes, rather than following either setting.
+(A +29 line crossing at 5.367172 MHz, three sightings, may be +79's
+sightings fitted another way; 19 Hz apart.)
 
 **Pickup through the antenna jack.** 17 weak (8–11 dB) fixed-RF spurs
 below 25 MHz, drifting −1.6 to −2 ppm between runs (another free-running
@@ -746,8 +777,8 @@ Still open:
   below the dial.
 - The single-dial lines (14): 60 m's has PLL A − PLL B's frequency
   but stayed with PLL B moved (clk1 divider 22, §2.5): PLL A or clk2's
-  16th harmonic, with clk1's 18th. Next: the same range at `--drive 4`;
-  an `L CLK2DIV` to move PLL A on 60 m; suspects that name products of
+  16th harmonic, with clk1's 18th; only 3 dB weaker at 4 mA, which
+  leans towards PLL A. Next: an `L CLK2DIV` to move PLL A on 60 m; suspects that name products of
   the clocks' harmonics, a beat's fold and its harmonics. Also: 100
   Hz-step runs across other predicted crossings; the −12, −40 and +79
   lines; the mirrored pair seen at divider 22.
