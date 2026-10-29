@@ -1,8 +1,8 @@
 # Receiver artifacts, and a spur survey: a design study
 
 Status: **survey built** (`tools/spur_survey.py`, with rigctld's
-`L SIDRIVE` for comparing the si5351's drive), tested against a
-simulated radio, not yet run on the sBitx. §1–§3 review the kinds of
+`L SIDRIVE` for comparing the si5351's drive) and run on the sBitx:
+four dummy-load runs on 29 October 2026 are in §2.5. §1–§3 review the kinds of
 receiver artifact and the ones met so far on the sBitx; §4 is the
 design of `tools/spur_survey.py`; §6 records the decisions taken.
 
@@ -99,10 +99,14 @@ From that, the predicted responses, each with what defends against it:
 | 4 | Opposite-sideband leakage near zero beat | stage 1's finite transition band | a signal just the other side of zero beat is heard, weakly | inherent; acceptable |
 | 5 | 93.75 Hz comb on both channels | current pulses at the audio block rate (every 1024 samples) coupling into the analog inputs | RX: none (codec 0–1 kHz is 23–24 kHz below the dial, outside the crystal filter). TX: the mic carries it; 375 Hz and up pass the 300–3000 Hz SSB filter | **open**: check SSB on air |
 | 6 | Noise floor rippling with an 8 kHz period | an echo 12 samples long in the codec's samples, or a filter ripple; unidentified | ±several dB of floor shape; reads into auto floor and noise readings | **open**: measure with the noise generator |
-| 7 | Broad raises at 24.0 and 30.75 MHz, slight at 12.5 and 25.0 MHz, in all five LPF states | internal; 24.0 = 2 × the codec's 12 MHz, 12.5 / 25.0 the si5351's 25 MHz TCXO; 30.75 unidentified | small (1–4 dB), none inside a ham band | **open**: spur survey |
+| 7 | Broad raises at 24.0 and 30.75 MHz, slight at 12.5 and 25.0 MHz, in all five LPF states | internal; 24.0 = 2 × the codec's 12 MHz, 12.5 / 25.0 the si5351's 25 MHz TCXO; 30.75 unidentified | small (1–4 dB), none inside a ham band | the survey finds 25.000 MHz as a narrow 35–37 dB line (12); the rest outside its bands |
 | 8 | LPF_B possibly rolling off at 17 m (−1.3 dB at 18.25 MHz, −3.8 dB at 18.5 MHz vs LPF_A) | the filter's cutoff close to its top band | some RX sensitivity and TX power on 17 m (the per-band TX scale covers the power) | **to confirm** with the noise generator |
 | 9 | (zBitx, TX) spur 24 kHz from the transmit frequency in CW | the BFO running through key-up gaps | an out-of-band signal | traced on the zBitx; maxibitx flagged for a bench check (`ARCHITECTURE.md`) |
 | 10 | Clicks and gaps at start-up | the playback queue draining before the audio thread ran (xrun flood) | glitches in audio and I/Q | **fixed**: playback primed before the thread starts |
+| 11 | A comb of narrow spurs, harmonics of 48.0135 kHz, 3.6–29.7 MHz (30 of 10 m's 41 lines) | an unidentified crystal-stable clock, not the si5351's; coupled on the board after the LPFs | a line every 48 kHz, 10–25 dB in an 11.7 Hz bin; on the waterfall, rarely heard | **open**: find the clock (§2.5) |
+| 12 | si5351 spurs: 25.000, 10.1456 (30 m), 14.3084 (20 m) MHz and five lines at 28.98–29.71 MHz, 17–39 dB | the si5351's reference and products of its outputs, on the board | 30 m and 20 m lines inside the bands, 36–39 dB | **open**: fall 1.4–16 dB at lower drive; the cost of lower drive unmeasured |
+| 13 | Second-mixer images of those spurs, 11–14 dB weaker | the crystal filter only 11–14 dB down 48 kHz from its centre (inferred) | a strong station 48 kHz below the dial would make a backward ghost about that much weaker | **to confirm** with a carrier |
+| 14 | The strongest artifacts: narrow lines up to ~50 dB, each seen at a single dial (3.655, 5.308, 5.318, 5.362, 7.300, 28.62 MHz) | oscillator products steep enough to cross the window between two 5 kHz steps (inferred) | strong, but only at particular dial settings | **open**: classify with 1 kHz steps |
 
 ### 2.1 The codec's timing pattern (1)
 
@@ -158,6 +162,106 @@ is something broad: a noisy clock, or digital hash centred there. That
 it shows with every relay open says it gets in after the filters, on
 the board. Narrow birdies the sweep can't see at all; finding them is
 what the survey (§4) is for.
+
+### 2.5 The dummy-load surveys (11–14)
+
+Four `spur_survey.py` runs on the sBitx on 29 October 2026, 80 m to
+10 m, a 50 Ω dummy load on the antenna jack. In the order run (the
+order the 48 kHz comb drifted):
+
+| Run | Conditions | Fixed RF | Fixed offset | Backward | Mixing | Floor, dBFS/Hz |
+|---|---|---|---|---|---|---|
+| A | 8 mA (09:03) | 83 | 7 | 7 | 18 | −116.2 |
+| B | 4 mA | 74 | 3 | 5 | 6 | −115.7 |
+| C | 6 mA | 64 | 4 | 7 | 15 | −115.7 |
+| D | 8 mA, every LPF relay open (10:10) | 48 | 4 | 6 | 18 | −115.6 |
+
+The floor rose 0.5 dB after run A and stayed there whatever the drive —
+D is at 8 mA — so it drifted with time, not with the drive.
+
+**The 48 kHz comb (11).** 45 of run A's 73 drifting fixed-RF spurs are
+harmonics of 48,013.5 Hz, from the 75th (3.60 MHz) to the 618th
+(29.67 MHz), within 3.6 Hz rms; 30 of 10 m's 41 lines are its. It is
+crystal-stable but not the si5351's: between runs it drifted −1.2 to
+−1.5 ppm against the TCXO (the 584th harmonic went from 28.039880 to
+28.039838 MHz), and its 10 m lines fell from a median of 18.7 dB over
+the floor in run A to 13.8–14.7 dB in B, C and D, whatever the drive.
+It is there with every relay open, so it couples in on the board after
+the LPFs, not through the antenna jack. No clock on the board is known
+at 48.0135 kHz. Half the codec's frame rate would fit — a pattern on the
+I2S lines repeating every two frames — if its 12 MHz clock ran about
+280 ppm fast; measuring the codec's sample rate against the TCXO would
+settle it.
+
+**The si5351's own (12).** These don't move between runs (within
+0.4 Hz): they are locked to the TCXO, as the receiver's oscillators
+are. They are there with the relays open, and they weaken with lower
+drive:
+
+| MHz | 8 mA (A) | 6 mA (C) | 4 mA (B) | 8 mA, relays open (D) |
+|---|---|---|---|---|
+| 3.980863 | 28.6 | 24.3 | 22.5 | 28.5 |
+| 10.145584 (30 m) | 38.0 | 36.6 | 35.5 | 36.0 |
+| 14.308440 (20 m) | 39.0 | 35.4 | 33.8 | 38.8 |
+| 24.999993 (the TCXO) | 36.8 | 34.8 | 35.4 | 37.2 |
+| 28.980864 | 17.2 | 12.9 | 9.6 | 16.1 |
+| 29.162850 | 30.9 | 28.7 | 25.4 | 30.0 |
+| 29.344837 | 27.9 | 26.4 | 16.1 | (a gap in D's data) |
+| 29.526826 | 36.8 | 31.9 | 20.9 | 36.0 |
+| 29.708812 | 20.4 | 15.3 | 13.2 | 17.3 |
+
+dB over the floor. 10.145584 MHz is 4 × clk1 − 6 × 25 MHz within 4 Hz
+(clk1 = 40.036396 MHz). The five lines from 28.98 to 29.71 MHz are
+182 kHz apart; their origin isn't worked out.
+
+**Images (13).** Four of the backward spurs are the second mixer's
+images of fixed-RF spurs the survey also found — 14.3084, 29.1629,
+29.3448 and 29.5268 MHz — each 11–14 dB weaker than its source. That
+suggests the crystal filter is only 11–14 dB down 48 kHz from its
+centre, so a strong station 48 kHz below the dial would throw a
+backward ghost about that much weaker than itself. A carrier would
+measure it directly (§5).
+
+**Mixing products.** The clk2-harmonic products (slopes ±2, ±3, ±4):
+18 at 8 mA, 15 at 6 mA, 6 at 4 mA, and 18 with the relays open (made on
+the board).
+
+**Single-dial lines (14).** The strongest narrow lines in every run,
+up to about 50 dB over the floor (3.655, 7.300 and 28.62 MHz; about
+36 dB at 5.308, 5.318 and 5.362 MHz), are each seen at only one dial,
+so they aren't classified. They are at the same frequencies in all four
+runs, relays open included, so they are not stations — a steady station
+would be seen from four dials — but products steep enough (a slope of 4
+or more) to cross the ±10 kHz window between one 5 kHz step and the
+next. A run on one band with 1 kHz steps would classify them.
+
+**Pickup through the antenna jack.** 17 weak (8–11 dB) fixed-RF spurs
+below 25 MHz, drifting −1.6 to −2 ppm between runs (another free-running
+clock, not the comb's), are gone with the relays open: they come in
+through the antenna path — the jack, the dummy load or its lead. (Two
+more near 3.647 MHz, 15–19 dB, are 300 Hz wide and go too: a station
+getting in.) Three
+stronger ones stay (3.6169, 3.7989 and 21.0191 MHz). Opening the relays
+doesn't shut everything out: the broadcast carrier at 7.295 MHz still
+shows.
+
+**Fixed offsets.** They moved between runs (−3428 to −3581 Hz, +364 to
++301 Hz): beats between free-running clocks, not fixed frequencies. The
+one near +300 Hz, at every dial and 11.5–14.5 dB, is inside the USB and
+DIGITAL passbands but about 10 dB under the noise in 2.7 kHz: a faint
+line in WSJT-X's waterfall at most.
+
+**The drive.** Lower drive takes out most of the si5351's mixing
+products (12 of 18 at 4 mA, 3 at 6 mA) and lowers its own lines by
+1.4–5 dB at 6 mA and 1.4–16 dB at 4 mA. Whether it costs sensitivity
+isn't known yet: the comb can't serve as a reference, since it changed
+with time, and with a dummy load the floor is the receiver's own noise.
+A steady signal measured at 8, 6 and 4 mA — a beacon, or the noise
+generator through `lpf_sweep.py` — would tell.
+
+**Gaps.** Each run lost some steps on 10 m (different ones each time:
+28.63–28.74 MHz in A, 28.17–28.25 and 29.30–29.38 MHz in D), where no
+I/Q arrived; the tool doesn't retry a step.
 
 ## 3. What removes which
 
@@ -324,6 +428,15 @@ One run finds the spurs; comparison runs say where each comes from:
 - Levels are in dBFS and dB above the floor, not microvolts; the
   receiver's gain isn't calibrated to the antenna port (see
   `rx_gain_and_level_calibration.md`).
+- A product with a slope of 4 or more crosses the window between two
+  steps and is seen once; at 5 kHz steps the strongest artifacts of the
+  first runs went unclassified (§2.5). A smaller `--step` on one band
+  catches them.
+- Opening every LPF relay cuts most of the antenna path, not all of it:
+  a strong broadcast carrier still shows (§2.5).
+- A spur's level can change between runs by several dB for reasons of
+  its own (§2.5, the comb): compare runs made close together, and
+  repeat the baseline when it matters.
 
 ### 4.8 Testing
 
@@ -365,8 +478,15 @@ Taken (29 October 2026):
 4. The dummy-load survey is in `08_troubleshooting_and_bringup.md`,
    "The receiver's own spurs".
 
-Still open: the items from §2 — check the block-rate comb on SSB
-transmit (5), measure the ripple (6) and LPF_B (8) with the noise
-generator — and whether a lower si5351 drive is worth keeping, which
-would then want a setting in `hw_settings.ini` and the transmit power
-scales re-checked.
+Still open:
+
+- From §2: check the block-rate comb on SSB transmit (5); measure the
+  ripple (6) and LPF_B (8) with the noise generator.
+- The 48 kHz comb's source (11): measure the codec's sample rate
+  against the TCXO; a run with the Pi's HDMI, Wi-Fi and USB off.
+- The cost of a lower si5351 drive (12): a steady signal's level at 8,
+  6 and 4 mA. Keeping a lower drive would then want a setting in
+  `hw_settings.ini` and the transmit power scales re-checked.
+- The crystal filter 48 kHz from its centre (13): a carrier 48 kHz
+  below the dial.
+- The single-dial lines (14): a run with 1 kHz steps on 60 m or 80 m.
