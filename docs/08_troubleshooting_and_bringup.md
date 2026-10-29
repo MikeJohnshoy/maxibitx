@@ -405,9 +405,9 @@ python3 tools/spur_survey.py --compare spur_survey_20261029_140000_spurs.csv rel
   maxibitx starts at 8 mA every time.
 - `--clk1-div 22` (clk1 on si5351 divider 22 instead of 18, `L CLK1DIV`,
   restored after): PLL B moves from about 720 MHz, inside the range PLL A
-  sweeps over the bands, to 880 MHz, so the two PLLs' beat — on 60 m a
-  line 35 dB over the floor that races through the passband near
-  5.3638 MHz — leaves most bands. Steep lines need small steps to be
+  sweeps over the bands, to 880 MHz. Products with PLL B in them move to
+  other dials; others stay. (60 m's line 35 dB over the floor near
+  5.3638 MHz stayed: it isn't one.) Steep lines need small steps to be
   seen: compare `--range` runs at `--step 100` across a crossing.
 - By hand: HDMI, Wi-Fi and USB devices off, a linear supply in place of
   a switching one, or `L XTALCENTER` moved 2 kHz (fixed-RF spurs stay;
