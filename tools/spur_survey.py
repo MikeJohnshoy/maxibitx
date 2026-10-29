@@ -407,6 +407,31 @@ def pll_products(dial0, s_fit, clk1_hz, clk1_div=0):
     return [t for _, t in sorted(out)[:2]]
 
 
+CLK1_LATTICE_A = 30      # clk1 multiples tried for a fixed-RF spur
+CLK1_LATTICE_B = 60      # 25 MHz multiples
+CLK1_LATTICE_TOL_HZ = 15  # a measured frequency's error (the TCXO itself reads ~7 Hz low)
+
+
+def clk1_lattice(k, clk1_hz, clk1_div=0):
+    """The simplest a x clk1 + b x 25 MHz (a != 0) within
+    CLK1_LATTICE_TOL_HZ of k, as text, or "". clk1 is the frequency the
+    si5351 really makes: PLL B's fractional setting divided down."""
+    pll, div = si_pll(clk1_hz, clk1_div)
+    c1 = pll / div
+    best = None
+    for a in range(-CLK1_LATTICE_A, CLK1_LATTICE_A + 1):
+        if a == 0:
+            continue
+        b = round((k - a * c1) / SI_XTAL)
+        if abs(b) <= CLK1_LATTICE_B and abs(k - a * c1 - b * SI_XTAL) <= CLK1_LATTICE_TOL_HZ:
+            if best is None or abs(a) + abs(b) < abs(best[0]) + abs(best[1]):
+                best = (a, b)
+    if best is None:
+        return ""
+    a, b = best
+    return f"{a} x clk1 {'+' if b >= 0 else '-'} {abs(b)} x 25 MHz"
+
+
 def suspects(spur, spurs, clk1_hz, clk1_div=0):
     """Likely sources, as text."""
     s, k = spur["slope"], spur["k_hz"]
@@ -420,7 +445,12 @@ def suspects(spur, spurs, clk1_hz, clk1_div=0):
                 hits.append((name, f, h, fam))
         # the codec's 12 MHz, not also its 6 MHz and 96 kHz frame
         hits = [x for x in hits if not any(y[3] == x[3] and y[1] > x[1] for y in hits)]
-        return "; ".join(f"{h} x {name}" if h > 1 else name for name, _, h, _ in hits)
+        out = [f"{h} x {name}" if h > 1 else name for name, _, h, _ in hits]
+        if not any(x[3] in ("tcxo", "clk1") for x in hits):
+            lattice = clk1_lattice(k, clk1_hz, clk1_div)
+            if lattice:
+                out.append(lattice)
+        return "; ".join(out)
     if s == 0:
         return "at the dial (fs/4 in the codec, or LO leakage)" if abs(k) < 100 else \
             "made after the first mixer"
