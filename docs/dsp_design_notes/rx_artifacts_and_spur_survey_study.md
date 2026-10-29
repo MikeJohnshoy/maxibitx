@@ -421,6 +421,24 @@ can't be seen three times: a slope of 2 or more crosses the ±10 kHz
 window in two steps, and so does anything in `--general`'s 10 kHz
 steps; those need two.
 
+Steep lines (added after the 60 m runs, §2.5). A product of the
+si5351's PLLs moves 10–30 times as fast as the dial, so it crosses the
+±10 kHz window in under a kilohertz of tuning; at 5 kHz steps it is seen
+once. `--range LO HI` surveys a short stretch at any `--step`, and the
+steepest slope fitted grows as the step shrinks (20 kHz ÷ step: 200 at
+100 Hz). Above a slope of 4 slopes are whole numbers — a PLL product
+moves at a multiple of the PLL's divider, less one — and a line is
+grouped by where it crosses the dial (offset 0), which a slope error of
+one barely moves, then fitted by least squares. Its tolerance grows
+with the slope, 35 Hz plus 5 Hz per unit: each PLL's fractional setting
+misses by up to 48 Hz (25 MHz ÷ 2^19), about 5 Hz at clk2, and a
+product multiplies that. Tested on a simulated radio with a PLL A − PLL
+B line made by `si5351v2.c`'s arithmetic: at 100 Hz steps it was found
+with slope +15.00, crossing the dial at 5.363786 MHz against 5.363785
+predicted.
+
+A step that gets no I/Q, or under half of it, is measured again once.
+
 ### 4.4 Suspects
 
 For every fixed-RF spur the report lists known clocks with a harmonic
@@ -433,10 +451,14 @@ within the spur's frequency tolerance:
 - clk1 (`xtal_filter_center` + 24 kHz) and its sub-multiples,
 - the codec's bit clock and frame clock multiples (12 MHz and 96 kHz).
 
-For mixing products, the report gives the combinations n·clk2 ± m·clk1
-± k·(other clock) that land in the passband at the dials where it was
-seen. These are suspects, not proof; the comparison runs (§4.6) are
-what prove a source.
+For a mixing product up to a slope of 4, the report names the harmonic
+of clk2 the slope implies. For a steeper one it names the products
+±(m × PLL A − n × PLL B + k × 25 MHz), m up to 3, n up to 3 and |k| up
+to 12, whose slope (± m × PLL A's divider − 1) matches the fitted one and
+which cross the dial within 3 kHz of where the line does — computed
+with `si5351v2.c`'s own choice of divider and fractional setting, and
+the run's `xtal_filter_center`. These are suspects, not proof; the
+comparison runs (§4.6) are what prove a source.
 
 ### 4.5 Output
 
@@ -547,6 +569,7 @@ Still open:
 - The crystal filter 48 kHz from its centre (13): a carrier 48 kHz
   below the dial.
 - The single-dial lines (14): their exact dials from the `_peaks.csv`
-  files against the predicted PLL crossings (§2.5); a 100 Hz-step run
-  across one crossing (the survey needs a narrow range and steeper
-  slopes for that); if confirmed, try clk1 on another PLL divider.
+  files against the predicted PLL crossings (§2.5); `--reanalyse` of the
+  60 m 1 kHz-step run with the steep-line fitting; a 100 Hz-step run
+  across one crossing (`--range 5360000 5368000 --step 100`); if
+  confirmed, try clk1 on another PLL divider.
