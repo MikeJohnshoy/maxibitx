@@ -10,6 +10,13 @@ already used in `antialias_filter_design.md`.
 
 ## Contents
 
+- [`rx_artifacts_and_spur_survey_study.md`](rx_artifacts_and_spur_survey_study.md)
+  — the kinds of receiver artifact (spurs, birdies, images, IMD,
+  aliasing, combs, ripple) and how each moves when you tune; those met
+  so far on the sBitx, their causes, impacts and remedies; which are
+  fixed by layout, shielding and supply filtering and which by design;
+  and the design of a dummy-load spur survey that classifies internal
+  spurs by how they move. Status: proposed.
 - [`antialias_filter_design.md`](antialias_filter_design.md) — measured
   crystal filter response and the FIR anti-alias filter spec derived
   from it for the RX chain. Status: implemented (`antialias.c`).
