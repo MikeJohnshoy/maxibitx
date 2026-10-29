@@ -106,7 +106,7 @@ From that, the predicted responses, each with what defends against it:
 | 11 | A comb of narrow spurs, harmonics of 48.0135 kHz, 3.6–29.7 MHz (30 of 10 m's 41 lines) | an unidentified crystal-stable clock, not the si5351's; coupled on the board after the LPFs | a line every 48 kHz, 10–25 dB in an 11.7 Hz bin; on the waterfall, rarely heard | **open**: find the clock (§2.5) |
 | 12 | si5351 spurs: 25.000, 10.1456 (30 m), 14.3084 (20 m) MHz and five lines at 28.98–29.71 MHz, 17–39 dB | the si5351's reference and products of its outputs, on the board | 30 m and 20 m lines inside the bands, 36–39 dB | **open**: fall 1.4–16 dB at lower drive; the cost of lower drive unmeasured |
 | 13 | Second-mixer images of those spurs, 11–14 dB weaker | the crystal filter only 11–14 dB down 48 kHz from its centre (inferred) | a strong station 48 kHz below the dial would make a backward ghost about that much weaker | **to confirm** with a carrier |
-| 14 | The strongest artifacts: narrow lines up to ~50 dB, each seen at a single dial (3.655, 5.308, 5.318, 5.362, 7.300, 28.62 MHz) | some are images or edge-truncated lines (60 m at 1 kHz steps); the rest likely the si5351's two PLLs beating (inferred) | strong, but only at particular dial settings | **open**: check against the predicted crossings (§2.5) |
+| 14 | The strongest artifacts: narrow lines up to ~50 dB, each seen at a single dial (3.655, 5.308, 5.318, 5.362, 7.300, 28.62 MHz) | some are images or edge-truncated lines (60 m at 1 kHz steps); 60 m's near 5.362 MHz is the si5351's PLL A − PLL B beat (measured at 100 Hz steps); the others likely the same kind (inferred) | strong, but only within a few kilohertz of particular dials, sweeping 15 times as fast as the tuning | **open**: frequency planning — clk1 on another PLL divider (§2.5) |
 
 ### 2.1 The codec's timing pattern (1)
 
@@ -297,11 +297,121 @@ prediction; at 1 kHz steps a slope-15 line is seen at most twice. The
 deciding run is 100 Hz steps across 5.3638 MHz, where it would be seen
 about 13 times.
 
-If it holds, it is a matter of frequency planning, in software: PLL B
-need not sit inside PLL A's range. With clk1 on a divider of 22 (PLL B
-at 880.8 MHz, inside the si5351's 600–900 MHz VCO range), the products
-of up to three times each PLL that cross a band fall from 25 families to
-9, most of them with high harmonics of 25 MHz. Not a cure, and untried.
+**The 100 Hz-step run confirms it.** `--range 5360000 5368000 --step
+100` (81 dials) found a line of slope +14.996, seen 13 times, 35.1 dB
+over the floor (−67 dBFS), crossing the dial at 5.363786 MHz: the
+predicted PLL A − PLL B, which crosses at 5.363785 MHz. With it:
+
+| Slope | Crosses the dial at | Sightings | dB | What it is |
+|---|---|---|---|---|
+| +15.0 | 5.363786 MHz | 13 | 35.1 | PLL A − PLL B |
+| −15.0 | 5.360585 MHz | 13 | 34.3 | the same beat, folded (below) |
+| +29.9 | 5.362985 MHz | 7 | 19.6 | twice the beat |
+| −29.9 | 5.361385 MHz | 7 | 19.0 | twice the beat, folded |
+| −40.0 | 5.362911 MHz | 4 | 14.4 | not identified |
+| −12.0 | 5.365870 MHz | 15 | 13.5 | not identified |
+| +79 | 5.367191 MHz | 3 | 14.5 | not identified |
+
+All four of the first lines meet at 5.362185 MHz, where PLL A − PLL B
+is 24 kHz below the dial: there it lands on clk1 itself, and the beat
+with clk1 — the audio frequency the codec sees — passes through zero.
+Either side of that dial the codec sees the same tone, at the same
+audio frequency whichever side of clk1 the beat is on, so the line comes
+back as the slope −15 line, crossing 48 kHz ÷ 15 = 3.2 kHz lower. It is
+the same relation as the second mixer's images (13), with a difference: it is
+only 0.8 dB weaker than its source, where the images of real signals
+were 11–14 dB weaker. For the folded line the beat is 48 kHz above the
+crystal filter's centre; a signal coming through the filter would lose
+those 11–14 dB there. So the beat doesn't come in through the antenna
+path and the crystal filter: it gets in after the filter — on clk1's
+own output (both PLLs are on one chip), in the second mixer, or between
+there and the codec. The ±30 pair, 15 dB weaker, meets at the same dial
+with twice the slope: the beat's second harmonic, made after the beat
+exists (or 2 × (A − B) beating with clk2 − clk1, the same frequency;
+the run can't tell them apart). No product of up to six times each
+PLL, eight times clk2, four times clk1 and forty times 25 MHz explains
+the −12, −40 and +79 lines, so something other than the si5351's own
+clocks is probably in them.
+
+The run was made twice, first with the tool from before steep lines
+needed three sightings (10:57), then with the current one (11:10).
+Every line came back crossing the dial within 2 Hz of where it did the
+first time, and within 0.6 dB: the beats are as steady as the TCXO.
+The first run's −94 line, two sightings, was gone; its +78, also two,
+was found as +79 with three, crossing at 5.367191 MHz both times, so it
+is real. Each run had one marginal extra (a fixed offset at +6690 Hz,
+8 dB, four sightings; a fixed-RF line at 5.371084 MHz, 17 dB, three
+sightings out of the 13 dials it should have been seen from) — not
+repeated, so not counted. Of the fixed offsets, −3547/−3594 Hz and
++308/+301 Hz moved between the runs as before, but +8688 Hz stayed
+within 0.1 Hz (8688.4 Hz in the 1 kHz-step run): that one is probably
+locked to the TCXO — made from the si5351's clocks after the first
+mixer — rather than a beat of free-running ones.
+
+Where it is heard: the beat sweeps through a 2.7 kHz passband in about
+180 Hz of tuning, near 5.3638–5.3640 MHz and again, folded, near
+5.3604–5.3606 MHz on USB — a whistle that races through the passband as
+the dial moves. It is on the ±24 kHz display only for dials from
+5.3590 to 5.3654 MHz.
+Every predicted crossing in the table will have a twin like this, where
+the product is 48 kHz below the dial.
+
+Because the beat is made in the si5351 and reaches the receiver after
+the crystal filter, shielding the antenna path wouldn't touch it. It is
+a matter of frequency planning, in software: PLL B
+need not sit inside PLL A's range.
+
+**Moving PLL B.** clk1 is on divider 18 because that is the smallest
+even divider putting its PLL above 650 MHz — the rule every clock gets.
+Any of 16, 18, 20 and 22 keeps PLL B inside the si5351's 600–900 MHz
+over the whole `xtal_filter_center` range, with clk1's frequency
+unchanged; rigctld's `L CLK1DIV` fixes one until restart, and
+`spur_survey.py --clk1-div` makes a run with it. Where the products
+cross the bands at each, from `si5351v2.c`'s arithmetic — products
+±(m × PLL A − n × PLL B + k × 25 MHz), m 1–3, n 0–3, |k| up to 40:
+
+| Band | 16 (640.6 MHz) | 18 (720.7 MHz, now) | 20 (800.7 MHz) | 22 (880.8 MHz) |
+|---|---|---|---|---|
+| 80 m | 11 | 10 | 14 | 9 |
+| 60 m | 3 | 2 | 0 | 0 |
+| 40 m | 4 | 5 | 5 | 4 |
+| 30 m | 0 | 1 | 0 | 0 |
+| 20 m | 3 | 8 | 5 | 6 |
+| 17 m | 1 | 2 | 1 | 1 |
+| 15 m | 7 | 5 | 7 | 3 |
+| 12 m | 1 | 3 | 1 | 3 |
+| 10 m | 20 | 20 | 16 | 15 |
+| All | 50 | 56 | 49 | 41 |
+
+Each also has its fold, 48 kHz ÷ slope away. The count matters less
+than which products they are. The one measured, 35 dB, is the simplest,
+A − B itself; the likeliest strong ones are A − B with a small multiple
+of 25 MHz (up to 6), and those are:
+
+- divider 18: A − B + 25 MHz at 3.6971 MHz (80 m), A − B at
+  5.3638 MHz (60 m), −(A − B − 2 × 25 MHz) at 14.0321 MHz (20 m),
+  −(A − B) at 29.1392 MHz (10 m);
+- divider 22: A − B + 5 × 25 MHz at 21.2040 MHz (15 m), and no others;
+- divider 20: 3.5606 MHz (80 m) and 29.6004 MHz (10 m);
+- divider 16: six, on 40, 20, 17, 15 and 10 m.
+
+So 22 is not the same on every band: 60 m and 30 m are left with no
+product at all; 80, 20 and 10 m lose their simplest ones but keep many
+with higher multiples of 25 MHz, whose strength nobody has measured;
+15 m gains one; 40, 17 and 12 m change little. And the strongest
+single-dial lines (3.655, 7.300 and 28.62 MHz) and 60 m's −12, −40 and
++79 lines match no PLL product, so they may not move at all. The
+divider can be chosen per band if the measurements say so: a band's
+clk1 divider is a few register writes when the band changes. Two
+first runs:
+
+```
+spur_survey.py --range 5360000 5368000 --step 100 --clk1-div 22   # 60 m: the beat should go
+spur_survey.py --range 21200000 21210000 --step 100 --clk1-div 22 # 15 m: does one come?
+```
+
+each against the same range at the automatic 18 (`--compare`), then
+whole-band runs at both to see which single-dial lines go.
 
 **Pickup through the antenna jack.** 17 weak (8–11 dB) fixed-RF spurs
 below 25 MHz, drifting −1.6 to −2 ppm between runs (another free-running
@@ -315,6 +425,8 @@ shows.
 
 **Fixed offsets.** They moved between runs (−3428 to −3581 Hz, +364 to
 +301 Hz): beats between free-running clocks, not fixed frequencies. The
+one at +8688 Hz is the exception: steady to 0.1 Hz between the 60 m
+runs (above). The
 one near +300 Hz, at every dial and 11.5–14.5 dB, is inside the USB and
 DIGITAL passbands but about 10 dB under the noise in 2.7 kHz: a faint
 line in WSJT-X's waterfall at most.
@@ -329,7 +441,7 @@ generator through `lpf_sweep.py` — would tell.
 
 **Gaps.** Each run lost some steps on 10 m (different ones each time:
 28.63–28.74 MHz in A, 28.17–28.25 and 29.30–29.38 MHz in D), where no
-I/Q arrived; the tool doesn't retry a step.
+I/Q arrived. The tool now measures such a step again once (§4.3).
 
 ## 3. What removes which
 
@@ -507,7 +619,10 @@ One run finds the spurs; comparison runs say where each comes from:
    unplugged, the panel not running. Spurs that vanish belong to those.
 5. **A different `xtal_filter_center`** (by 2 kHz): fixed-RF spurs stay;
    mixing products move by a predictable amount.
-6. **Another supply**: a linear bench supply in place of the usual one.
+6. **clk1 on another si5351 divider** (`--clk1-div 22`): the PLL A −
+   PLL B products move to other dials (§2.5); others stay. Steep lines
+   need `--range` runs at small steps to compare.
+7. **Another supply**: a linear bench supply in place of the usual one.
    Spurs from the supply's switching move or vanish.
 
 ### 4.7 Limits
@@ -585,8 +700,11 @@ Still open:
   `hw_settings.ini` and the transmit power scales re-checked.
 - The crystal filter 48 kHz from its centre (13): a carrier 48 kHz
   below the dial.
-- The single-dial lines (14): their exact dials from the `_peaks.csv`
-  files against the predicted PLL crossings (§2.5); `--reanalyse` of the
-  60 m 1 kHz-step run with the steep-line fitting; a 100 Hz-step run
-  across one crossing (`--range 5360000 5368000 --step 100`); if
-  confirmed, try clk1 on another PLL divider.
+- The single-dial lines (14): 60 m's is confirmed as PLL A − PLL B
+  (§2.5). `L CLK1DIV` and `--clk1-div` are built; next, the two range
+  runs at divider 22 (60 m, 15 m) and whole-band runs at 18 and 22; if
+  22 holds up, a setting for it (per band if need be) and a check of
+  transmit, whose clk1 uses it too. Also: 100 Hz-step runs across other
+  predicted crossings (3.655, 7.300 and 28.62 MHz aren't among them);
+  the −12, −40 and +79 lines; suspects that name a beat's fold and its
+  harmonics.
