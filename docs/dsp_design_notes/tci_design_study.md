@@ -527,6 +527,13 @@ proposed:
   `tx_stream_audio_buffering` plus one request (so four at the start at
   the default 50 ms), at most eight per 5 ms tick. Requests left
   unanswered for 300 ms are forgotten, since a client may skip them.
+- **Running dry.** If the ring is short once audio has started, the
+  audio thread transmits silence for what is missing and counts it; the
+  end of the transmission prints one line with the count, the silence,
+  the longest wait between the client's frames and how long the first
+  audio took (`MAXIBITX_TCI_TX_TIMING=1`: every transmission).
+  Added after occasional runs of two or three short gaps in WSJT-X's FT8
+  over TCI, October 2026.
 - **I/Q orientation.** Sent conjugated, so a station above the dial is
   at positive frequency - the conventional way up, where iq_stream and
   HPSDR carry the raw inverted I/Q (the latter because SparkSDR expects
