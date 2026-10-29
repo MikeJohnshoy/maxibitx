@@ -20,4 +20,17 @@ void si5351a_clkoff(uint8_t clk);
 int si5351_set_drive_ma(int ma);
 int si5351_get_drive_ma(void);
 
+// clk1's output divider, from the next si5351bx_setfreq(1, ...) on. 0, the
+// start-up setting, picks it as for every clock: the smallest even divider
+// putting the PLL above 650 MHz - 18 for the sBitx's 40 MHz clk1, so PLL B
+// runs at about 720 MHz, inside the 650-780 MHz PLL A (clk2's) covers over
+// the bands, and the two PLLs' difference sweeps through HF. 16, 18, 20 or
+// 22 fixes it, moving PLL B to about 640, 720, 800 or 880 MHz; one that
+// would put PLL B outside the si5351's 600-900 MHz is passed over for the
+// automatic one. Returns 0, or -1 for any other value, unchanged.
+int si5351_set_clk1_divider(int div);
+int si5351_get_clk1_divider(void); // 0 for automatic
+// The divider si5351bx_setfreq() uses for clk1 at frequency.
+int si5351_clk1_divider_for(uint32_t frequency);
+
 #endif /* SI5351_H */
