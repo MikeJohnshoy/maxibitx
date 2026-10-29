@@ -44,6 +44,18 @@ void tci_stream_set(int slot, const struct tci_stream_cfg *cfg);
 void tci_stream_tx_begin(int slot, int buffering_ms);
 void tci_stream_tx_end(void);
 
+// How the last transmission's TCI audio kept up, filled in by
+// tci_stream_tx_end(), which prints it when the audio ran dry. dry_events:
+// times the audio thread found the ring short once audio had started and
+// before it came back; silence_ms: what was played as silence then;
+// max_gap_ms: the longest wait between two of the client's TX audio frames;
+// first_audio_ms: from TX on to the first, -1 if none came.
+struct tci_tx_stats {
+  unsigned long dry_events;
+  double silence_ms, max_gap_ms, first_audio_ms;
+};
+void tci_stream_tx_stats(struct tci_tx_stats *s);
+
 // A binary frame from a client. TX audio from the client that holds TX is
 // queued for the audio thread; anything else is dropped.
 void tci_stream_tx_frame(int slot, const uint8_t *frame, size_t len);
