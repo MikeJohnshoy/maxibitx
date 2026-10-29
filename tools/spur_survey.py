@@ -63,6 +63,10 @@ baseline using --compare:
     --drive MA      the si5351's drive for the run (L SIDRIVE 2/4/6/8 mA,
                     restored after): its harmonics, and the products
                     they make, against the 8 mA start-up drive
+    --clk1-div N    clk1's si5351 divider for the run (L CLK1DIV 16/18/20/22,
+                    restored after): PLL B (clk1's) moved out of PLL A's
+                    range, so the two PLLs' beat leaves the bands; 18 is the
+                    automatic choice
     (by hand)       the Pi quieter (HDMI, Wi-Fi, USB off), another supply,
                     a different xtal_filter_center
 
@@ -93,7 +97,7 @@ drive's effect on gain shows on a real signal, not here.
 
 Needs a maxibitx with the I/Q stream on UDP 4536, numpy, and
 xtal_sweep.py beside this file (its rigctld and I/Q code); --lpf-off
-needs L LPF (sBitx), --drive needs L SIDRIVE.
+needs L LPF (sBitx), --drive needs L SIDRIVE, --clk1-div needs L CLK1DIV.
 """
 
 import argparse
@@ -252,6 +256,8 @@ def fit_line(dial, off, idx, s_fixed=None):
     idx = list(idx)
     while idx:
         d, o = dial[idx], off[idx]
+        if s_fixed is None and (len(idx) < 2 or (len(idx) == 2 and d[1] == d[0])):
+            return [], 0.0, 0.0  # no slope from one dial
         if s_fixed is not None or len(idx) < 3:
             s = s_fixed if s_fixed is not None else (o[-1] - o[0]) / (d[-1] - d[0])
             k = float(np.median(o - s * d))
@@ -335,26 +341,27 @@ SI_XTAL = 25000000
 SI_DENOM = 0x80000
 
 
-def si_pll(freq):
+def si_pll(freq, div=0):
     """The PLL frequency and output divider si5351v2.c uses for an output
-    at freq: the smallest even divider above 650 MHz / freq, the PLL a
-    25 MHz multiple plus a fraction in 1/2^19 steps."""
-    div = 650000000 // int(freq) + 1
-    if div & 1:
-        div += 1
+    at freq: div if given, else the smallest even divider above 650 MHz /
+    freq; the PLL a 25 MHz multiple plus a fraction in 1/2^19 steps."""
+    if not div:
+        div = 650000000 // int(freq) + 1
+        if div & 1:
+            div += 1
     pll = int(freq) * div
     num = ((pll % SI_XTAL) * SI_DENOM) // SI_XTAL
     return SI_XTAL * (pll // SI_XTAL + num / SI_DENOM), div
 
 
-def pll_products(dial0, s_fit, clk1_hz):
+def pll_products(dial0, s_fit, clk1_hz, clk1_div=0):
     """Products of PLL A (clk2's), PLL B (clk1's) and the 25 MHz reference
     that cross the dial within 3 kHz of dial0 at the fitted slope:
     sgn * (m * A - n * B + k * 25 MHz), whose offset moves at
     sgn * m * (A's divider) - 1 times the dial."""
     xc = clk1_hz - 24000
     a0, div_a = si_pll(dial0 + xc)
-    b, _ = si_pll(clk1_hz)
+    b, _ = si_pll(clk1_hz, clk1_div)
     out = []
     for m in (1, 2, 3):
         for nb in (0, 1, 2, 3):
@@ -379,7 +386,7 @@ def pll_products(dial0, s_fit, clk1_hz):
     return [t for _, t in sorted(out)[:2]]
 
 
-def suspects(spur, spurs, clk1_hz):
+def suspects(spur, spurs, clk1_hz, clk1_div=0):
     """Likely sources, as text."""
     s, k = spur["slope"], spur["k_hz"]
     if s == -1:
@@ -402,7 +409,7 @@ def suspects(spur, spurs, clk1_hz):
         return (f"second-mixer image of {f / 1e6:.6f} MHz" +
                 (" (found there: a fixed-RF spur)" if found else ""))
     if abs(s) >= 5:
-        found = pll_products(spur["cross_hz"], spur["slope_fit"], clk1_hz)
+        found = pll_products(spur["cross_hz"], spur["slope_fit"], clk1_hz, clk1_div)
         return "; ".join(found) if found else "steep: no PLL A/B product found there"
     return f"{abs(s):g}x the first LO (clk2) in a mixing product"
 
@@ -423,7 +430,7 @@ def report(cands, dials, floors, step_hz, meta, prefix, spectra=None):
     spurs, singles, steep_pairs = classify(cands, step_hz)
     clk1 = meta.get("clk1_hz", 40036400.0)
     for sp in spurs:
-        sp["suspects"] = suspects(sp, spurs, clk1)
+        sp["suspects"] = suspects(sp, spurs, clk1, meta.get("clk1_div", 0))
         # the bands it was seen in: by RF, or for a fixed offset by the dial
         where = sp["rf_seen"] if sp["slope"] != 0 else [r - sp["k_hz"] for r in sp["rf_seen"]]
         sp["bands"] = ",".join(sorted({band_of(r) for r in where} - {""},
@@ -658,6 +665,8 @@ def main():
     ap.add_argument("--threshold", type=float, default=7.0)
     ap.add_argument("--lpf-off", action="store_true", help="every LPF relay open (L LPF 5)")
     ap.add_argument("--drive", type=int, choices=(2, 4, 6, 8), help="si5351 drive, mA")
+    ap.add_argument("--clk1-div", type=int, choices=(16, 18, 20, 22),
+                    help="clk1's si5351 divider (18 is the automatic one)")
     ap.add_argument("--out", help="output name prefix (default spur_survey_<time>)")
     ap.add_argument("--reanalyse", metavar="STEPS_NPZ")
     ap.add_argument("--compare", nargs=2, metavar=("A_SPURS_CSV", "B_SPURS_CSV"))
@@ -671,6 +680,8 @@ def main():
         z = np.load(args.reanalyse, allow_pickle=False)
         dials, spectra = z["dials"], z["spectra"]
         meta = {"clk1_hz": float(z["clk1_hz"]), "conditions": str(z["conditions"])}
+        if "clk1_div" in z.files:
+            meta["clk1_div"] = int(z["clk1_div"])
         if "range_lo" in z.files and int(z["range_lo"]):
             meta["range"] = (int(z["range_lo"]), int(z["range_hi"]))
         step = int(z["step"])
@@ -699,6 +710,14 @@ def main():
             sys.exit("could not set the si5351 drive (this maxibitx needs L SIDRIVE)")
     drive_now = rig.get_int("l SIDRIVE")
     conditions.append(f"si5351 {drive_now} mA" if drive_now else "si5351 drive unknown")
+    original_div = rig.get_int("l CLK1DIV")
+    if args.clk1_div is not None:
+        if original_div is None or not rig.set_ok(f"L CLK1DIV {args.clk1_div}"):
+            sys.exit("could not set clk1's divider (this maxibitx needs L CLK1DIV)")
+        time.sleep(0.2)  # the si5351's PLLs relock
+    div_now = rig.get_int("l CLK1DIV")
+    if div_now:
+        conditions.append(f"clk1 divider {div_now}")
     if args.lpf_off:
         if not rig.set_ok("L LPF 5"):
             sys.exit("could not open the LPF relays (L LPF 5 needs an sBitx and a maxibitx "
@@ -758,6 +777,10 @@ def main():
                 not rig.set_ok(f"L SIDRIVE {original_drive}"):
             print(f"WARNING: could not restore the si5351 drive - send 'L SIDRIVE "
                   f"{original_drive}'")
+        if args.clk1_div is not None and original_div:
+            back = 0 if original_div == 18 else original_div  # 18: the automatic one
+            if not rig.set_ok(f"L CLK1DIV {back}"):
+                print(f"WARNING: could not restore clk1's divider - send 'L CLK1DIV {back}'")
         if original_dial is not None:
             rig.set_ok(f"F {original_dial}")
         rig.close()
@@ -765,12 +788,14 @@ def main():
     if retried or missed:
         print(f"\n{retried} step(s) measured again; {len(missed)} with no data"
               + (f": {', '.join(str(m) for m in missed[:10])}" if missed else ""))
-    meta = {"clk1_hz": float(clk1), "conditions": ", ".join(conditions)}
+    meta = {"clk1_hz": float(clk1), "conditions": ", ".join(conditions),
+            "clk1_div": div_now or 0}
     if args.range:
         meta["range"] = tuple(args.range)
     np.savez_compressed(prefix + "_steps.npz", dials=np.array(done),
                         spectra=np.array(kept) if kept else np.zeros((0, int(np.sum(KEEP)))),
                         clk1_hz=clk1, conditions=meta["conditions"], step=step,
+                        clk1_div=div_now or 0,
                         range_lo=args.range[0] if args.range else 0,
                         range_hi=args.range[1] if args.range else 0)
     written = [prefix + "_steps.npz"] + report(cands, done, floors, step, meta, prefix,
