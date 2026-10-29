@@ -1,0 +1,351 @@
+# Receiver artifacts, and a spur survey: a design study
+
+Status: **proposed — a study, nothing built.** §1–§3 review the kinds of
+receiver artifact and the ones met so far on the sBitx; §4 is the
+design of `tools/spur_survey.py`; §6 lists the decisions wanted before
+any code.
+
+Written to answer:
+
+- What kinds of unwanted thing can a receiver show? Are ghosts and
+  birdies the same? What are spurs?
+- Which have we already met in maxibitx, why, what do they cost, and
+  what would remove them?
+- Can a dummy load and careful tuning find them all? Does a noise
+  generator help?
+- Are spurs a matter of board layout, shielding and supply filtering?
+
+Measured figures are from the raw-capture dumps of 26 October 2026
+(three bad-state captures and one clean one, 7.030 MHz) and the first
+`lpf_sweep.py` run on 28 October 2026 (antenna noise, 1–40 MHz). Where
+something is predicted rather than measured, it says so.
+
+## 1. The family of artifacts
+
+### 1.1 Terms
+
+**Spur** is the general word: any signal the receiver shows that isn't
+on the air at that frequency. It covers two quite different things:
+
+- **Internally generated spurs** — signals the radio makes itself, which
+  show with no antenna at all. The common case is a steady carrier, a
+  **birdie**: tuned across, it whistles up and down through zero beat,
+  like a bird. Clock harmonics are the usual source.
+- **Spurious responses** — the receiver hearing a real signal where it
+  isn't: images, intermodulation, aliasing. These need a signal on the
+  air to show anything, and they move with that signal.
+
+**Ghost** has no strict meaning; it usually names a copy of a real
+signal in the wrong place — an image, an IMD product, or (as we found)
+sidebands of every signal. A **backward birdie** is one that moves the
+wrong way when you tune: an image, or a product of the radio's own
+oscillators mixing.
+
+### 1.2 The tuning test
+
+What an artifact does when the dial moves is the best single clue to
+where it is made. Tune up by Δ:
+
+| Artifact | On the display, it… | Made where |
+|---|---|---|
+| Internal spur at a fixed RF frequency | moves Δ down, as a station does | radiated or conducted into the RF input: Pi clocks, the codec's crystal, switching regulators, si5351 harmonics |
+| Fixed-offset spur | stays put | after the first mixer: the crystal filter's IF, the codec, the DSP |
+| Mixing-product birdie | moves at another rate, or backwards | harmonics of clk1 and clk2 mixing with each other or with the IF |
+| Image / mirror ghost | moves **backwards** (Δ up) | the receiver responding on the far side of a mixer or a sample rate |
+| Comb copies (sidebands) | moves with its parent signal | the signal path or the sampling modulated; our codec's 750 Hz combs |
+| Intermodulation (IMD) | only with strong signals; 3 dB more attenuation drops it 9 dB | overload in the mixer, amplifier or ADC — typically evening broadcast stations |
+| Aliasing | reflected about an edge of the 96 kHz band | signals past the codec's band folding back |
+| Reciprocal mixing | a raised noise floor around a strong signal | oscillator phase noise mixing with the strong signal |
+| Hum / rhythm sidebands | small copies at a fixed spacing either side of strong signals | supply ripple, or the 93.75 Hz audio block rate |
+| Passband ripple | a wavy noise floor | the shape of a filter, or an echo in the samples |
+| Time-domain artifacts | clicks, gaps | relays, xruns, a stalled audio thread |
+
+A fourth movement says the most: an artifact that **appears and
+disappears** at particular dial frequencies is a product of the
+oscillators — it exists only where the frequency arithmetic lands it in
+the passband.
+
+### 1.3 Where they can arise on the sBitx
+
+The frequency plan decides where to look. With the dial at D and the
+crystal filter centred at S (`xtal_filter_center`, about 40.0124 MHz):
+
+- clk2 (first LO) = D + S; the mixer's difference product puts a signal
+  at D + d at crystal frequency S − d.
+- clk1 (second LO) = S + 24 kHz; the codec sees 24 kHz + d.
+- The software mixes at exactly 24 kHz = fs/4 to I/Q at 96 kHz.
+
+From that, the predicted responses, each with what defends against it:
+
+| Response | Where the signal really is | How it moves | Defence |
+|---|---|---|---|
+| First-mixer image | D + 2S ≈ D + 80.025 MHz — FM broadcast (88–108 MHz) lands on dials of 8–28 MHz | backwards | the LPF in use, far into its stopband |
+| First-mixer harmonic responses | n·D + (n ∓ 1)·S for n = 2, 3, … (e.g. 2D + 40 MHz) | n − 1 times as fast | the LPF |
+| IF feedthrough | ≈ S − d, a signal near 40 MHz leaking straight through the mixer | fixed offset | the LPF, and the mixer's isolation |
+| Second-mixer image | D − 48 kHz − d: a station 48 kHz below the dial appears at +d | backwards | the crystal filter, 48 kHz from its centre (not yet measured that far out) |
+| Codec aliasing | codec inputs past about 0.45 fs fold back to the band's edges, i.e. offsets beyond about ±20 kHz | backwards, at the display's edges | the crystal filter's skirts; the codec's decimation filter |
+| Software-mix self-image | 48 kHz + d, folded near Nyquist | — | `antialias.c`, −81 dB from 47.5 kHz (by design) |
+| Opposite sideband in the demodulator | the other side of zero beat | backwards, in the audio | stage 1's complex filter: a few dB at 0 Hz, about 10 dB at −200 Hz, 40–75 dB beyond −400 Hz |
+| Codec timing modulation | ±k·750 Hz around every signal | with the signal | `codec_check.c` (§2.1) |
+
+## 2. Artifacts met so far
+
+| # | Artifact | Cause | Impact | Status |
+|---|---|---|---|---|
+| 1 | Ghosts every 750 Hz (strongest ±3750 Hz) on every signal, about 1 start in 25 | the WM8731's sample timing modulated in a 128-sample cycle (12 MHz clock, USB mode, 125 clocks a sample) | spectrum full of ghosts and backward birdies; −4 to −11 dB copies of strong signals | **fixed in software**: start-up check restarts the codec's interface |
+| 2 | Own transmission on the spectrum at −1400 / +1400 Hz | TX energy reaching the RX input while clk1 sits at `bfo_freq` | a false signal on clients' spectra during TX | **fixed**: line-input mute during TX |
+| 3 | Mix self-image near Nyquist | real samples × complex LO at fs/4 | would alias into the band's edges | **fixed by design**: `antialias.c` |
+| 4 | Opposite-sideband leakage near zero beat | stage 1's finite transition band | a signal just the other side of zero beat is heard, weakly | inherent; acceptable |
+| 5 | 93.75 Hz comb on both channels | current pulses at the audio block rate (every 1024 samples) coupling into the analog inputs | RX: none (codec 0–1 kHz is 23–24 kHz below the dial, outside the crystal filter). TX: the mic carries it; 375 Hz and up pass the 300–3000 Hz SSB filter | **open**: check SSB on air |
+| 6 | Noise floor rippling with an 8 kHz period | an echo 12 samples long in the codec's samples, or a filter ripple; unidentified | ±several dB of floor shape; reads into auto floor and noise readings | **open**: measure with the noise generator |
+| 7 | Broad raises at 24.0 and 30.75 MHz, slight at 12.5 and 25.0 MHz, in all five LPF states | internal; 24.0 = 2 × the codec's 12 MHz, 12.5 / 25.0 the si5351's 25 MHz TCXO; 30.75 unidentified | small (1–4 dB), none inside a ham band | **open**: spur survey |
+| 8 | LPF_B possibly rolling off at 17 m (−1.3 dB at 18.25 MHz, −3.8 dB at 18.5 MHz vs LPF_A) | the filter's cutoff close to its top band | some RX sensitivity and TX power on 17 m (the per-band TX scale covers the power) | **to confirm** with the noise generator |
+| 9 | (zBitx, TX) spur 24 kHz from the transmit frequency in CW | the BFO running through key-up gaps | an out-of-band signal | traced on the zBitx; maxibitx flagged for a bench check (`ARCHITECTURE.md`) |
+| 10 | Clicks and gaps at start-up | the playback queue draining before the audio thread ran (xrun flood) | glitches in audio and I/Q | **fixed**: playback primed before the thread starts |
+
+### 2.1 The codec's timing pattern (1)
+
+The worst so far, and the most instructive. The spectrum looked like
+mirroring, but the captures showed no mirror in the samples: no
+even/odd mismatch, no repeated samples, every bit in place. What they
+did show was every strong signal copied at multiples of exactly
+3750.00 Hz (envelope correlation 1.00 with its parent), and the mic
+channel's noise gated in a 128-sample rhythm — phase modulation of the
+sampling, locked to the codec's own clock. In USB mode the WM8731 makes
+96 kHz from 12 MHz with 125 clocks a sample where its timing is built
+for 128; normally that pattern is invisible, but about one start in 25
+it comes up strong. The registers are identical in good and bad starts;
+restarting the digital interface (register 9, ACTIVE) clears it.
+
+What fixed it: `codec_check.c` measures the pattern on the quiet mic
+line a second after start-up (0.91–0.94 bad, 0.002 clean) and restarts
+the interface if needed. What would remove the mechanism: a 12.288 MHz
+codec clock, so the codec runs in normal mode at 128 clocks a sample —
+a hardware change, and not yet shown to help.
+
+### 2.2 The block-rate comb (5)
+
+Present in every capture, good or bad: lines at multiples of
+96000 / 1024 = 93.75 Hz, −44 dBFS on the mic channel and −55 dBFS on
+the RX channel, 0.89 correlated between them below 4 kHz. The audio
+thread wakes every 1024 samples and the Pi draws a burst of current;
+that reaches the codec's analog inputs through the supply or the
+ground. On receive it lands far outside the crystal filter. On SSB
+transmit the mic's lines from 375 Hz up are inside the 300–3000 Hz
+filter (375 Hz was −56 dBFS in the capture; how far that is under
+speech depends on the mic's level) — possibly a faint buzz on the air.
+A remote receiver with the mic idle and PTT down would show it. Remedies are all hardware: supply decoupling
+and filtering for the codec's analog side, and the mic's ground return
+(§3).
+
+### 2.3 The 8 kHz floor ripple (6)
+
+The floor dips about every 8 kHz (at codec frequencies 2, 10, 18, 26,
+34 and 42 kHz), in every capture. An echo of 12 samples would do that;
+so could a filter's ripple. A flat source shows the shape cleanly: with
+the noise generator on the antenna, one capture dump and
+`capture_check.py`, or one `xtal_sweep.py` run (its C(d) term is
+exactly this shape), tell whether it is fixed in the codec's frequency
+— and could simply be equalised in software — or moves with the
+crystal filter.
+
+### 2.4 The LPF sweep's broad raises (7)
+
+`lpf_sweep.py` measures the median of the bins 1–10 kHz either side of
+the dial, which ignores a narrow line — so a raise in all five states
+is something broad: a noisy clock, or digital hash centred there. That
+it shows with every relay open says it gets in after the filters, on
+the board. Narrow birdies the sweep can't see at all; finding them is
+what the survey (§4) is for.
+
+## 3. What removes which
+
+The question was whether spurs are addressed by board layout, better
+shielding and supply filters. For the **internally generated** ones,
+yes — they are coupling problems, and the remedies are hardware:
+
+- **Shielding** the RF front end (LPFs, first mixer, crystal filter)
+  from the Pi and its clocks, and the Pi from the antenna lead. Radiated
+  clock harmonics enter wherever the receiver is most sensitive.
+- **Supply filtering and decoupling**: a separate, filtered (LC or
+  ferrite and LDO) supply for the codec's analog side and the mixers;
+  switching regulators with clean layouts, or spread-spectrum ones so
+  their harmonics smear below the noise.
+- **Layout and grounding**: analog and digital return currents kept
+  apart, clock traces short and terminated, the codec's and si5351's
+  references quiet.
+- **Slower clock edges**: the si5351 runs at 8 mA drive
+  (`si5351v2.c`); a lower drive strength cuts its high harmonics (the
+  code already notes it was looked at during an earlier spur
+  investigation).
+- **Frequency planning**: choosing clock frequencies whose harmonics
+  miss the bands. Only partly open to us: the codec's 12 MHz and the
+  TCXO's 25 MHz are fixed, but a mixing birdie can be moved by
+  changing `xtal_filter_center` or the IF.
+
+Software can't remove an internal spur — it is a real signal at the
+ADC. It can only avoid it (frequency planning above) or hide it (a
+notch or a blanked bin on the display, which also hides anything real
+there).
+
+**Spurious responses** are a different matter: they are set by the
+design, not the layout — filtering before the mixer (the LPFs, the
+crystal filter), the linearity and gain distribution of the mixers and
+the ADC (IMD, overload), the oscillators' purity (reciprocal mixing,
+mixing birdies) and the frequency plan (where images fall). An
+attenuator before the first mixer is the operator's own remedy for IMD.
+The codec's timing pattern was neither: a device state, fixed in
+software.
+
+## 4. The spur survey tool
+
+### 4.1 Purpose
+
+`tools/spur_survey.py`: with a 50 Ω dummy load on the antenna jack,
+find every narrow internal spur in the bands, measure it, and say from
+its movement which class it is (§1.2) — so each one can be traced to a
+source and its remedy judged. It needs nothing new in maxibitx: `F` and
+the I/Q stream, and optionally `L LPF` for a comparison run.
+
+### 4.2 Measurement
+
+- **Steps.** The dial moves in steps of 5 kHz; each step records the
+  I/Q spectrum, of which offsets within ±10 kHz of the dial are used
+  (the crystal filter's flat top). So every RF frequency is seen at four
+  different offsets, from four dial settings.
+- **Resolution.** 8192-point FFTs (11.7 Hz bins), Hann-windowed, half
+  overlapped, averaged over the dwell: 0.4 s gives about 8 blocks, worth
+  about 6 independent ones with the overlap. Averaged that far, noise
+  reaches 7 dB above the floor in about one bin in 50 million — about
+  0.03 false peaks in a whole survey of 1.4 million bins (at 6 dB it
+  would be about 5) — while a steady carrier 7 dB up is found every
+  time. A birdie is a
+  steady carrier; averaging longer finds weaker ones, at a proportional
+  cost in time.
+- **Detection.** A bin is a candidate when it stands at least 7 dB above
+  the median of the bins within ±1 kHz, and is a local maximum no more
+  than three bins wide. Each candidate is kept as (dial, offset, level
+  above the floor, width), with its frequency refined by interpolation
+  between bins (to about 2 Hz).
+- **Coverage and time.** Default: the nine ham bands and 60 m, each
+  widened by 25 kHz either side — about 4.1 MHz, 825 steps, about 8
+  minutes. `--general` covers 1–30 MHz in 10 kHz steps (each frequency
+  seen twice), about 30 minutes.
+
+### 4.3 Classification
+
+Each candidate is linked to candidates in the neighbouring steps. Its
+offset, as a function of the dial, is fitted with a straight line:
+`offset = a + s × dial`. The slope s is the class:
+
+| Slope s | Class | Meaning |
+|---|---|---|
+| −1 | fixed RF | a signal at one RF frequency, seen at four offsets; reported at that frequency |
+| 0 | fixed offset | the same offset at every dial: made after the first mixer; reported as an offset, with the dial range it covers |
+| +1 | backward | an image or mirror: moves with the dial |
+| other | mixing product | moves at another rate; the slope (−3, +2, …) says which multiple of the LO is involved |
+| (one sighting) | unclassified | seen once — appears and disappears; a narrow mixing product, or intermittent |
+
+Linking tolerance is two bins plus the slope's expected move. A fit
+needs three sightings for "fixed RF" and "backward"; "fixed offset"
+needs the same offset across at least ten steps.
+
+### 4.4 Suspects
+
+For every fixed-RF spur the report lists known clocks with a harmonic
+within the spur's frequency tolerance:
+
+- the codec's 12 MHz (±50 ppm: ±600 Hz at 12 MHz, ±1.2 kHz at 24 MHz),
+- the si5351's 25 MHz TCXO (a few ppm),
+- the Pi's crystal (54 MHz on the Pi 4, 19.2 MHz on the Zero 2W) and
+  its sub-multiples,
+- clk1 (`xtal_filter_center` + 24 kHz) and its sub-multiples,
+- the codec's bit clock and frame clock multiples (12 MHz and 96 kHz).
+
+For mixing products, the report gives the combinations n·clk2 ± m·clk1
+± k·(other clock) that land in the passband at the dials where it was
+seen. These are suspects, not proof; the comparison runs (§4.6) are
+what prove a source.
+
+### 4.5 Output
+
+- A printed table per class: frequency (or offset), level above the
+  floor in dB and in dBFS, how many sightings, the bands it falls in,
+  and its suspects.
+- `PREFIX_peaks.csv` (every candidate), `PREFIX_spurs.csv` (the
+  classified list) and `PREFIX.png`: per band, the spectrum with the
+  dummy load in RF coordinates (max-hold over the steps), spurs marked
+  by class.
+- `--compare OTHER_spurs.csv`: which spurs appear, vanish or change
+  level between two runs.
+
+### 4.6 Runs that locate a source
+
+One run finds the spurs; comparison runs say where each comes from:
+
+1. **Dummy load** — the baseline.
+2. **Every LPF relay open** (`L LPF 5` for the run): spurs that vanish
+   come in through the antenna path (or are picked up by the dummy
+   load's own lead); spurs that stay are made or coupled on the board.
+3. **The Pi quieter**: HDMI off, Wi-Fi and Bluetooth off, USB devices
+   unplugged, the panel not running. Spurs that vanish belong to those.
+4. **A different `xtal_filter_center`** (by 2 kHz): fixed-RF spurs stay;
+   mixing products move by a predictable amount.
+5. **Another supply**: a linear bench supply in place of the usual one.
+   Spurs from the supply's switching move or vanish.
+
+### 4.7 Limits
+
+- A dummy load finds internally generated spurs only. Images, IMD,
+  aliasing and comb copies need a real signal (§5).
+- The dummy load's coax and the radio's case are not perfect shields: a
+  spur radiated by the Pi into the lead is real (an antenna would pick
+  it up too), but its level depends on how the lead is dressed. Keep
+  it short and the same between runs.
+- Sensitivity is set by the dwell: 7 dB above the floor in an 11.7 Hz
+  bin at 0.4 s. A weaker birdie is below the band noise any
+  antenna brings, except on the quietest high bands.
+- Levels are in dBFS and dB above the floor, not microvolts; the
+  receiver's gain isn't calibrated to the antenna port (see
+  `rx_gain_and_level_calibration.md`).
+
+### 4.8 Testing
+
+As for `lpf_sweep.py`: a simulated maxibitx (rigctld and the I/Q
+stream) with spurs of each class injected — fixed RF, fixed offset,
+backward, slope −3, and one that appears at a single dial — over a
+noise floor, checking that each is found once, in its class, at the
+right frequency and level, and that nothing is reported from noise
+alone.
+
+## 5. Other sources
+
+**The noise generator** is for shapes, not spurs: it raises the floor
+and hides weak birdies, and an image of noise is only more noise. It is
+the right source for the LPFs (`lpf_sweep.py`), the crystal filter
+(`xtal_sweep.py`), the 8 kHz ripple (§2.3) and the depth of LPF_B's
+17 m roll-off (8).
+
+**A clean carrier** finds spurious responses: sweep it slowly across a
+band with the dial still, and anything that answers anywhere but where
+the carrier is — the second-mixer image 48 kHz below, an alias at the
+edges, a harmonic response — is a spurious response, measured against
+the carrier itself. A cheap signal generator does; so does the zBitx at
+its lowest power through 60 dB or more of attenuation. WWV and strong
+broadcast carriers are free single-frequency checks. A later tool
+(`response_survey.py`) could automate it; it is out of scope here.
+
+**Two carriers** at once, through a combiner, give IMD: the classic
+two-tone test, raising both until third-order products appear.
+
+## 6. Decisions wanted
+
+1. Build `spur_survey.py` as §4 describes?
+2. Default coverage: the ham bands only (about 8 minutes), or 1–30 MHz
+   (about 30 minutes)?
+3. Detection threshold and dwell: 7 dB and 0.4 s, or a longer dwell
+   (and a lower threshold) for weaker birdies?
+4. Should a dummy-load survey become part of bring-up for a new board
+   (`08_troubleshooting_and_bringup.md`)?
+5. The open items from §2: check the block-rate comb on SSB transmit
+   (5), measure the ripple (6) and LPF_B (8) with the noise generator.
