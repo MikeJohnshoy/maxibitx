@@ -227,6 +227,14 @@ int radio_set_xtal_filter_center(int hz);
 // reports.
 int radio_get_xtal_filter_center(void);
 
+// Sets the si5351's output drive (2, 4, 6 or 8 mA) until the next restart,
+// for comparing spurs and receive levels at each (tools/spur_survey.py
+// --drive). Rewrites both receive clocks so it takes effect at once.
+// Transmit uses it too, and the per-band TX power scales were calibrated
+// at 8 mA. Reached via rigctld's L SIDRIVE (docs/06_api.md). Returns 0, or
+// -1 with nothing changed while transmitting or for any other value.
+int radio_set_si5351_drive(int ma);
+
 // Parses and applies one command string from a control surface (currently
 // just "freq NNN" from hpsdr_p1.c).
 void remote_execute(char *command);
