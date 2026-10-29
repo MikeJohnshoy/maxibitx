@@ -187,6 +187,36 @@ reports, so the 7-inch display doesn't enlarge them. On Raspberry Pi OS:
 sudo apt install python3-tk python3-numpy fonts-ibm-plex
 ```
 
+## `spur_survey.py`
+
+Finds the receiver's own spurs with a 50 Ω dummy load on the antenna
+jack. It steps the dial through the ham bands (80 m to 10 m, each
+widened by 25 kHz) in 5 kHz steps and searches the I/Q spectrum within
+±10 kHz of the dial (11.7 Hz bins, 0.4 s each) for narrow peaks at
+least 7 dB over the local floor, so every RF frequency is seen from four
+dial settings. How a spur's offset moves with the dial classes it:
+fixed RF (moves like a station: coupled into the input), fixed offset
+(stays put: made after the first mixer), backward (an image; the
+second mixer's, of a spur 48 kHz below the dial, is named), or mixing
+(another slope: a product of the oscillators). Fixed-RF spurs are
+matched against harmonics of the board's clocks. Prints the list and
+writes CSVs, the steps' spectra (for `--reanalyse` with another
+threshold) and a plot.
+
+```
+python3 tools/spur_survey.py --host sbitx.local
+python3 tools/spur_survey.py --host sbitx.local --drive 4 --out drive4
+python3 tools/spur_survey.py --compare spur_survey_20261029_140000_spurs.csv drive4_spurs.csv
+```
+
+About 8 minutes; `--bands 40,20` for some, `--general` for 1–30 MHz
+(about 30 minutes). `--lpf-off` opens every LPF relay for the run and
+`--drive MA` sets the si5351's drive (both restored after);
+`--compare` shows which spurs appear, vanish or change between two
+runs, and the change in each band's floor. See
+[`../docs/08_troubleshooting_and_bringup.md`](../docs/08_troubleshooting_and_bringup.md),
+"The receiver's own spurs". Needs `xtal_sweep.py` beside it, and numpy.
+
 ## `tci_client.py`
 
 A small command-line TCI client, standard library only, for checking
