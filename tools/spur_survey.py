@@ -28,17 +28,29 @@ class:
     s = +1  backward     moves with the dial: an image. A spur at RF F
                          48 kHz below the dial images through the second
                          mixer at offset dial - 48 kHz - F
-    other   mixing       a product of the oscillators; |s| is the harmonic
-                         of the first LO (clk2) involved
+    other   mixing       a product of the oscillators, reported where it
+                         crosses the dial. Up to |s| = 4 it is a low
+                         harmonic of the first LO (clk2); steeper ones
+                         are matched against products of the si5351's two
+                         PLLs (A, clk2's, at clk2 x its divider, moving
+                         10-16 times as fast as the dial; B, clk1's, fixed)
+                         and its 25 MHz reference
     -       single       seen once or twice only - appears and disappears
 
 Lines are found from pairs of candidates up to three steps apart, with
-slopes in quarter steps; a line needs three sightings (two for |s| >= 2,
-which cross the window in two steps, and two in --general's wider
-steps). For fixed-RF spurs the report lists clock harmonics within their
-tolerance (the codec's 12 MHz and 96 kHz frame, the si5351's 25 MHz
-TCXO, the Pi's crystals, clk1 and its sub-multiples): suspects, not
-proof.
+slopes in quarter steps up to 4 and whole numbers beyond, up to the
+steepest that can be seen twice at the step (20 kHz / step: 4 at 5 kHz
+steps, 200 at 100 Hz). Steep lines are grouped by where they cross the
+dial, which an error in the slope barely moves, and fitted by least
+squares; a sighting may sit 35 Hz plus 5 Hz per unit of slope from its
+line, since a PLL product carries the si5351's fractional-setting error
+multiplied. A line needs three sightings (two where the step or the
+slope lets it cross the window in fewer). For fixed-RF spurs the report
+lists clock harmonics within their tolerance (the codec's 12 MHz and
+96 kHz frame, the si5351's 25 MHz TCXO, the Pi's crystals, clk1 and its
+sub-multiples); for steep ones the PLL products whose crossing and
+slope fit. Suspects, not proof. A line steeper than about 4 crosses the
+window between two 5 kHz steps: --range with small steps finds it.
 
 Runs that locate a source (docs/dsp_design_notes/
 rx_artifacts_and_spur_survey_study.md §4.6) - compare each with the
@@ -55,9 +67,14 @@ baseline using --compare:
     --bands LIST    comma-separated: 160,80,60,40,30,20,17,15,12,10
                     (default 80 m to 10 m, 60 m included: about 8 minutes)
     --general       1-30 MHz in 10 kHz steps instead (about 30 minutes)
+    --range LO HI   dials from LO to HI Hz instead (step 1000 Hz unless
+                    --step), e.g. --range 5360000 5368000 --step 100
     --step HZ / --dwell S / --settle S / --threshold DB
                     5000, 0.4, 0.15, 7
     --out PREFIX    output name (default spur_survey_<time>)
+
+A step that gets no I/Q, or under half the expected, is measured again
+once; the steps that still got nothing are listed at the end.
 
 Outputs: PREFIX_spurs.csv (the classified list), PREFIX_peaks.csv
 (every candidate), PREFIX_bands.csv (each band's noise floor and spur
@@ -96,7 +113,7 @@ FLOOR_HZ = 1000                         # the floor: median within this
 LOCAL_MAX_BINS = 4                      # a peak is the highest within this
 NARROW_BINS = 4                         # bins within 6 dB of the peak: narrow
 LINE_TOL_HZ = 35                        # a sighting's distance from its line
-MAX_SLOPE = 6
+SI_QUANT_HZ = 5.0                       # si5351 output error per unit of slope
 GUARD_HZ = 25000
 
 BANDS = {"160": (1800000, 2000000), "80": (3500000, 4000000), "60": (5330500, 5406500),
@@ -187,6 +204,33 @@ def find_peaks(level_db, threshold_db):
 
 # ---- classifying ------------------------------------------------------------
 
+def line_tol(s):
+    """How far a sighting may sit from its line. A product of the si5351's
+    PLLs carries their fractional-setting error (up to 25 MHz / 2^19 =
+    48 Hz at the PLL, about SI_QUANT_HZ at the output) multiplied by the
+    slope, so steep lines get a wider tolerance."""
+    return LINE_TOL_HZ + SI_QUANT_HZ * abs(s)
+
+
+def max_slope(step_hz):
+    """The steepest line that can be seen twice: one crossing the +-10 kHz
+    window in two steps."""
+    return max(4.0, 2 * WINDOW_HZ / step_hz)
+
+
+def quantise_slope(s):
+    """Quarter steps up to 4 (clk2's low harmonics), whole numbers beyond
+    (the PLLs' products: a multiple of the PLL divider, less one)."""
+    return round(s * 4) / 4 if abs(s) <= 4.5 else float(round(s))
+
+
+def anchor(s, dial, off):
+    """A line's position that a small error in its slope barely moves:
+    the offset itself for s = 0, otherwise the dial where the line
+    crosses offset 0 (the RF for s = -1)."""
+    return off if s == 0 else dial - off / s
+
+
 def min_sightings(s, step_hz):
     """Sightings a line needs: three, unless the step or the slope lets a
     spur cross the window in fewer."""
@@ -194,15 +238,37 @@ def min_sightings(s, step_hz):
     return 3 if crossings >= 3 else 2
 
 
+def fit_line(dial, off, idx, s_fixed=None):
+    """Fits offset = k + s * dial through idx, dropping the worst sighting
+    while any is outside line_tol(s). s_fixed holds the slope (the classes
+    at -1, 0 and +1). Returns (members, s, k)."""
+    idx = list(idx)
+    while idx:
+        d, o = dial[idx], off[idx]
+        if s_fixed is not None or len(idx) < 3:
+            s = s_fixed if s_fixed is not None else (o[-1] - o[0]) / (d[-1] - d[0])
+            k = float(np.median(o - s * d))
+        else:
+            s, k = np.polyfit(d - d.mean(), o, 1)
+            k = k - s * d.mean()
+        resid = np.abs(o - (k + s * d))
+        worst = int(np.argmax(resid))
+        if resid[worst] <= line_tol(s):
+            return idx, float(s), float(k)
+        idx.pop(worst)
+    return [], 0.0, 0.0
+
+
 def classify(cands, step_hz):
     """cands: list of dicts with dial, offset_hz, above_db, dbfs, width_hz.
     Returns (spurs, singles). A spur is a line offset = k + s * dial
     through its sightings, at least min_sightings() of them from distinct
-    dials, each within LINE_TOL_HZ of the line."""
+    dials, each within line_tol(s) of it."""
     n = len(cands)
     dial = np.array([c["dial"] for c in cands], dtype=float)
     off = np.array([c["offset_hz"] for c in cands])
     order = np.argsort(dial, kind="stable")
+    smax = max_slope(step_hz)
     votes = {}
     for ii, i in enumerate(order):
         for j in order[ii + 1:]:
@@ -212,41 +278,96 @@ def classify(cands, step_hz):
             if dd > 3 * step_hz + 1:
                 break
             s = (off[j] - off[i]) / dd
-            sq = round(s * 4) / 4
-            if abs(sq) > MAX_SLOPE or abs(s - sq) * dd > LINE_TOL_HZ:
+            sq = quantise_slope(s)
+            if abs(sq) > smax:
                 continue
-            k = off[i] - sq * dial[i]
-            key = (sq, int(round(k / LINE_TOL_HZ)))
+            if abs(sq) <= 4.5 and abs(s - sq) * dd > line_tol(sq):
+                continue
+            width = LINE_TOL_HZ if abs(sq) <= 1.5 else 100.0
+            key = (sq, int(round(anchor(sq, dial[i], off[i]) / width)))
             votes.setdefault(key, set()).update((i, j))
     claimed = np.zeros(n, bool)
     spurs = []
-    for (sq, kq), _members in sorted(votes.items(), key=lambda kv: -len(kv[1])):
+    for (sq, aq), _members in sorted(votes.items(), key=lambda kv: -len(kv[1])):
+        slopes = [sq] if abs(sq) <= 4.5 else [sq - 1, sq, sq + 1]
         pool = set()
-        for dk in (-1, 0, 1):
-            pool |= votes.get((sq, kq + dk), set())
+        for s2 in slopes:
+            for da in (-1, 0, 1):
+                pool |= votes.get((s2, aq + da), set())
         pool = [i for i in pool if not claimed[i]]
         if not pool:
             continue
-        k = float(np.median([off[i] - sq * dial[i] for i in pool]))
-        members = [i for i in pool if abs(off[i] - sq * dial[i] - k) <= LINE_TOL_HZ]
         # one sighting per dial: the strongest
         best = {}
-        for i in members:
+        for i in pool:
             if dial[i] not in best or cands[i]["above_db"] > cands[best[dial[i]]]["above_db"]:
                 best[dial[i]] = i
-        members = list(best.values())
-        if len(members) < min_sightings(sq, step_hz):
+        pool = sorted(best.values(), key=lambda i: dial[i])
+        fixed = sq if sq in CLASSES else None
+        members, s_fit, k = fit_line(dial, off, pool, fixed)
+        s_cls = fixed if fixed is not None else quantise_slope(s_fit)
+        if len(members) < min_sightings(s_cls, step_hz):
             continue
         claimed[members] = True
-        k = float(np.median([off[i] - sq * dial[i] for i in members]))
         top = max(members, key=lambda i: cands[i]["above_db"])
-        spurs.append({"cls": CLASSES.get(sq, "mixing"), "slope": sq, "k_hz": k,
+        spurs.append({"cls": CLASSES.get(s_cls, "mixing"), "slope": s_cls, "slope_fit": s_fit,
+                      "k_hz": k, "cross_hz": k if s_cls == 0 else -k / s_fit,
                       "sightings": len(members), "above_db": cands[top]["above_db"],
                       "dbfs": cands[top]["dbfs"], "width_hz": cands[top]["width_hz"],
                       "dial_lo": float(min(dial[members])), "dial_hi": float(max(dial[members])),
                       "rf_seen": [float(dial[i] + off[i]) for i in members]})
     singles = [cands[i] for i in range(n) if not claimed[i]]
     return spurs, singles
+
+
+# ---- the si5351's PLLs ---------------------------------------------------------
+
+SI_XTAL = 25000000
+SI_DENOM = 0x80000
+
+
+def si_pll(freq):
+    """The PLL frequency and output divider si5351v2.c uses for an output
+    at freq: the smallest even divider above 650 MHz / freq, the PLL a
+    25 MHz multiple plus a fraction in 1/2^19 steps."""
+    div = 650000000 // int(freq) + 1
+    if div & 1:
+        div += 1
+    pll = int(freq) * div
+    num = ((pll % SI_XTAL) * SI_DENOM) // SI_XTAL
+    return SI_XTAL * (pll // SI_XTAL + num / SI_DENOM), div
+
+
+def pll_products(dial0, s_fit, clk1_hz):
+    """Products of PLL A (clk2's), PLL B (clk1's) and the 25 MHz reference
+    that cross the dial within 3 kHz of dial0 at the fitted slope:
+    sgn * (m * A - n * B + k * 25 MHz), whose offset moves at
+    sgn * m * (A's divider) - 1 times the dial."""
+    xc = clk1_hz - 24000
+    a0, div_a = si_pll(dial0 + xc)
+    b, _ = si_pll(clk1_hz)
+    out = []
+    for m in (1, 2, 3):
+        for nb in (0, 1, 2, 3):
+            for k in range(-12, 13):
+                for sgn in (1, -1):
+                    s_pred = sgn * m * div_a - 1
+                    if abs(s_pred - s_fit) > max(1.5, 0.05 * abs(s_fit)):
+                        continue
+                    p0 = sgn * (m * a0 - nb * b + k * SI_XTAL)
+                    cross = dial0 - (p0 - dial0) / s_pred
+                    if abs(cross - dial0) > 3000:
+                        continue
+                    term = (f"{m}x" if m > 1 else "") + "PLL A"
+                    if nb:
+                        term += f" - {nb}x" if nb > 1 else " - "
+                        term += "PLL B"
+                    if k:
+                        term += f" {'+' if k > 0 else '-'} {abs(k)}x25 MHz"
+                    if sgn < 0:
+                        term = f"-({term})"
+                    out.append((abs(cross - dial0), f"{term} (crosses at {cross / 1e6:.6f} MHz)"))
+    return [t for _, t in sorted(out)[:2]]
 
 
 def suspects(spur, spurs, clk1_hz):
@@ -271,6 +392,9 @@ def suspects(spur, spurs, clk1_hz):
         found = [x for x in spurs if x["slope"] == -1 and abs(x["k_hz"] - f) <= 2 * LINE_TOL_HZ]
         return (f"second-mixer image of {f / 1e6:.6f} MHz" +
                 (" (found there: a fixed-RF spur)" if found else ""))
+    if abs(s) >= 5:
+        found = pll_products(spur["cross_hz"], spur["slope_fit"], clk1_hz)
+        return "; ".join(found) if found else "steep: no PLL A/B product found there"
     return f"{abs(s):g}x the first LO (clk2) in a mixing product"
 
 
@@ -281,7 +405,9 @@ def spur_where(sp):
         return f"{sp['k_hz'] / 1e6:12.6f} MHz"
     if sp["slope"] == 0:
         return f"{sp['k_hz']:+9.0f} Hz from dial"
-    return f"seen {np.mean(sp['rf_seen']) / 1e6:9.4f} MHz"
+    if sp["slope"] == 1:
+        return f"seen {np.mean(sp['rf_seen']) / 1e6:9.4f} MHz"
+    return f"crosses {sp['cross_hz'] / 1e6:10.6f} MHz"
 
 
 def report(cands, dials, floors, step_hz, meta, prefix, spectra=None):
@@ -294,19 +420,21 @@ def report(cands, dials, floors, step_hz, meta, prefix, spectra=None):
         sp["bands"] = ",".join(sorted({band_of(r) for r in where} - {""},
                                       key=lambda b: BANDS[b.split()[0]][0]))
     spurs.sort(key=lambda x: (x["slope"] != -1, x["slope"] != 0, x["slope"] != 1,
-                              x.get("k_hz") if x["slope"] in (-1, 0) else np.mean(x["rf_seen"])))
+                              x["k_hz"] if x["slope"] in (-1, 0) else x["cross_hz"]))
     written = []
 
     path = prefix + "_spurs.csv"
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["class", "slope", "k_hz", "rf_seen_mean_hz", "sightings", "above_floor_db",
-                    "dbfs", "width_hz", "dial_lo_hz", "dial_hi_hz", "bands", "suspects"])
+                    "dbfs", "width_hz", "dial_lo_hz", "dial_hi_hz", "bands", "suspects",
+                    "slope_fit", "crosses_dial_hz"])
         for sp in spurs:
             w.writerow([sp["cls"], sp["slope"], round(sp["k_hz"], 1),
                         round(float(np.mean(sp["rf_seen"])), 1), sp["sightings"],
                         round(sp["above_db"], 1), round(sp["dbfs"], 1), round(sp["width_hz"], 1),
-                        int(sp["dial_lo"]), int(sp["dial_hi"]), sp["bands"], sp["suspects"]])
+                        int(sp["dial_lo"]), int(sp["dial_hi"]), sp["bands"], sp["suspects"],
+                        round(sp["slope_fit"], 3), round(sp["cross_hz"], 1)])
     written.append(path)
     path = prefix + "_peaks.csv"
     with open(path, "w", newline="") as f:
@@ -341,7 +469,7 @@ def report(cands, dials, floors, step_hz, meta, prefix, spectra=None):
             continue
         print(f"\n{cls}:")
         for sp in group:
-            slope = f" s={sp['slope']:+g}" if cls == "mixing" else ""
+            slope = f" s={sp['slope_fit']:+.2f}" if cls == "mixing" else ""
             print(f"  {spur_where(sp)}{slope}  {sp['above_db']:5.1f} dB over floor "
                   f"({sp['dbfs']:6.1f} dBFS)  x{sp['sightings']}  {sp['bands'] or '-':12} "
                   f"{sp['suspects']}")
@@ -354,13 +482,13 @@ def report(cands, dials, floors, step_hz, meta, prefix, spectra=None):
     print("\nnoise floor by band (dBFS/Hz): " +
           ", ".join(f"{b} {fl:.1f}" for b, fl, _ in band_rows))
     if spectra is not None:
-        png = plot(prefix + ".png", dials, spectra, spurs, singles)
+        png = plot(prefix + ".png", dials, spectra, spurs, singles, meta.get("range"))
         if png:
             written.append(png)
     return written
 
 
-def plot(path, dials, spectra, spurs, singles):
+def plot(path, dials, spectra, spurs, singles, dial_range=None):
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -373,15 +501,19 @@ def plot(path, dials, spectra, spurs, singles):
     fixed = [sp["k_hz"] for sp in spurs if sp["cls"] == "fixed offset"]
     for k in fixed:
         search &= np.abs(offs - k) > 3 * BIN_HZ
-    shown = [(n, lo, hi) for n, (lo, hi) in BANDS.items()
-             if any(lo - GUARD_HZ <= d <= hi + GUARD_HZ for d in dials)]
+    # panels: (title, first dial, last dial, band shading or None)
+    if dial_range:
+        lo, hi = dial_range
+        shown = [(f"{lo / 1e6:.4f}-{hi / 1e6:.4f} MHz", lo, hi, None)]
+    else:
+        shown = [(f"{n} m", lo - GUARD_HZ, hi + GUARD_HZ, (lo, hi)) for n, (lo, hi) in BANDS.items()
+                 if any(lo - GUARD_HZ <= d <= hi + GUARD_HZ for d in dials)]
     if not shown:
         return None
     fig, axes = plt.subplots(len(shown), 1, figsize=(11, 2.2 * len(shown)), squeeze=False)
     colors = {"fixed RF": "#d62728", "fixed offset": "#1f77b4", "backward": "#9467bd",
               "mixing": "#ff7f0e"}
-    for ax, (name, lo, hi) in zip(axes[:, 0], shown):
-        a, b = lo - GUARD_HZ, hi + GUARD_HZ
+    for ax, (name, a, b, band) in zip(axes[:, 0], shown):
         grid = np.arange(a - WINDOW_HZ, b + WINDOW_HZ, 50.0)
         hold = np.full(len(grid), np.nan)
         for d, spec in zip(dials, spectra):
@@ -402,8 +534,9 @@ def plot(path, dials, spectra, spurs, singles):
             r = c["dial"] + c["offset_hz"]
             if a - WINDOW_HZ <= r <= b + WINDOW_HZ:
                 ax.plot(r / 1e6, c["above_db"], "x", ms=4, color="#999")
-        ax.axvspan(lo / 1e6, hi / 1e6, color="#2ca02c", alpha=0.06)
-        ax.set_title(f"{name} m", fontsize=9, loc="left")
+        if band:
+            ax.axvspan(band[0] / 1e6, band[1] / 1e6, color="#2ca02c", alpha=0.06)
+        ax.set_title(name, fontsize=9, loc="left")
         ax.set_ylabel("dB over floor", fontsize=8)
         ax.grid(alpha=0.3)
     handles = [plt.Line2D([], [], marker="v", ls="", color=c, label=k) for k, c in colors.items()
@@ -435,7 +568,11 @@ def compare(path_a, path_b):
 
     def key(r):
         s = float(r["slope"])
-        return s, float(r["k_hz"]) if s in (-1.0, 0.0) else float(r["rf_seen_mean_hz"])
+        if s in (-1.0, 0.0):
+            return s, float(r["k_hz"])
+        if s != 1.0 and r.get("crosses_dial_hz"):
+            return s, float(r["crosses_dial_hz"])
+        return s, float(r["rf_seen_mean_hz"])
 
     used = set()
     print(f"{'':12} {'where':>24}  {'A dB':>6} {'B dB':>6}  change")
@@ -473,6 +610,12 @@ def compare(path_a, path_b):
 # ---- the survey --------------------------------------------------------------
 
 def plan_dials(args):
+    if args.range:
+        lo, hi = args.range
+        step = args.step or 1000
+        if not 0 < lo < hi or (hi - lo) // step > 20000:
+            sys.exit("--range needs 0 < LO < HI, and no more than 20000 steps")
+        return list(range(lo, hi + 1, step)), step
     if args.general:
         step = args.step or 10000
         return list(range(1000000, 30000001, step)), step
@@ -494,6 +637,8 @@ def main():
     ap.add_argument("--iq-port", type=int, default=IQ_STREAM_PORT)
     ap.add_argument("--bands", default=DEFAULT_BANDS)
     ap.add_argument("--general", action="store_true", help="1-30 MHz in 10 kHz steps")
+    ap.add_argument("--range", nargs=2, type=int, metavar=("LO_HZ", "HI_HZ"),
+                    help="dials from LO to HI (default step 1000 Hz)")
     ap.add_argument("--step", type=int)
     ap.add_argument("--dwell", type=float, default=0.4)
     ap.add_argument("--settle", type=float, default=0.15)
@@ -513,6 +658,8 @@ def main():
         z = np.load(args.reanalyse, allow_pickle=False)
         dials, spectra = z["dials"], z["spectra"]
         meta = {"clk1_hz": float(z["clk1_hz"]), "conditions": str(z["conditions"])}
+        if "range_lo" in z.files and int(z["range_lo"]):
+            meta["range"] = (int(z["range_lo"]), int(z["range_hi"]))
         step = int(z["step"])
         cands, floors = [], []
         for d, spec in zip(dials, spectra):
@@ -556,18 +703,28 @@ def main():
     per = args.dwell + args.settle + 0.03
     print(f"{len(dials)} steps of {step} Hz, {', '.join(conditions)}, "
           f"about {len(dials) * per / 60:.0f} minutes")
-    cands, floors, kept, done = [], [], [], []
+    cands, floors, kept, done, missed = [], [], [], [], []
+    retried = 0
+    expected = max(1, (int(args.dwell * IQ_RATE_HZ) - NFFT) // HOP + 1)  # FFT blocks a step
     try:
         for n, d in enumerate(dials):
             if not rig.set_ok(f"F {d}"):
                 print(f"{d:>10}  tuning refused")
                 continue
-            stream.flush()
-            for _ in stream.packets(int(args.settle * IQ_RATE_HZ)):
-                pass
-            spec, blocks = step_spectrum(stream, args.dwell)
+            for attempt in (1, 2):
+                stream.flush()
+                for _ in stream.packets(int(args.settle * IQ_RATE_HZ)):
+                    pass
+                spec, blocks = step_spectrum(stream, args.dwell)
+                if spec is not None and blocks >= expected / 2:
+                    break
+                if attempt == 1:
+                    print(f"{d:>10}  {'no' if spec is None else 'too little'} I/Q - again",
+                          flush=True)
+                    retried += 1
             if spec is None:
                 print(f"{d:>10}  no data")
+                missed.append(d)
                 continue
             level = 10 * np.log10(spec[KEEP] + 1e-30)
             peaks, fl = find_peaks(level, args.threshold)
@@ -592,10 +749,17 @@ def main():
             rig.set_ok(f"F {original_dial}")
         rig.close()
 
+    if retried or missed:
+        print(f"\n{retried} step(s) measured again; {len(missed)} with no data"
+              + (f": {', '.join(str(m) for m in missed[:10])}" if missed else ""))
     meta = {"clk1_hz": float(clk1), "conditions": ", ".join(conditions)}
+    if args.range:
+        meta["range"] = tuple(args.range)
     np.savez_compressed(prefix + "_steps.npz", dials=np.array(done),
                         spectra=np.array(kept) if kept else np.zeros((0, int(np.sum(KEEP)))),
-                        clk1_hz=clk1, conditions=meta["conditions"], step=step)
+                        clk1_hz=clk1, conditions=meta["conditions"], step=step,
+                        range_lo=args.range[0] if args.range else 0,
+                        range_hi=args.range[1] if args.range else 0)
     written = [prefix + "_steps.npz"] + report(cands, done, floors, step, meta, prefix,
                                                np.array(kept) if kept else None)
     print()
