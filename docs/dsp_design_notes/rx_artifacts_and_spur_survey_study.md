@@ -643,6 +643,16 @@ A test of the family needs no build: move `xtal_filter_center` 1 kHz
 (`L XTALCENTER`), which moves clk1 1 kHz, and each line moves a kHz —
 10.1456 to 10.1496 MHz, 14.3084 to 14.2894, 29.5268 to 29.5138.
 
+By ear (29 October): with `xtal_filter_center` moved, the lines moved
+as predicted — the family is confirmed. `L CLK1DIV` 16, 20 and 22 left
+their S-meter readings where they were, so PLL B's setting isn't in it:
+what makes them is clk1 itself, at its output frequency, with the
+25 MHz reference. `L SIDRIVE` didn't appear to change signal strength.
+That leaves the frequency plan (clk1 − 40 MHz) and the hardware (clk1's
+and the reference's harmonics where they leave the si5351 — up to
+28 × 40 MHz, past 1 GHz, so filtering or slowing those lines would bite
+hard).
+
 ## 3. What removes which
 
 The question was whether spurs are addressed by board layout, better
@@ -919,9 +929,9 @@ Taken (29 October 2026):
 Still open, the heard ones first:
 
 - The clk1 lattice (§2.7), the loudest heard (S4 at 29.5268 and
-  10.1456 MHz, S2 at 14.3084): by ear, `L XTALCENTER` +1 kHz to confirm
-  the family, then `L CLK1DIV` 16/20/22 and `L SIDRIVE` for their level;
-  then a study of clk1 on the low side.
+  10.1456 MHz, S2 at 14.3084): confirmed by ear; PLL B's setting doesn't
+  touch it. Next: a study of clk1 on the low side; the hardware's
+  options for the clock lines.
 - The 48 kHz comb (11), heard at S2 on 10 m: its source (below).
 - From §2: check the block-rate comb on SSB transmit (5); measure the
   ripple (6) and LPF_B (8) with the noise generator.
