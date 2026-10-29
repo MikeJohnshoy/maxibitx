@@ -12,7 +12,8 @@
 // a retune clears both; the [tx_band] check and the board's LPF use the
 // transmit frequency, so XIT can carry a transmission out of a band. And
 // when the CW decoder is told to start afresh: a move of more than 300 Hz,
-// or entering CW or CWR from another mode.
+// or entering CW or CWR from another mode. And the si5351's drive
+// strength: both receive clocks rewritten, refused while transmitting.
 
 #include "radio.h"
 #include "radio_hw.h"
@@ -33,11 +34,20 @@ static void check(int ok, const char *what) {
 /* ---- Stubs ------------------------------------------------------------------ */
 
 static volatile uint32_t clk[3];
-static volatile int relays_freq = 0, applied = 0;
+static volatile int relays_freq = 0, applied = 0, clk_writes = 0;
 void si5351bx_setfreq(uint8_t n, uint32_t f) {
   if (n < 3)
     clk[n] = f;
+  clk_writes++;
 }
+static int drive_ma = 8;
+int si5351_set_drive_ma(int ma) {
+  if (ma != 2 && ma != 4 && ma != 6 && ma != 8)
+    return -1;
+  drive_ma = ma;
+  return 0;
+}
+int si5351_get_drive_ma(void) { return drive_ma; }
 void radio_hw_tune(int f) { (void)f; }
 int radio_hw_relays_tx(int on, int f) {
   if (on)
@@ -193,6 +203,24 @@ int main(void) {
   radio_set_mode(RADIO_MODE_CWR);
   check(radio_spot(&moved) == RADIO_SPOT_OK && freq_hdr == 14050194,
         "CWR: moves by the offset rx_audio_spot() gives (its sign is rx_audio.c's job)");
+
+  printf("The si5351's drive strength\n");
+  radio_set_mode(RADIO_MODE_CW);
+  radio_tune_to(14060000);
+  int writes = clk_writes;
+  check(radio_set_si5351_drive(4) == 0 && drive_ma == 4 && clk_writes == writes + 2 &&
+            clk[1] == C + RX_IF_FREQ_HZ && clk[2] == 14060000 + C,
+        "4 mA: set, and both receive clocks rewritten where they were");
+  writes = clk_writes;
+  check(radio_set_si5351_drive(4) == 0 && clk_writes == writes, "4 mA again: nothing rewritten");
+  check(radio_set_si5351_drive(5) < 0 && drive_ma == 4 && clk_writes == writes,
+        "5 mA refused, nothing changed");
+  check(tx(1) == 0, "transmitting ...");
+  writes = clk_writes;
+  check(radio_set_si5351_drive(8) < 0 && drive_ma == 4 && clk_writes == writes,
+        "... a drive change refused");
+  tx(0);
+  check(radio_set_si5351_drive(8) == 0 && drive_ma == 8, "back in receive: 8 mA again");
 
   printf("\n%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);
   return failures ? 1 : 0;
