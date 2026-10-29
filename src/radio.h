@@ -235,6 +235,18 @@ int radio_get_xtal_filter_center(void);
 // -1 with nothing changed while transmitting or for any other value.
 int radio_set_si5351_drive(int ma);
 
+// Fixes clk1's si5351 divider (16, 18, 20 or 22; 0 for the automatic 18)
+// until the next restart, moving PLL B away from PLL A's range so the two
+// PLLs' beat leaves the bands (docs/dsp_design_notes/
+// rx_artifacts_and_spur_survey_study.md §2.5). clk1's frequency doesn't
+// change. Rewrites the receive clk1 and resets the PLLs, as at start-up;
+// transmit's clk1 uses it too. Reached via rigctld's L CLK1DIV
+// (docs/06_api.md). Returns 0, or -1 with nothing changed while
+// transmitting or for any other value.
+int radio_set_clk1_divider(int div);
+// The divider the receive clk1 is on (18 with the automatic choice).
+int radio_get_clk1_divider(void);
+
 // Parses and applies one command string from a control surface (currently
 // just "freq NNN" from hpsdr_p1.c).
 void remote_execute(char *command);
