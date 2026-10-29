@@ -210,9 +210,8 @@ drive:
 | 29.526826 | 36.8 | 31.9 | 20.9 | 36.0 |
 | 29.708812 | 20.4 | 15.3 | 13.2 | 17.3 |
 
-dB over the floor. 10.145584 MHz is 4 × clk1 − 6 × 25 MHz within 4 Hz
-(clk1 = 40.036396 MHz). The five lines from 28.98 to 29.71 MHz are
-182 kHz apart; their origin isn't worked out.
+dB over the floor. Every one is a × clk1 + b × 25 MHz — the five from
+28.98 to 29.71 MHz too, 5 × clk1 − 8 × 25 MHz (182 kHz) apart — §2.7.
 
 **Images (13).** Four of the backward spurs are the second mixer's
 images of fixed-RF spurs the survey also found — 14.3084, 29.1629,
@@ -571,6 +570,79 @@ The loudest, in dB over the antenna's noise in 50 Hz:
 strongest single-dial lines (3.655, 7.300, 28.62 MHz), which a 5 kHz
 survey doesn't classify (`--range` at small steps would).
 
+By ear, with the antenna (29 October), on the maxibitx S-meter:
+
+| Dial | Margin (§4.9) | Heard |
+|---|---|---|
+| 29.5268 MHz CW | +33 dB | S4 |
+| 10.1456 MHz CW | +32 dB | S4 |
+| 14.3084 MHz CW, 14.306 MHz USB | +24 dB | very audible, S2 |
+| 28.3280 MHz CW (the comb) | +21 dB | very audible, S2 |
+| any 10 m dial, USB (+300 Hz offset) | +8 dB, at the filter's edge | not a problem |
+
+The margins order them as the ear does. The offset's 8 dB at the
+passband's edge isn't enough to matter.
+
+### 2.7 The clk1 lattice
+
+The three loudest heard (29.5268, 10.1456, 14.3084 MHz) are all of one
+family, and so is every other si5351 line the survey found that doesn't
+move: a × clk1 + b × 25 MHz, within the 6–8 Hz by which the survey reads
+the TCXO itself low (25 MHz reads 24.999993 MHz):
+
+| MHz | Band | a | b | dB over the floor (survey A) |
+|---|---|---|---|---|
+| 3.980863 | 80 m | −28 | 45 | 28.6 |
+| 10.145584 | 30 m | 4 | −6 | 38.0 |
+| 14.126454 | 20 m | −24 | 39 | 18.5 |
+| 14.308440 | 20 m | −19 | 31 | 39.0 |
+| 21.019122 | 15 m | 28 | −44 | 13.0 |
+| 28.980864 | 10 m | −28 | 46 | 17.2 |
+| 29.162850 | 10 m | −23 | 38 | 30.9 |
+| 29.344837 | 10 m | −18 | 30 | 27.9 |
+| 29.526826 | 10 m | −13 | 22 | 36.8 |
+| 29.708812 | (above 10 m) | −8 | 14 | 20.4 |
+
+(clk1 as the si5351 makes it, 40.0363975 MHz.) Since 40 MHz and 25 MHz
+are both multiples of 5 MHz, a × clk1 + b × 25 MHz is a multiple of
+5 MHz plus a × (clk1 − 40 MHz) = a × 36.3975 kHz: each line sits near a
+multiple of 5 MHz, offset by a times clk1's 36.4 kHz above 40 MHz —
+10.1456 is 10 MHz + 4 × 36.4 kHz, 29.5268 is 30 MHz − 13 × 36.4 kHz.
+Which multiples of 5 MHz a given a can reach is fixed too (8a + 5b
+must be the multiple), and over a up to ±28 exactly nine of these land
+in a ham band: the nine above that are in one. The survey found every
+one. It is why 40 and 17 m are clean (no multiple of 5 MHz within a
+megahertz) and 20, 30 and 10 m are not. Two of them hadn't been put
+down to the si5351 before (14.126454 and 21.019122 MHz). The survey
+now names this family as a suspect for a fixed-RF spur.
+
+What makes them isn't known: clk1's harmonics mixing with the TCXO's
+somewhere — in the si5351 (PLL B is a fractional multiple of 25 MHz, 18
+× clk1), or on the board, where they get in after the LPFs (they stay
+with the relays open). At 4 mA they fell by 2.5 dB (10.1456) to 16 dB
+(29.5268).
+
+Two ways at them:
+
+- **Their level**: clk1's drive, PLL B's setting (`L CLK1DIV` changes
+  PLL B and its fraction, not clk1), or hardware — the clock lines'
+  filtering and layout. The divider is a by-ear test today.
+- **Where they fall**: only clk1 − 40 MHz decides it, and that is
+  `xtal_filter_center` − 40 MHz plus the second IF (+24 kHz now). With
+  clk1 on the low side (S − 24 kHz, 11.6 kHz under 40 MHz) the lattice
+  draws in to ±0.33 MHz around each multiple of 5 MHz, and the band
+  crossings for a up to ±28 fall from nine to three (10.1276, 24.9420
+  and 29.6867 MHz), though with different a, whose strength isn't
+  known. With clk1 at exactly 40 MHz every one would sit on a multiple
+  of 5 MHz, none in a ham band — but that is a 12.4 kHz second IF, and
+  with the crystal filter only 11–14 dB down at 48 kHz, signals 15–35 kHz
+  below the dial would fold into the passband. Low side is a software
+  change (the second IF's sideband), not yet studied.
+
+A test of the family needs no build: move `xtal_filter_center` 1 kHz
+(`L XTALCENTER`), which moves clk1 1 kHz, and each line moves a kHz —
+10.1456 to 10.1496 MHz, 14.3084 to 14.2894, 29.5268 to 29.5138.
+
 ## 3. What removes which
 
 The question was whether spurs are addressed by board layout, better
@@ -841,10 +913,16 @@ Taken (29 October 2026):
 5. The aim from here: the spurs heard by ear over the antenna's noise,
    working CW and SSB; 60 m after every other band (§2.6).
 6. `--audible` built to list them (§4.9), with 50 Hz as the bandwidth
-   the antenna's noise is taken in.
+   the antenna's noise is taken in. Checked by ear: the loudest four are
+   S2–S4; the +300 Hz offset isn't a problem.
 
-Still open:
+Still open, the heard ones first:
 
+- The clk1 lattice (§2.7), the loudest heard (S4 at 29.5268 and
+  10.1456 MHz, S2 at 14.3084): by ear, `L XTALCENTER` +1 kHz to confirm
+  the family, then `L CLK1DIV` 16/20/22 and `L SIDRIVE` for their level;
+  then a study of clk1 on the low side.
+- The 48 kHz comb (11), heard at S2 on 10 m: its source (below).
 - From §2: check the block-rate comb on SSB transmit (5); measure the
   ripple (6) and LPF_B (8) with the noise generator.
 - The 48 kHz comb's source (11): measure the codec's sample rate
@@ -854,7 +932,7 @@ Still open:
   `hw_settings.ini` and the transmit power scales re-checked.
 - The crystal filter 48 kHz from its centre (13): a carrier 48 kHz
   below the dial.
-- The single-dial lines (14): 60 m's has PLL A − PLL B's frequency
+- The single-dial lines (14), lower priority (60 m): 60 m's has PLL A − PLL B's frequency
   but stayed with PLL B moved (clk1 divider 22, §2.5): PLL A or clk2's
   16th harmonic, with clk1's 18th; only 3 dB weaker at 4 mA, which
   leans towards PLL A. Next: an `L CLK2DIV` to move PLL A on 60 m; suspects that name products of
