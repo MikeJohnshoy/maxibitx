@@ -21,6 +21,8 @@ Hardware bring-up gotchas that don't belong in the design docs proper:
   timing pattern, maxibitx's check for it, and the raw-capture dump for
   looking at what the codec delivers
   ([below](#a-spectrum-full-of-ghosts)).
+- Surveying the receiver's own spurs with a dummy load, on a new board
+  or after a hardware change ([below](#the-receivers-own-spurs)).
 - Anything else discovered during bring-up on real hardware that would
   otherwise get rediscovered the hard way a second time.
 
@@ -365,6 +367,50 @@ compare. What each fault looks like:
 Two things show in every capture, good or bad, and are not faults: the
 noise floor rippling with an 8 kHz period, and hum at multiples of
 93.75 Hz (96000/1024, the audio block rate) on both channels.
+
+## The receiver's own spurs
+
+Every receiver makes some signals of its own: harmonics of the Pi's,
+the codec's and the si5351's clocks, regulator noise, products of the
+oscillators. With a 50 Ω dummy load on the antenna jack,
+`tools/spur_survey.py` finds them across the ham bands and says from
+how each moves with the dial what it is — a fixed RF frequency coupled
+into the input, a fixed offset made after the first mixer, a backward
+image, or an oscillator mixing product — and which clocks have a
+harmonic there. Worth running on a new board, after a hardware change,
+and when a birdie is heard:
+
+```
+python3 tools/spur_survey.py --host sbitx.local
+```
+
+About 8 minutes for 80 m to 10 m. It prints each spur with its level
+over the floor and its suspects, and writes CSVs and a plot. Then, to
+find where a spur comes from, run again with one thing changed and
+compare:
+
+```
+python3 tools/spur_survey.py --host sbitx.local --lpf-off --out relays_open
+python3 tools/spur_survey.py --compare spur_survey_20261029_140000_spurs.csv relays_open_spurs.csv
+```
+
+- `--lpf-off` (every LPF relay open): spurs that vanish come in through
+  the antenna path; those that stay are made or coupled on the board.
+- `--drive 4` (the si5351 at 4 mA instead of 8, `L SIDRIVE`, restored
+  after): spurs from its clocks' harmonics, and the products they make,
+  should drop. A lower drive also means less LO at the mixers; before
+  keeping one, check a real signal's level at each (a steady station
+  on the S-meter, or `lpf_sweep.py`'s LPF_A level), and transmit power
+  on a wattmeter, since the per-band power scales were set at 8 mA.
+  maxibitx starts at 8 mA every time.
+- By hand: HDMI, Wi-Fi and USB devices off, a linear supply in place of
+  a switching one, or `L XTALCENTER` moved 2 kHz (fixed-RF spurs stay;
+  mixing products move).
+
+Keep the dummy load's lead short and dressed the same way for every
+run: a spur the Pi radiates into it is real, but its level depends on
+the lead. The background:
+[`rx_artifacts_and_spur_survey_study.md`](dsp_design_notes/rx_artifacts_and_spur_survey_study.md).
 
 ## What the console shows
 
