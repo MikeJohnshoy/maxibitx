@@ -106,7 +106,7 @@ From that, the predicted responses, each with what defends against it:
 | 11 | A comb of narrow spurs, harmonics of 48.0135 kHz, 3.6–29.7 MHz (30 of 10 m's 41 lines) | an unidentified crystal-stable clock, not the si5351's; coupled on the board after the LPFs | a line every 48 kHz, 10–25 dB in an 11.7 Hz bin; on the waterfall, rarely heard | **open**: find the clock (§2.5) |
 | 12 | si5351 spurs: 25.000, 10.1456 (30 m), 14.3084 (20 m) MHz and five lines at 28.98–29.71 MHz, 17–39 dB | the si5351's reference and products of its outputs, on the board | 30 m and 20 m lines inside the bands, 36–39 dB | **open**: fall 1.4–16 dB at lower drive; the cost of lower drive unmeasured |
 | 13 | Second-mixer images of those spurs, 11–14 dB weaker | the crystal filter only 11–14 dB down 48 kHz from its centre (inferred) | a strong station 48 kHz below the dial would make a backward ghost about that much weaker | **to confirm** with a carrier |
-| 14 | The strongest artifacts: narrow lines up to ~50 dB, each seen at a single dial (3.655, 5.308, 5.318, 5.362, 7.300, 28.62 MHz) | oscillator products steep enough to cross the window between two 5 kHz steps (inferred) | strong, but only at particular dial settings | **open**: classify with 1 kHz steps |
+| 14 | The strongest artifacts: narrow lines up to ~50 dB, each seen at a single dial (3.655, 5.308, 5.318, 5.362, 7.300, 28.62 MHz) | some are images or edge-truncated lines (60 m at 1 kHz steps); the rest likely the si5351's two PLLs beating (inferred) | strong, but only at particular dial settings | **open**: check against the predicted crossings (§2.5) |
 
 ### 2.1 The codec's timing pattern (1)
 
@@ -234,6 +234,63 @@ runs, relays open included, so they are not stations — a steady station
 would be seen from four dials — but products steep enough (a slope of 4
 or more) to cross the ±10 kHz window between one 5 kHz step and the
 next. A run on one band with 1 kHz steps would classify them.
+
+**60 m at 1 kHz steps.** A fifth run, 60 m only with 1 kHz steps
+(--bands 60 --step 1000), sorted three of 60 m's single-dial lines:
+
+- 5.308 and 5.318 MHz are one backward line, seen seven times (5.3085
+  to 5.3225 MHz, 37.8 dB): the second mixer's image of a line at
+  5.2548 MHz, below the band where the survey didn't reach, and by
+  §2.5's 11–14 dB likely about 50 dB itself.
+- 5.437 MHz is a fixed-RF line at 5.436761 MHz, 29 dB, just above the
+  band: at 5 kHz steps the survey's edge left it too few sightings.
+- 5.354, 5.359 and 5.362 MHz are still each seen at a single dial even
+  at 1 kHz steps: slopes steeper than the survey fits (6), or lines
+  that exist only at particular dials.
+
+The +8688 Hz fixed offset was 37.7 dB in this run, against 8.6–15.6 dB
+before: whatever makes it varies from run to run (it is outside every
+passband).
+
+**A likely source of the single-dial lines: the si5351's two PLLs
+beating.** clk2 comes from PLL A at clk2 × its divider (the smallest
+even one above 650 MHz / clk2), so PLL A moves about 10–16 times as fast
+as the dial and covers 650–780 MHz over the bands; clk1 comes from PLL B
+at 18 × 40.036 MHz = 720.655 MHz, in the middle of that range. Their
+difference, and its sums with harmonics of the 25 MHz reference, sweep
+through HF, each crossing a given dial for well under a kilohertz of
+tuning: a strong line at one dial setting only. The first-order
+predictions, from `si5351v2.c`'s own arithmetic (products of up to
+twice each PLL and ±8 × 25 MHz landing within 10 kHz of the dial):
+
+| Band | Product | Crosses the dial at |
+|---|---|---|
+| 80 m | 2A − 2B + 2 × 25 MHz | 3.5779 MHz |
+| 80 m | A − B + 25 MHz | 3.6971 MHz |
+| 60 m | A − B | 5.3638 MHz |
+| 40 m | 2A − 2B + 5 × 25 MHz | 7.2579 MHz |
+| 20 m | −(A − B − 2 × 25 MHz) | 14.0321 MHz |
+| 20 m | −(2A − 2B + 5 × 25 MHz) | 14.2406 MHz |
+| 15 m | −(2A − 2B − 2 × 25 MHz) | 21.2406 MHz |
+| 10 m | −(2A − 2B + 2 × 25 MHz) | 28.1459 MHz |
+| 10 m | 2A − 2B + 4 × 25 MHz | 28.4770 MHz |
+| 10 m | −(A − B) | 29.1392 MHz |
+| 10 m | −(2A − 2B + 25 MHz) | 29.3363 MHz |
+
+Several fall where the plots show single-dial lines — 60 m's near
+5.362–5.364 MHz in every run, 15 m's near 21.24, 10 m's near 29.14 —
+but the plots aren't precise enough to call it proven, and the
+strongest lines (3.655, 7.300, 28.62 MHz) aren't among these
+first-order products. Two checks: each line's exact dial and frequency
+from the runs' `_peaks.csv` against the table; and a narrow run with
+100 Hz steps across one predicted crossing, which would show a line of
+slope about +15 (the survey would need to fit slopes that steep).
+
+If it holds, it is a matter of frequency planning, in software: PLL B
+need not sit inside PLL A's range. With clk1 on a divider of 22 (PLL B
+at 880.8 MHz, inside the si5351's 600–900 MHz VCO range), the products
+of up to three times each PLL that cross a band fall from 25 families to
+9, most of them with high harmonics of 25 MHz. Not a cure, and untried.
 
 **Pickup through the antenna jack.** 17 weak (8–11 dB) fixed-RF spurs
 below 25 MHz, drifting −1.6 to −2 ppm between runs (another free-running
@@ -489,4 +546,7 @@ Still open:
   `hw_settings.ini` and the transmit power scales re-checked.
 - The crystal filter 48 kHz from its centre (13): a carrier 48 kHz
   below the dial.
-- The single-dial lines (14): a run with 1 kHz steps on 60 m or 80 m.
+- The single-dial lines (14): their exact dials from the `_peaks.csv`
+  files against the predicted PLL crossings (§2.5); a 100 Hz-step run
+  across one crossing (the survey needs a narrow range and steeper
+  slopes for that); if confirmed, try clk1 on another PLL divider.
