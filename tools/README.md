@@ -215,7 +215,8 @@ About 8 minutes; `--bands 40,20` for some, `--general` for 1–30 MHz
 line steeper than about 4 crosses the window between two 5 kHz steps and
 needs small steps (`--range 5360000 5368000 --step 100`). A step that
 gets no I/Q is measured again. `--lpf-off` opens every LPF relay for the run and
-`--drive MA` sets the si5351's drive (both restored after);
+`--drive MA` sets the si5351's drive and `--clk1-div N` clk1's si5351
+divider (all restored after);
 `--compare` shows which spurs appear, vanish or change between two
 runs, and the change in each band's floor. See
 [`../docs/08_troubleshooting_and_bringup.md`](../docs/08_troubleshooting_and_bringup.md),
