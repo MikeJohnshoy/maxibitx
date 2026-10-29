@@ -7,6 +7,7 @@ the dial where it is made.
     spur_survey.py --host sbitx.local [options]
     spur_survey.py --reanalyse spur_survey_<time>_steps.npz [--threshold DB]
     spur_survey.py --compare BEFORE_spurs.csv AFTER_spurs.csv
+    spur_survey.py --audible DUMMY_spurs.csv ANTENNA_bands.csv
 
 What it does. The dial steps through the ham bands (each widened by
 25 kHz) in 5 kHz steps. At each step the I/Q spectrum is averaged
@@ -82,6 +83,25 @@ baseline using --compare:
 A step that gets no I/Q, or under half the expected, is measured again
 once; the steps that still got nothing are listed at the end.
 
+Which spurs are heard (--audible). A spur matters by ear when, at some
+dial setting, it is inside the passband and louder there than the
+antenna's noise. --audible takes a dummy-load run's _spurs.csv and the
+_bands.csv of a run made with the antenna connected (its spur list is
+full of stations; only each band's floor is used) and lists the spurs
+that would be heard:
+
+    CW     the narrow filter, --cw-width wide (300 Hz) around the pitch:
+           offsets within +-150 Hz of the dial (CW and CWR alike)
+    SSB    300-3000 Hz: LSB below 10 MHz, USB above (and on 60 m);
+           none on 30 m
+
+with the dials where each is heard, and its margin: the spur's level
+over the antenna noise in --ear-hz (50 Hz, about what the ear picks a
+tone out of noise with). A tone can be heard well under the noise in
+the whole 2.7 kHz. Worst first, 60 m last; also written to
+PREFIX_audible.csv. The antenna's noise changes with the time of day and
+the band's openings; a quiet band is the worst case.
+
 Outputs: PREFIX_spurs.csv (the classified list), PREFIX_peaks.csv
 (every candidate), PREFIX_bands.csv (each band's noise floor and spur
 count), PREFIX_steps.npz (every step's spectrum, for --reanalyse) and
@@ -134,6 +154,7 @@ DEFAULT_BANDS = "80,60,40,30,20,17,15,12,10"
 CLOCKS = [("si5351 TCXO 25 MHz", 25e6, 3, "tcxo"), ("TCXO/2 12.5 MHz", 12.5e6, 3, "tcxo"),
           ("codec 12 MHz", 12e6, 50, "codec"), ("codec/2 6 MHz", 6e6, 50, "codec"),
           ("codec frame 96 kHz", 96e3, 50, "codec"),
+          ("the 48.0135 kHz comb", 48013.5, 5, "comb"),
           ("Pi 4 54/2 = 27 MHz", 27e6, 30, "pi4"), ("Pi 4 54/3 = 18 MHz", 18e6, 30, "pi4"),
           ("Pi 4 54/4 = 13.5 MHz", 13.5e6, 30, "pi4"),
           ("Pi Zero 2W 19.2 MHz", 19.2e6, 30, "pi02"),
@@ -650,6 +671,123 @@ def plan_dials(args):
     return sorted(set(dials)), step
 
 
+# ---- which are heard ---------------------------------------------------------
+
+SSB_LO_HZ, SSB_HI_HZ = 300, 3000
+EDGE_HZ = 100                           # within this of a passband edge: "at the edge"
+LSB_BANDS = ("160", "80", "40")
+NO_SSB_BANDS = ("30",)
+
+
+def passbands(band, cw_width):
+    """(mode, lowest offset, highest offset) heard on band."""
+    out = [("CW", -cw_width / 2, cw_width / 2)]
+    if band in LSB_BANDS:
+        out.append(("LSB", -SSB_HI_HZ, -SSB_LO_HZ))
+    elif band not in NO_SSB_BANDS:
+        out.append(("USB", SSB_LO_HZ, SSB_HI_HZ))
+    return out
+
+
+def heard(r, cw_width):
+    """Where a spur (a _spurs.csv row) is heard: a list of (band, mode,
+    dial_lo, dial_hi, offsets), dial_lo == dial_hi = None meaning at every
+    dial on that band; and the line's slope and where it crosses the dial."""
+    s = float(r["slope"])
+    out = []
+    if s == 0:
+        k = float(r["k_hz"])
+        for b in [x.split()[0] for x in r["bands"].split(",") if x]:
+            for mode, lo, hi in passbands(b, cw_width):
+                if lo <= k <= hi:
+                    out.append((b, mode, None, None, (k, k)))
+        return out, 0.0, None
+    sf = float(r.get("slope_fit") or s) or s
+    # offset = k + s * dial crosses 0 at -k / s (runs before the
+    # crosses_dial_hz column was written have only k).
+    cross = float(r.get("crosses_dial_hz") or -float(r["k_hz"]) / s)
+    # Where it was seen, widened by the window it was seen in: the line
+    # isn't assumed to run beyond that.
+    reach = WINDOW_HZ / max(abs(sf), 1.0)
+    seen_lo, seen_hi = float(r["dial_lo_hz"]) - reach, float(r["dial_hi_hz"]) + reach
+    for b, (blo, bhi) in BANDS.items():
+        if bhi < seen_lo or blo > seen_hi:
+            continue
+        for mode, lo, hi in passbands(b, cw_width):
+            # offset = sf * (dial - cross)
+            d1, d2 = sorted((cross + lo / sf, cross + hi / sf))
+            d1, d2 = max(d1, blo, seen_lo), min(d2, bhi, seen_hi)
+            if d1 <= d2:
+                o1, o2 = sorted((sf * (d1 - cross), sf * (d2 - cross)))
+                out.append((b, mode, d1, d2, (o1, o2)))
+    return out, sf, cross
+
+
+def audible(spurs_path, bands_path, ear_hz, cw_width, out_path):
+    with open(spurs_path, newline="") as f:
+        spurs = list(csv.DictReader(f))
+    with open(bands_path, newline="") as f:
+        floors = {r["band"].split()[0]: float(r["floor_dbfs_hz"]) for r in csv.DictReader(f)}
+    ear_db = 10 * math.log10(ear_hz)
+    rows, unknown = [], set()
+    for r in spurs:
+        level = float(r["dbfs"])
+        s = float(r["slope"])
+        where_heard, sf, cross = heard(r, cw_width)
+        sus = r.get("suspects", "")
+        if s == -1 and not sus:  # runs made before a clock was added to CLOCKS
+            sus = suspects({"slope": -1.0, "k_hz": float(r["k_hz"])}, [], 40036400.0)
+        if s == 0:
+            spur = f"{float(r['k_hz']):+.0f} Hz from the dial"
+        elif s == -1:
+            spur = f"{float(r['k_hz']) / 1e6:.6f} MHz"
+        else:
+            spur = f"{r['class']}, slope {sf:+.2f}, crossing {cross / 1e6:.6f} MHz"
+        by_band = {}
+        for b, mode, d1, d2, (o1, o2) in where_heard:
+            if b not in floors:
+                unknown.add(b)
+                continue
+            lo, hi = next((lo, hi) for m, lo, hi in passbands(b, cw_width) if m == mode)
+            edge = min(o1 - lo, hi - o2) < EDGE_HZ and not (o1 <= lo + EDGE_HZ and o2 >= hi - EDGE_HZ)
+            where = "every dial" if d1 is None else f"{d1 / 1e6:.5f}-{d2 / 1e6:.5f}"
+            by_band.setdefault(b, []).append(f"{mode} {where}" + (" (filter edge)" if edge else ""))
+        for b, heard_at in by_band.items():
+            rows.append({"band": f"{b} m", "margin_db": round(level - (floors[b] + ear_db), 1),
+                         "spur": spur, "heard_at": ", ".join(heard_at), "class": r["class"],
+                         "dbfs": round(level, 1), "antenna_floor_dbfs_hz": floors[b],
+                         "suspects": sus})
+    rows.sort(key=lambda x: (x["band"] == "60 m", -x["margin_db"]))
+    loud = [x for x in rows if x["margin_db"] >= 0]
+    near = [x for x in rows if -6 <= x["margin_db"] < 0]
+    print(f"Spurs in {os.path.basename(spurs_path)} against the antenna noise in "
+          f"{os.path.basename(bands_path)}, taken in {ear_hz:g} Hz. Heard at: the dials "
+          f"(MHz) where each is in the CW filter ({cw_width:g} Hz) or the SSB passband "
+          f"({SSB_LO_HZ}-{SSB_HI_HZ} Hz).\n")
+    print(f"{len(loud)} heard (0 dB or more over the antenna noise), {len(near)} within 6 dB "
+          "under it. Worst first, 60 m last.\n")
+
+    def show(x):
+        print(f"{x['band']:6} {x['margin_db']:+6.1f}  {x['spur']:44} {x['heard_at']}"
+              + (f"  [{x['suspects']}]" if x["suspects"] else ""))
+    print(f"{'band':6} {'dB':>6}  {'spur':44} heard at")
+    for x in loud:
+        show(x)
+    if near:
+        print("-- within 6 dB under the antenna noise --")
+        for x in near:
+            show(x)
+    if unknown:
+        print(f"\nNo antenna floor for {', '.join(sorted(unknown, key=int))} m: not judged.")
+    with open(out_path, "w", newline="") as f:
+        cols = ["band", "margin_db", "spur", "heard_at", "class", "dbfs",
+                "antenna_floor_dbfs_hz", "suspects"]
+        w = csv.DictWriter(f, fieldnames=cols)
+        w.writeheader()
+        w.writerows(loud + near)
+    print(f"\nwrote {out_path}")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Find the receiver's own spurs with a dummy load")
     ap.add_argument("--host", default="localhost")
@@ -670,10 +808,21 @@ def main():
     ap.add_argument("--out", help="output name prefix (default spur_survey_<time>)")
     ap.add_argument("--reanalyse", metavar="STEPS_NPZ")
     ap.add_argument("--compare", nargs=2, metavar=("A_SPURS_CSV", "B_SPURS_CSV"))
+    ap.add_argument("--audible", nargs=2, metavar=("DUMMY_SPURS_CSV", "ANTENNA_BANDS_CSV"))
+    ap.add_argument("--ear-hz", type=float, default=50.0,
+                    help="bandwidth the antenna noise is taken in for --audible (50 Hz)")
+    ap.add_argument("--cw-width", type=float, default=300.0,
+                    help="CW filter width for --audible (300 Hz)")
     args = ap.parse_args()
 
     if args.compare:
         compare(*args.compare)
+        return
+
+    if args.audible:
+        sp, bd = args.audible
+        out = (args.out + "_audible.csv") if args.out else sp.replace("_spurs.csv", "") + "_audible.csv"
+        audible(sp, bd, args.ear_hz, args.cw_width, out)
         return
 
     if args.reanalyse:
