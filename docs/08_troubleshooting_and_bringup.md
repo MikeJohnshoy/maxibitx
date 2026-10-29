@@ -288,6 +288,25 @@ JTDX and WSJT-X Improved should produce (they key with source `tci`).
 without it - check its TCI audio setting. A client that disconnects while
 transmitting releases TX and says so.
 
+**Short gaps in the transmitted audio.** TCI transmit audio is pulled:
+maxibitx asks the client for it about 21 ms at a time (TX_CHRONO),
+keeping `tx_stream_audio_buffering` (50 ms unless the client sets it)
+plus one request asked for ahead. If the client's answers come late -
+Windows scheduling the client late, Wi-Fi power saving, a busy network -
+the audio thread finds nothing to send and transmits silence until they
+arrive. At the end of a transmission where that happened, the console
+says so:
+
+```
+tci: TX audio ran dry 3 times this transmission, 32 ms of silence; longest wait between the client's audio frames 96 ms, first audio 41 ms after TX on (71 ms asked for ahead)
+```
+
+A longest wait well past the time asked for ahead is the client or the
+network stalling. The wait for the first answers at the start of a
+transmission, and the client stopping its audio before it drops TX at
+the end, aren't counted. `MAXIBITX_TCI_TX_TIMING=1` prints the line for
+every TCI transmission, dry or not, to see how much margin there is.
+
 ## A spectrum full of ghosts
 
 Now and then (about one start in 25 on one sBitx) the WM8731 starts with
