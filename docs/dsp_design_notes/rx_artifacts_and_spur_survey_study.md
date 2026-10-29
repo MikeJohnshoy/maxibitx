@@ -1,9 +1,10 @@
 # Receiver artifacts, and a spur survey: a design study
 
-Status: **proposed — a study, nothing built.** §1–§3 review the kinds of
+Status: **survey built** (`tools/spur_survey.py`, with rigctld's
+`L SIDRIVE` for comparing the si5351's drive), tested against a
+simulated radio, not yet run on the sBitx. §1–§3 review the kinds of
 receiver artifact and the ones met so far on the sBitx; §4 is the
-design of `tools/spur_survey.py`; §6 lists the decisions wanted before
-any code.
+design of `tools/spur_survey.py`; §6 records the decisions taken.
 
 Written to answer:
 
@@ -175,9 +176,11 @@ yes — they are coupling problems, and the remedies are hardware:
   apart, clock traces short and terminated, the codec's and si5351's
   references quiet.
 - **Slower clock edges**: the si5351 runs at 8 mA drive
-  (`si5351v2.c`); a lower drive strength cuts its high harmonics (the
-  code already notes it was looked at during an earlier spur
-  investigation).
+  (`si5351v2.c`); a lower drive strength cuts its high harmonics. The
+  cost is less LO at the mixers, which can mean less conversion gain and
+  worse intermodulation, and a different transmit level (the per-band
+  power scales were set at 8 mA). `L SIDRIVE` sets 2, 4, 6 or 8 mA until
+  restart, so the survey can compare them (§4.6).
 - **Frequency planning**: choosing clock frequencies whose harmonics
   miss the bands. Only partly open to us: the codec's 12 MHz and the
   TCXO's 25 MHz are fixed, but a mixing birdie can be moved by
@@ -223,13 +226,14 @@ the I/Q stream, and optionally `L LPF` for a comparison run.
   steady carrier; averaging longer finds weaker ones, at a proportional
   cost in time.
 - **Detection.** A bin is a candidate when it stands at least 7 dB above
-  the median of the bins within ±1 kHz, and is a local maximum no more
-  than three bins wide. Each candidate is kept as (dial, offset, level
-  above the floor, width), with its frequency refined by interpolation
-  between bins (to about 2 Hz).
-- **Coverage and time.** Default: the nine ham bands and 60 m, each
-  widened by 25 kHz either side — about 4.1 MHz, 825 steps, about 8
-  minutes. `--general` covers 1–30 MHz in 10 kHz steps (each frequency
+  the median of the bins within ±1 kHz and is the highest within ±4
+  bins, so a strong carrier's window sidelobes aren't counted as spurs
+  of their own. Each candidate is kept as (dial, offset, level above the
+  floor, width at −6 dB), with its frequency refined by interpolation
+  between bins (to a few hertz).
+- **Coverage and time.** Default: the bands from 80 m to 10 m, 60 m
+  included, each widened by 25 kHz either side — about 4.1 MHz, 825
+  steps, about 8 minutes. `--general` covers 1–30 MHz in 10 kHz steps (each frequency
   seen twice), about 30 minutes.
 
 ### 4.3 Classification
@@ -246,9 +250,15 @@ offset, as a function of the dial, is fitted with a straight line:
 | other | mixing product | moves at another rate; the slope (−3, +2, …) says which multiple of the LO is involved |
 | (one sighting) | unclassified | seen once — appears and disappears; a narrow mixing product, or intermittent |
 
-Linking tolerance is two bins plus the slope's expected move. A fit
-needs three sightings for "fixed RF" and "backward"; "fixed offset"
-needs the same offset across at least ten steps.
+Lines are found from pairs of sightings up to three steps apart, with
+slopes in quarter steps; a sighting belongs to a line when it is within
+35 Hz of it (three bins, plus the few hertz by which the si5351's
+fractional settings miss each dial). A line needs three sightings from
+three dials, whatever its slope — false peaks are so rare at 7 dB
+(§4.2) that three aligned by chance don't happen — except where a spur
+can't be seen three times: a slope of 2 or more crosses the ±10 kHz
+window in two steps, and so does anything in `--general`'s 10 kHz
+steps; those need two.
 
 ### 4.4 Suspects
 
@@ -284,14 +294,20 @@ what prove a source.
 One run finds the spurs; comparison runs say where each comes from:
 
 1. **Dummy load** — the baseline.
-2. **Every LPF relay open** (`L LPF 5` for the run): spurs that vanish
+2. **A lower si5351 drive** (`--drive 4`, or 2): spurs from its clocks'
+   harmonics, and the products they make, should drop. Before keeping a
+   lower drive, check what it costs: a real signal's level at each drive
+   (a steady station, or `lpf_sweep.py`'s LPF_A level — the dummy load's
+   floor is the receiver's own noise and won't show a loss of gain),
+   and transmit power on a wattmeter.
+3. **Every LPF relay open** (`L LPF 5` for the run): spurs that vanish
    come in through the antenna path (or are picked up by the dummy
    load's own lead); spurs that stay are made or coupled on the board.
-3. **The Pi quieter**: HDMI off, Wi-Fi and Bluetooth off, USB devices
+4. **The Pi quieter**: HDMI off, Wi-Fi and Bluetooth off, USB devices
    unplugged, the panel not running. Spurs that vanish belong to those.
-4. **A different `xtal_filter_center`** (by 2 kHz): fixed-RF spurs stay;
+5. **A different `xtal_filter_center`** (by 2 kHz): fixed-RF spurs stay;
    mixing products move by a predictable amount.
-5. **Another supply**: a linear bench supply in place of the usual one.
+6. **Another supply**: a linear bench supply in place of the usual one.
    Spurs from the supply's switching move or vanish.
 
 ### 4.7 Limits
@@ -338,14 +354,19 @@ broadcast carriers are free single-frequency checks. A later tool
 **Two carriers** at once, through a combiner, give IMD: the classic
 two-tone test, raising both until third-order products appear.
 
-## 6. Decisions wanted
+## 6. Decisions
 
-1. Build `spur_survey.py` as §4 describes?
-2. Default coverage: the ham bands only (about 8 minutes), or 1–30 MHz
-   (about 30 minutes)?
-3. Detection threshold and dwell: 7 dB and 0.4 s, or a longer dwell
-   (and a lower threshold) for weaker birdies?
-4. Should a dummy-load survey become part of bring-up for a new board
-   (`08_troubleshooting_and_bringup.md`)?
-5. The open items from §2: check the block-rate comb on SSB transmit
-   (5), measure the ripple (6) and LPF_B (8) with the noise generator.
+Taken (29 October 2026):
+
+1. `spur_survey.py` built as §4 describes, with the si5351's drive as
+   one of the comparisons (`--drive`, rigctld's `L SIDRIVE`).
+2. Default coverage: the ham bands only; 1–30 MHz with `--general`.
+3. Detection threshold 7 dB and dwell 0.4 s.
+4. The dummy-load survey is in `08_troubleshooting_and_bringup.md`,
+   "The receiver's own spurs".
+
+Still open: the items from §2 — check the block-rate comb on SSB
+transmit (5), measure the ripple (6) and LPF_B (8) with the noise
+generator — and whether a lower si5351 drive is worth keeping, which
+would then want a setting in `hw_settings.ini` and the transmit power
+scales re-checked.
