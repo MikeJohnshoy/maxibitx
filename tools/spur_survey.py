@@ -1,0 +1,607 @@
+#!/usr/bin/env python3
+"""
+spur_survey.py - finds the receiver's own spurs (birdies) with a 50 ohm
+dummy load on the antenna jack, and says from how each one moves with
+the dial where it is made.
+
+    spur_survey.py --host sbitx.local [options]
+    spur_survey.py --reanalyse spur_survey_<time>_steps.npz [--threshold DB]
+    spur_survey.py --compare BEFORE_spurs.csv AFTER_spurs.csv
+
+What it does. The dial steps through the ham bands (each widened by
+25 kHz) in 5 kHz steps. At each step the I/Q spectrum is averaged
+(8192-point FFTs, 11.7 Hz bins, half overlapped) and searched within
++-10 kHz of the dial - the crystal filter's flat top - so every RF
+frequency is seen from four dial settings. A bin is a candidate when it
+is a local maximum at least --threshold dB (7) above the median of the
+bins within +-1 kHz; its frequency is refined between bins.
+
+How a spur moves says what it is. Its offset from the dial, against the
+dial, is a straight line, offset = k + s * dial, and the slope s is the
+class:
+
+    s = -1  fixed RF     one RF frequency (k), seen at four offsets, as a
+                         station would be: radiated or conducted into the
+                         RF input - clock harmonics, regulators
+    s =  0  fixed offset the same offset (k) at every dial: made after the
+                         first mixer (the IF, the codec, the DSP)
+    s = +1  backward     moves with the dial: an image. A spur at RF F
+                         48 kHz below the dial images through the second
+                         mixer at offset dial - 48 kHz - F
+    other   mixing       a product of the oscillators; |s| is the harmonic
+                         of the first LO (clk2) involved
+    -       single       seen once or twice only - appears and disappears
+
+Lines are found from pairs of candidates up to three steps apart, with
+slopes in quarter steps; a line needs three sightings (two for |s| >= 2,
+which cross the window in two steps, and two in --general's wider
+steps). For fixed-RF spurs the report lists clock harmonics within their
+tolerance (the codec's 12 MHz and 96 kHz frame, the si5351's 25 MHz
+TCXO, the Pi's crystals, clk1 and its sub-multiples): suspects, not
+proof.
+
+Runs that locate a source (docs/dsp_design_notes/
+rx_artifacts_and_spur_survey_study.md §4.6) - compare each with the
+baseline using --compare:
+
+    --lpf-off       every LPF relay open for the run (L LPF 5): spurs that
+                    vanish come in through the antenna path
+    --drive MA      the si5351's drive for the run (L SIDRIVE 2/4/6/8 mA,
+                    restored after): its harmonics, and the products
+                    they make, against the 8 mA start-up drive
+    (by hand)       the Pi quieter (HDMI, Wi-Fi, USB off), another supply,
+                    a different xtal_filter_center
+
+    --bands LIST    comma-separated: 160,80,60,40,30,20,17,15,12,10
+                    (default 80 m to 10 m, 60 m included: about 8 minutes)
+    --general       1-30 MHz in 10 kHz steps instead (about 30 minutes)
+    --step HZ / --dwell S / --settle S / --threshold DB
+                    5000, 0.4, 0.15, 7
+    --out PREFIX    output name (default spur_survey_<time>)
+
+Outputs: PREFIX_spurs.csv (the classified list), PREFIX_peaks.csv
+(every candidate), PREFIX_bands.csv (each band's noise floor and spur
+count), PREFIX_steps.npz (every step's spectrum, for --reanalyse) and
+PREFIX.png if matplotlib is installed.
+
+Limits. A dummy load shows only what the radio makes itself: images,
+intermodulation and aliasing of real signals need a signal. Keep the
+dummy load's lead short and the same between runs: a spur the Pi
+radiates into it is real, but its level depends on the lead. Levels are
+dBFS (a full-scale tone is 0) and dB above the floor, not microvolts.
+The floor with a dummy load is the receiver's own noise; a lower LO
+drive's effect on gain shows on a real signal, not here.
+
+Needs a maxibitx with the I/Q stream on UDP 4536, numpy, and
+xtal_sweep.py beside this file (its rigctld and I/Q code); --lpf-off
+needs L LPF (sBitx), --drive needs L SIDRIVE.
+"""
+
+import argparse
+import csv
+import math
+import os
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from xtal_sweep import (IQ_RATE_HZ, IQ_STREAM_PORT, RIGCTL_PORT,  # noqa: E402
+                        IqStream, Rigctl, np)
+
+NFFT = 8192
+HOP = NFFT // 2
+BIN_HZ = IQ_RATE_HZ / NFFT              # 11.72 Hz
+WINDOW_HZ = 10000                       # searched either side of the dial
+FLOOR_HZ = 1000                         # the floor: median within this
+LOCAL_MAX_BINS = 4                      # a peak is the highest within this
+NARROW_BINS = 4                         # bins within 6 dB of the peak: narrow
+LINE_TOL_HZ = 35                        # a sighting's distance from its line
+MAX_SLOPE = 6
+GUARD_HZ = 25000
+
+BANDS = {"160": (1800000, 2000000), "80": (3500000, 4000000), "60": (5330500, 5406500),
+         "40": (7000000, 7300000), "30": (10100000, 10150000), "20": (14000000, 14350000),
+         "17": (18068000, 18168000), "15": (21000000, 21450000), "12": (24890000, 24990000),
+         "10": (28000000, 29700000)}
+DEFAULT_BANDS = "80,60,40,30,20,17,15,12,10"
+
+# Clocks whose harmonics are suspects for a fixed-RF spur:
+# (name, Hz, ppm, family). Within a family a match on the clock itself
+# hides the same match on its sub-multiples.
+CLOCKS = [("si5351 TCXO 25 MHz", 25e6, 3, "tcxo"), ("TCXO/2 12.5 MHz", 12.5e6, 3, "tcxo"),
+          ("codec 12 MHz", 12e6, 50, "codec"), ("codec/2 6 MHz", 6e6, 50, "codec"),
+          ("codec frame 96 kHz", 96e3, 50, "codec"),
+          ("Pi 4 54/2 = 27 MHz", 27e6, 30, "pi4"), ("Pi 4 54/3 = 18 MHz", 18e6, 30, "pi4"),
+          ("Pi 4 54/4 = 13.5 MHz", 13.5e6, 30, "pi4"),
+          ("Pi Zero 2W 19.2 MHz", 19.2e6, 30, "pi02"),
+          ("Pi Zero 2W 19.2/2 = 9.6 MHz", 9.6e6, 30, "pi02")]
+
+CLASSES = {-1.0: "fixed RF", 0.0: "fixed offset", 1.0: "backward"}
+
+
+def band_of(hz):
+    for name, (lo, hi) in BANDS.items():
+        if lo <= hz <= hi:
+            return f"{name} m"
+    return ""
+
+
+# ---- measuring --------------------------------------------------------------
+
+WINDOW = np.hanning(NFFT)
+SINE_NORM = np.sum(WINDOW) ** 2          # a full-scale tone reads 0 dBFS
+ENBW_BINS = NFFT * np.sum(WINDOW ** 2) / np.sum(WINDOW) ** 2
+OFFSETS = (np.arange(NFFT) - NFFT // 2) * BIN_HZ
+KEEP = np.abs(OFFSETS) <= WINDOW_HZ + FLOOR_HZ   # what is kept of each step
+
+
+def step_spectrum(stream, seconds):
+    """Power per bin, fftshifted (OFFSETS order), averaged over `seconds` of
+    I/Q in half-overlapped Hann blocks, each from unbroken packets; a tone
+    of amplitude A reads A^2. Returns (spectrum or None, blocks)."""
+    acc, blocks = None, 0
+    pending = np.zeros(0, dtype=np.complex128)
+    for contiguous, samples in stream.packets(int(seconds * IQ_RATE_HZ)):
+        if not contiguous:
+            pending = np.zeros(0, dtype=np.complex128)
+        pending = np.concatenate([pending, samples])
+        while len(pending) >= NFFT:
+            spec = np.abs(np.fft.fftshift(np.fft.fft(pending[:NFFT] * WINDOW))) ** 2 / SINE_NORM
+            acc = spec if acc is None else acc + spec
+            blocks += 1
+            pending = pending[HOP:]
+    return (acc / blocks if blocks else None), blocks
+
+
+def find_peaks(level_db, threshold_db):
+    """Candidates in one step's kept spectrum (dB, OFFSETS[KEEP] order).
+    Returns (peaks, floor_dbfs_hz): peaks as dicts of offset_hz, above_db
+    (over the local floor), dbfs and width_hz (at -6 dB)."""
+    offs = OFFSETS[KEEP]
+    p = 10 ** (level_db / 10)
+    half = int(FLOOR_HZ / BIN_HZ)
+    padded = np.pad(p, half, mode="edge")
+    floor = np.median(np.lib.stride_tricks.sliding_window_view(padded, 2 * half + 1), axis=1)
+    above = 10 * np.log10(p / floor)
+    lm = LOCAL_MAX_BINS
+    padded = np.pad(p, lm, mode="constant")
+    local_max = p >= np.max(np.lib.stride_tricks.sliding_window_view(padded, 2 * lm + 1), axis=1)
+    search = np.abs(offs) <= WINDOW_HZ
+    peaks = []
+    for k in np.nonzero((above >= threshold_db) & local_max & search)[0]:
+        lo, hi = k, k
+        while lo > 0 and p[lo - 1] >= p[k] / 4:
+            lo -= 1
+        while hi < len(p) - 1 and p[hi + 1] >= p[k] / 4:
+            hi += 1
+        d = 0.0
+        if 0 < k < len(p) - 1:
+            a, b, c = level_db[k - 1], level_db[k], level_db[k + 1]
+            den = a - 2 * b + c
+            d = 0.5 * (a - c) / den if den else 0.0
+        peaks.append({"offset_hz": float(offs[k] + d * BIN_HZ), "above_db": float(above[k]),
+                      "dbfs": float(level_db[k]), "width_hz": float((hi - lo + 1) * BIN_HZ)})
+    floor_hz = float(np.median(floor[search])) / (ENBW_BINS * BIN_HZ)
+    return peaks, 10 * math.log10(max(floor_hz, 1e-30))
+
+
+# ---- classifying ------------------------------------------------------------
+
+def min_sightings(s, step_hz):
+    """Sightings a line needs: three, unless the step or the slope lets a
+    spur cross the window in fewer."""
+    crossings = 2 * WINDOW_HZ / (step_hz * max(abs(s), 1.0)) if s != 0 else 99
+    return 3 if crossings >= 3 else 2
+
+
+def classify(cands, step_hz):
+    """cands: list of dicts with dial, offset_hz, above_db, dbfs, width_hz.
+    Returns (spurs, singles). A spur is a line offset = k + s * dial
+    through its sightings, at least min_sightings() of them from distinct
+    dials, each within LINE_TOL_HZ of the line."""
+    n = len(cands)
+    dial = np.array([c["dial"] for c in cands], dtype=float)
+    off = np.array([c["offset_hz"] for c in cands])
+    order = np.argsort(dial, kind="stable")
+    votes = {}
+    for ii, i in enumerate(order):
+        for j in order[ii + 1:]:
+            dd = dial[j] - dial[i]
+            if dd == 0:
+                continue
+            if dd > 3 * step_hz + 1:
+                break
+            s = (off[j] - off[i]) / dd
+            sq = round(s * 4) / 4
+            if abs(sq) > MAX_SLOPE or abs(s - sq) * dd > LINE_TOL_HZ:
+                continue
+            k = off[i] - sq * dial[i]
+            key = (sq, int(round(k / LINE_TOL_HZ)))
+            votes.setdefault(key, set()).update((i, j))
+    claimed = np.zeros(n, bool)
+    spurs = []
+    for (sq, kq), _members in sorted(votes.items(), key=lambda kv: -len(kv[1])):
+        pool = set()
+        for dk in (-1, 0, 1):
+            pool |= votes.get((sq, kq + dk), set())
+        pool = [i for i in pool if not claimed[i]]
+        if not pool:
+            continue
+        k = float(np.median([off[i] - sq * dial[i] for i in pool]))
+        members = [i for i in pool if abs(off[i] - sq * dial[i] - k) <= LINE_TOL_HZ]
+        # one sighting per dial: the strongest
+        best = {}
+        for i in members:
+            if dial[i] not in best or cands[i]["above_db"] > cands[best[dial[i]]]["above_db"]:
+                best[dial[i]] = i
+        members = list(best.values())
+        if len(members) < min_sightings(sq, step_hz):
+            continue
+        claimed[members] = True
+        k = float(np.median([off[i] - sq * dial[i] for i in members]))
+        top = max(members, key=lambda i: cands[i]["above_db"])
+        spurs.append({"cls": CLASSES.get(sq, "mixing"), "slope": sq, "k_hz": k,
+                      "sightings": len(members), "above_db": cands[top]["above_db"],
+                      "dbfs": cands[top]["dbfs"], "width_hz": cands[top]["width_hz"],
+                      "dial_lo": float(min(dial[members])), "dial_hi": float(max(dial[members])),
+                      "rf_seen": [float(dial[i] + off[i]) for i in members]})
+    singles = [cands[i] for i in range(n) if not claimed[i]]
+    return spurs, singles
+
+
+def suspects(spur, spurs, clk1_hz):
+    """Likely sources, as text."""
+    s, k = spur["slope"], spur["k_hz"]
+    if s == -1:
+        bases = CLOCKS + [("clk1 (RX)", clk1_hz, 3, "clk1"), ("clk1/2", clk1_hz / 2, 3, "clk1"),
+                          ("clk1/3", clk1_hz / 3, 3, "clk1")]
+        hits = []
+        for name, f, ppm, fam in bases:
+            h = round(k / f)
+            if h >= 1 and abs(k - h * f) <= h * f * ppm * 1e-6 + LINE_TOL_HZ:
+                hits.append((name, f, h, fam))
+        # the codec's 12 MHz, not also its 6 MHz and 96 kHz frame
+        hits = [x for x in hits if not any(y[3] == x[3] and y[1] > x[1] for y in hits)]
+        return "; ".join(f"{h} x {name}" if h > 1 else name for name, _, h, _ in hits)
+    if s == 0:
+        return "at the dial (fs/4 in the codec, or LO leakage)" if abs(k) < 100 else \
+            "made after the first mixer"
+    if s == 1:
+        f = -k - 48000.0
+        found = [x for x in spurs if x["slope"] == -1 and abs(x["k_hz"] - f) <= 2 * LINE_TOL_HZ]
+        return (f"second-mixer image of {f / 1e6:.6f} MHz" +
+                (" (found there: a fixed-RF spur)" if found else ""))
+    return f"{abs(s):g}x the first LO (clk2) in a mixing product"
+
+
+# ---- reporting ---------------------------------------------------------------
+
+def spur_where(sp):
+    if sp["slope"] == -1:
+        return f"{sp['k_hz'] / 1e6:12.6f} MHz"
+    if sp["slope"] == 0:
+        return f"{sp['k_hz']:+9.0f} Hz from dial"
+    return f"seen {np.mean(sp['rf_seen']) / 1e6:9.4f} MHz"
+
+
+def report(cands, dials, floors, step_hz, meta, prefix, spectra=None):
+    spurs, singles = classify(cands, step_hz)
+    clk1 = meta.get("clk1_hz", 40036400.0)
+    for sp in spurs:
+        sp["suspects"] = suspects(sp, spurs, clk1)
+        # the bands it was seen in: by RF, or for a fixed offset by the dial
+        where = sp["rf_seen"] if sp["slope"] != 0 else [r - sp["k_hz"] for r in sp["rf_seen"]]
+        sp["bands"] = ",".join(sorted({band_of(r) for r in where} - {""},
+                                      key=lambda b: BANDS[b.split()[0]][0]))
+    spurs.sort(key=lambda x: (x["slope"] != -1, x["slope"] != 0, x["slope"] != 1,
+                              x.get("k_hz") if x["slope"] in (-1, 0) else np.mean(x["rf_seen"])))
+    written = []
+
+    path = prefix + "_spurs.csv"
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["class", "slope", "k_hz", "rf_seen_mean_hz", "sightings", "above_floor_db",
+                    "dbfs", "width_hz", "dial_lo_hz", "dial_hi_hz", "bands", "suspects"])
+        for sp in spurs:
+            w.writerow([sp["cls"], sp["slope"], round(sp["k_hz"], 1),
+                        round(float(np.mean(sp["rf_seen"])), 1), sp["sightings"],
+                        round(sp["above_db"], 1), round(sp["dbfs"], 1), round(sp["width_hz"], 1),
+                        int(sp["dial_lo"]), int(sp["dial_hi"]), sp["bands"], sp["suspects"]])
+    written.append(path)
+    path = prefix + "_peaks.csv"
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["dial_hz", "offset_hz", "rf_hz", "above_floor_db", "dbfs", "width_hz"])
+        for c in cands:
+            w.writerow([int(c["dial"]), round(c["offset_hz"], 1),
+                        round(c["dial"] + c["offset_hz"], 1), round(c["above_db"], 1),
+                        round(c["dbfs"], 1), round(c["width_hz"], 1)])
+    written.append(path)
+    band_rows = []
+    for name, (lo, hi) in BANDS.items():
+        sel = [fl for d, fl in zip(dials, floors) if lo - GUARD_HZ <= d <= hi + GUARD_HZ]
+        if not sel:
+            continue
+        n_sp = sum(1 for sp in spurs if f"{name} m" in sp["bands"].split(","))
+        band_rows.append((f"{name} m", float(np.median(sel)), n_sp))
+    path = prefix + "_bands.csv"
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["band", "floor_dbfs_hz", "spurs"])
+        for b, fl, n_sp in band_rows:
+            w.writerow([b, round(fl, 1), n_sp])
+    written.append(path)
+
+    print()
+    print(f"{len(cands)} candidates, {len(spurs)} spurs, {len(singles)} seen once or twice "
+          f"(conditions: {meta.get('conditions', '')})")
+    for cls in ("fixed RF", "fixed offset", "backward", "mixing"):
+        group = [sp for sp in spurs if sp["cls"] == cls]
+        if not group:
+            continue
+        print(f"\n{cls}:")
+        for sp in group:
+            slope = f" s={sp['slope']:+g}" if cls == "mixing" else ""
+            print(f"  {spur_where(sp)}{slope}  {sp['above_db']:5.1f} dB over floor "
+                  f"({sp['dbfs']:6.1f} dBFS)  x{sp['sightings']}  {sp['bands'] or '-':12} "
+                  f"{sp['suspects']}")
+    if singles:
+        strong = sorted(singles, key=lambda c: -c["above_db"])[:10]
+        print(f"\nseen once or twice ({len(singles)}; strongest {len(strong)}):")
+        for c in strong:
+            print(f"  {(c['dial'] + c['offset_hz']) / 1e6:12.6f} MHz  (dial {c['dial'] / 1e6:.3f}"
+                  f", {c['offset_hz']:+7.0f} Hz)  {c['above_db']:5.1f} dB over floor")
+    print("\nnoise floor by band (dBFS/Hz): " +
+          ", ".join(f"{b} {fl:.1f}" for b, fl, _ in band_rows))
+    if spectra is not None:
+        png = plot(prefix + ".png", dials, spectra, spurs, singles)
+        if png:
+            written.append(png)
+    return written
+
+
+def plot(path, dials, spectra, spurs, singles):
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return None
+    offs = OFFSETS[KEEP]
+    search = np.abs(offs) <= WINDOW_HZ
+    # a fixed-offset spur is at every dial: drawn in RF it would be a fence
+    fixed = [sp["k_hz"] for sp in spurs if sp["cls"] == "fixed offset"]
+    for k in fixed:
+        search &= np.abs(offs - k) > 3 * BIN_HZ
+    shown = [(n, lo, hi) for n, (lo, hi) in BANDS.items()
+             if any(lo - GUARD_HZ <= d <= hi + GUARD_HZ for d in dials)]
+    if not shown:
+        return None
+    fig, axes = plt.subplots(len(shown), 1, figsize=(11, 2.2 * len(shown)), squeeze=False)
+    colors = {"fixed RF": "#d62728", "fixed offset": "#1f77b4", "backward": "#9467bd",
+              "mixing": "#ff7f0e"}
+    for ax, (name, lo, hi) in zip(axes[:, 0], shown):
+        a, b = lo - GUARD_HZ, hi + GUARD_HZ
+        grid = np.arange(a - WINDOW_HZ, b + WINDOW_HZ, 50.0)
+        hold = np.full(len(grid), np.nan)
+        for d, spec in zip(dials, spectra):
+            if not a <= d <= b:
+                continue
+            rf = d + offs[search]
+            idx = np.clip(((rf - grid[0]) / 50.0).astype(int), 0, len(grid) - 1)
+            vals = spec[search] - np.median(spec[search])
+            np.fmax.at(hold, idx, vals)
+        ax.plot(grid / 1e6, hold, color="#444", lw=0.6)
+        for sp in spurs:
+            if sp["cls"] == "fixed offset":
+                continue
+            for r in sp["rf_seen"]:
+                if a - WINDOW_HZ <= r <= b + WINDOW_HZ:
+                    ax.plot(r / 1e6, sp["above_db"], "v", ms=6, color=colors[sp["cls"]])
+        for c in singles:
+            r = c["dial"] + c["offset_hz"]
+            if a - WINDOW_HZ <= r <= b + WINDOW_HZ:
+                ax.plot(r / 1e6, c["above_db"], "x", ms=4, color="#999")
+        ax.axvspan(lo / 1e6, hi / 1e6, color="#2ca02c", alpha=0.06)
+        ax.set_title(f"{name} m", fontsize=9, loc="left")
+        ax.set_ylabel("dB over floor", fontsize=8)
+        ax.grid(alpha=0.3)
+    handles = [plt.Line2D([], [], marker="v", ls="", color=c, label=k) for k, c in colors.items()
+               if k != "fixed offset"]
+    handles.append(plt.Line2D([], [], marker="x", ls="", color="#999", label="seen once or twice"))
+    axes[0, 0].legend(handles=handles, fontsize=7, ncol=5, loc="upper right")
+    note = ("; fixed-offset spurs left out: " + ", ".join(f"{k:+.0f} Hz" for k in fixed)) \
+        if fixed else ""
+    axes[-1, 0].set_xlabel("MHz (max-hold over the steps; markers: classified spurs" + note + ")")
+    fig.tight_layout()
+    fig.savefig(path, dpi=90)
+    return path
+
+
+def compare(path_a, path_b):
+    def load(p):
+        with open(p, newline="") as f:
+            return list(csv.DictReader(f))
+
+    def bands(p):
+        q = p.replace("_spurs.csv", "_bands.csv")
+        try:
+            with open(q, newline="") as f:
+                return {r["band"]: float(r["floor_dbfs_hz"]) for r in csv.DictReader(f)}
+        except OSError:
+            return {}
+
+    a, b = load(path_a), load(path_b)
+
+    def key(r):
+        s = float(r["slope"])
+        return s, float(r["k_hz"]) if s in (-1.0, 0.0) else float(r["rf_seen_mean_hz"])
+
+    used = set()
+    print(f"{'':12} {'where':>24}  {'A dB':>6} {'B dB':>6}  change")
+    for r in a:
+        sa, ka = key(r)
+        match = None
+        for j, q in enumerate(b):
+            sb, kb = key(q)
+            tol = 2 * LINE_TOL_HZ if sa in (-1.0, 0.0) else 3000
+            if j not in used and sa == sb and abs(ka - kb) <= tol:
+                match = j
+                break
+        where = (f"{ka / 1e6:.6f} MHz" if sa == -1 else f"{ka:+.0f} Hz" if sa == 0
+                 else f"~{ka / 1e6:.4f} MHz s={sa:+g}")
+        if match is None:
+            print(f"{r['class']:12} {where:>24}  {float(r['above_floor_db']):6.1f} {'--':>6}  "
+                  "only in A")
+        else:
+            used.add(match)
+            da, db_ = float(r["above_floor_db"]), float(b[match]["above_floor_db"])
+            print(f"{r['class']:12} {where:>24}  {da:6.1f} {db_:6.1f}  {db_ - da:+.1f} dB")
+    for j, q in enumerate(b):
+        if j not in used:
+            sb, kb = key(q)
+            where = (f"{kb / 1e6:.6f} MHz" if sb == -1 else f"{kb:+.0f} Hz" if sb == 0
+                     else f"~{kb / 1e6:.4f} MHz s={sb:+g}")
+            print(f"{q['class']:12} {where:>24}  {'--':>6} {float(q['above_floor_db']):6.1f}  "
+                  "only in B")
+    fa, fb = bands(path_a), bands(path_b)
+    common = [x for x in fa if x in fb]
+    if common:
+        print("\nnoise floor, B - A: " + ", ".join(f"{x} {fb[x] - fa[x]:+.1f} dB" for x in common))
+
+
+# ---- the survey --------------------------------------------------------------
+
+def plan_dials(args):
+    if args.general:
+        step = args.step or 10000
+        return list(range(1000000, 30000001, step)), step
+    step = args.step or 5000
+    dials = []
+    for name in args.bands.split(","):
+        name = name.strip().rstrip("m").strip()
+        if name not in BANDS:
+            sys.exit(f"unknown band {name!r}: choose from {', '.join(BANDS)}")
+        lo, hi = BANDS[name]
+        dials += list(range(lo - GUARD_HZ, hi + GUARD_HZ + 1, step))
+    return sorted(set(dials)), step
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Find the receiver's own spurs with a dummy load")
+    ap.add_argument("--host", default="localhost")
+    ap.add_argument("--port", type=int, default=RIGCTL_PORT)
+    ap.add_argument("--iq-port", type=int, default=IQ_STREAM_PORT)
+    ap.add_argument("--bands", default=DEFAULT_BANDS)
+    ap.add_argument("--general", action="store_true", help="1-30 MHz in 10 kHz steps")
+    ap.add_argument("--step", type=int)
+    ap.add_argument("--dwell", type=float, default=0.4)
+    ap.add_argument("--settle", type=float, default=0.15)
+    ap.add_argument("--threshold", type=float, default=7.0)
+    ap.add_argument("--lpf-off", action="store_true", help="every LPF relay open (L LPF 5)")
+    ap.add_argument("--drive", type=int, choices=(2, 4, 6, 8), help="si5351 drive, mA")
+    ap.add_argument("--out", help="output name prefix (default spur_survey_<time>)")
+    ap.add_argument("--reanalyse", metavar="STEPS_NPZ")
+    ap.add_argument("--compare", nargs=2, metavar=("A_SPURS_CSV", "B_SPURS_CSV"))
+    args = ap.parse_args()
+
+    if args.compare:
+        compare(*args.compare)
+        return
+
+    if args.reanalyse:
+        z = np.load(args.reanalyse, allow_pickle=False)
+        dials, spectra = z["dials"], z["spectra"]
+        meta = {"clk1_hz": float(z["clk1_hz"]), "conditions": str(z["conditions"])}
+        step = int(z["step"])
+        cands, floors = [], []
+        for d, spec in zip(dials, spectra):
+            peaks, fl = find_peaks(spec.astype(float), args.threshold)
+            floors.append(fl)
+            cands += [dict(p, dial=float(d)) for p in peaks]
+        prefix = args.out or args.reanalyse.replace("_steps.npz", "") + "_reanalysed"
+        for path in report(cands, list(dials), floors, step, meta, prefix, spectra):
+            print(f"wrote {path}")
+        return
+
+    dials, step = plan_dials(args)
+    prefix = args.out or time.strftime("spur_survey_%Y%m%d_%H%M%S")
+    rig = Rigctl(args.host, args.port)
+    if rig.get_int("t") == 1:
+        sys.exit("the radio is transmitting - try again in receive")
+    original_dial = rig.get_int("f")
+    xtal = rig.get_int("l XTALCENTER")
+    clk1 = (xtal + 24000) if xtal else 40036400
+    original_drive = rig.get_int("l SIDRIVE")
+    conditions = []
+    if args.drive is not None:
+        if original_drive is None or not rig.set_ok(f"L SIDRIVE {args.drive}"):
+            sys.exit("could not set the si5351 drive (this maxibitx needs L SIDRIVE)")
+    drive_now = rig.get_int("l SIDRIVE")
+    conditions.append(f"si5351 {drive_now} mA" if drive_now else "si5351 drive unknown")
+    if args.lpf_off:
+        if not rig.set_ok("L LPF 5"):
+            sys.exit("could not open the LPF relays (L LPF 5 needs an sBitx and a maxibitx "
+                     "with L LPF)")
+        conditions.append("LPF relays open")
+    else:
+        conditions.append("LPF by the dial")
+    conditions.append(f"xtal_filter_center {xtal} Hz" if xtal else "xtal_filter_center ?")
+
+    stream = IqStream(args.host, args.iq_port)
+    probe, _ = step_spectrum(stream, 0.2)
+    if probe is None:
+        sys.exit(f"no I/Q arriving on UDP {args.iq_port} from {args.host}")
+
+    per = args.dwell + args.settle + 0.03
+    print(f"{len(dials)} steps of {step} Hz, {', '.join(conditions)}, "
+          f"about {len(dials) * per / 60:.0f} minutes")
+    cands, floors, kept, done = [], [], [], []
+    try:
+        for n, d in enumerate(dials):
+            if not rig.set_ok(f"F {d}"):
+                print(f"{d:>10}  tuning refused")
+                continue
+            stream.flush()
+            for _ in stream.packets(int(args.settle * IQ_RATE_HZ)):
+                pass
+            spec, blocks = step_spectrum(stream, args.dwell)
+            if spec is None:
+                print(f"{d:>10}  no data")
+                continue
+            level = 10 * np.log10(spec[KEEP] + 1e-30)
+            peaks, fl = find_peaks(level, args.threshold)
+            cands += [dict(p, dial=float(d)) for p in peaks]
+            floors.append(fl)
+            kept.append(level.astype(np.float32))
+            done.append(d)
+            if n % 20 == 0 or peaks:
+                top = max((p["above_db"] for p in peaks), default=None)
+                print(f"{d:>10}  floor {fl:6.1f} dBFS/Hz  {len(peaks)} peak(s)"
+                      + (f", strongest {top:.1f} dB" if top is not None else ""), flush=True)
+    except KeyboardInterrupt:
+        print("\ninterrupted - restoring and reporting what was measured")
+    finally:
+        if args.lpf_off and not rig.set_ok("L LPF 0"):
+            print("WARNING: could not release the LPF hold - send 'L LPF 0'")
+        if args.drive is not None and original_drive and \
+                not rig.set_ok(f"L SIDRIVE {original_drive}"):
+            print(f"WARNING: could not restore the si5351 drive - send 'L SIDRIVE "
+                  f"{original_drive}'")
+        if original_dial is not None:
+            rig.set_ok(f"F {original_dial}")
+        rig.close()
+
+    meta = {"clk1_hz": float(clk1), "conditions": ", ".join(conditions)}
+    np.savez_compressed(prefix + "_steps.npz", dials=np.array(done),
+                        spectra=np.array(kept) if kept else np.zeros((0, int(np.sum(KEEP)))),
+                        clk1_hz=clk1, conditions=meta["conditions"], step=step)
+    written = [prefix + "_steps.npz"] + report(cands, done, floors, step, meta, prefix,
+                                               np.array(kept) if kept else None)
+    print()
+    for path in written:
+        print(f"wrote {path}")
+
+
+if __name__ == "__main__":
+    main()
