@@ -375,6 +375,12 @@ static int handle_line(int fd, char *line)
             snprintf(buf, sizeof(buf), "%d\n", si5351_get_drive_ma());
             send_line(fd, buf);
             get_log("rigctl: l SIDRIVE -> %d mA\n", si5351_get_drive_ma());
+        } else if (strcmp(level_name, "CLK1DIV") == 0) {
+            // Extension: the si5351 divider the receive clk1 is on (radio.h).
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%d\n", radio_get_clk1_divider());
+            send_line(fd, buf);
+            get_log("rigctl: l CLK1DIV -> %d\n", radio_get_clk1_divider());
         } else if (strcmp(level_name, "LPF") == 0) {
             // Extension: the LPF hold, radio_hw.h's RADIO_HW_LPF_* (0 the
             // dial's filter, 1-4 LPF_A-D, 5 none), for tools/lpf_sweep.py.
@@ -452,6 +458,15 @@ static int handle_line(int fd, char *line)
             send_rprt(fd, ok ? 0 : -1);
             if (!ok)
                 printf("rigctl: L SIDRIVE %g -> refused\n", val);
+        } else if (sscanf(cmd + 1, "%31s %lf", level_name, &val) == 2 &&
+                   strcmp(level_name, "CLK1DIV") == 0) {
+            // Extension: clk1's si5351 divider, 16/18/20/22 or 0 for the
+            // automatic one, until restart (radio.h). Refused while
+            // transmitting or for other values; radio.c logs a change.
+            int ok = val == (int)val && radio_set_clk1_divider((int)val) == 0;
+            send_rprt(fd, ok ? 0 : -1);
+            if (!ok)
+                printf("rigctl: L CLK1DIV %g -> refused\n", val);
         } else if (sscanf(cmd + 1, "%31s %lf", level_name, &val) == 2 &&
                    strcmp(level_name, "LPF") == 0) {
             // Extension: holds one LPF (or none) in circuit whatever the
