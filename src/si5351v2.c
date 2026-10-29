@@ -51,6 +51,10 @@ uint32_t plla_freq, pllb_freq;
 
 static int i2c_error_count = 0;       // counts I2C Errors
 
+// Every clock's drive strength, written with its control register by
+// setup_multisynth().
+static uint8_t drive_strength = SI5351_CLK_DRIVE_STRENGTH_8MA;
+
 #define SI5351_ADDR 0x60              // I2C address of Si5351   (typical)
 
 /*
@@ -232,11 +236,23 @@ void si5351bx_setfreq(uint8_t clk, uint32_t frequency){
   if (pll_div & 1)
     pll_div++;
 
-// some signal spur investigations looked at lowering SI5351_CLK_DRIVE_STRENGTH
-   set_freq_fixeddiv(clk, pll, frequency, pll_div, 
-                    SI5351_CLK_DRIVE_STRENGTH_8MA);
+   set_freq_fixeddiv(clk, pll, frequency, pll_div, drive_strength);
 //	set_frequency_fixedpll(clk, pll, PLLFREQ, frequency, SI_R_DIV_1, 
 //		SI5351_CLK_DRIVE_STRENGTH_8MA);
+}
+
+int si5351_set_drive_ma(int ma){
+  switch (ma) {
+  case 2: drive_strength = SI5351_CLK_DRIVE_STRENGTH_2MA; return 0;
+  case 4: drive_strength = SI5351_CLK_DRIVE_STRENGTH_4MA; return 0;
+  case 6: drive_strength = SI5351_CLK_DRIVE_STRENGTH_6MA; return 0;
+  case 8: drive_strength = SI5351_CLK_DRIVE_STRENGTH_8MA; return 0;
+  default: return -1;
+  }
+}
+
+int si5351_get_drive_ma(void){
+  return 2 + 2 * (drive_strength & SI5351_CLK_DRIVE_STRENGTH_MASK);
 }
 
 void si5351_set_calibration(int32_t cal){
