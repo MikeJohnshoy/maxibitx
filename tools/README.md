@@ -198,8 +198,9 @@ dial settings. How a spur's offset moves with the dial classes it:
 fixed RF (moves like a station: coupled into the input), fixed offset
 (stays put: made after the first mixer), backward (an image; the
 second mixer's, of a spur 48 kHz below the dial, is named), or mixing
-(another slope: a product of the oscillators). Fixed-RF spurs are
-matched against harmonics of the board's clocks. Prints the list and
+(another slope: a product of the oscillators, reported where it crosses
+the dial). Fixed-RF spurs are matched against harmonics of the board's
+clocks, steep mixing products against products of the si5351's two PLLs. Prints the list and
 writes CSVs, the steps' spectra (for `--reanalyse` with another
 threshold) and a plot.
 
@@ -210,7 +211,10 @@ python3 tools/spur_survey.py --compare spur_survey_20261029_140000_spurs.csv dri
 ```
 
 About 8 minutes; `--bands 40,20` for some, `--general` for 1–30 MHz
-(about 30 minutes). `--lpf-off` opens every LPF relay for the run and
+(about 30 minutes), `--range LO HI` for a stretch at any `--step` — a
+line steeper than about 4 crosses the window between two 5 kHz steps and
+needs small steps (`--range 5360000 5368000 --step 100`). A step that
+gets no I/Q is measured again. `--lpf-off` opens every LPF relay for the run and
 `--drive MA` sets the si5351's drive (both restored after);
 `--compare` shows which spurs appear, vanish or change between two
 runs, and the change in each band's floor. See
