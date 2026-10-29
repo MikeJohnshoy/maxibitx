@@ -286,6 +286,27 @@ int radio_set_si5351_drive(int ma) {
   return 0;
 }
 
+int radio_set_clk1_divider(int div) {
+  if (in_tx)
+    return -1;
+  if (si5351_get_clk1_divider() == div)
+    return 0; // already: nothing rewritten, nothing logged
+  if (si5351_set_clk1_divider(div) < 0)
+    return -1;
+  uint32_t f = xtal_filter_center + RX_IF_FREQ_HZ;
+  si5351bx_setfreq(1, f);
+  si5351_reset(); // PLL B moves by up to 240 MHz: relock both PLLs
+  int used = si5351_clk1_divider_for(f);
+  printf("radio: si5351 clk1 on %s divider %d (PLL B %.1f MHz)%s\n",
+         div ? "a fixed" : "its automatic", used, (double)f * used / 1e6,
+         div ? " until restart" : "");
+  return 0;
+}
+
+int radio_get_clk1_divider(void) {
+  return si5351_clk1_divider_for(xtal_filter_center + RX_IF_FREQ_HZ);
+}
+
 // TX transitions run on this dedicated worker thread rather than
 // whatever thread calls radio_set_tx() - see
 // docs/05_process_and_threading_model.md for why (short version: cw.c
