@@ -286,6 +286,17 @@ from the runs' `_peaks.csv` against the table; and a narrow run with
 100 Hz steps across one predicted crossing, which would show a line of
 slope about +15 (the survey would need to fit slopes that steep).
 
+Reanalysed with the steep-line fitting, the 60 m 1 kHz-step run gives
+17 steep "lines", every one from just two sightings at neighbouring
+dials, with slopes from −16 to +17 that are mostly not whole numbers
+(10.26, −9.27, −10.40, 7.47 ...), as a PLL product's would be, and none
+matching a PLL A/B product — no slope-15 line crosses near
+5.3638 MHz. Two sightings are too few to tell a steep line from two
+unrelated ones (§4.3), so this neither confirms nor rules out the
+prediction; at 1 kHz steps a slope-15 line is seen at most twice. The
+deciding run is 100 Hz steps across 5.3638 MHz, where it would be seen
+about 13 times.
+
 If it holds, it is a matter of frequency planning, in software: PLL B
 need not sit inside PLL A's range. With clk1 on a divider of 22 (PLL B
 at 880.8 MHz, inside the si5351's 600–900 MHz VCO range), the products
@@ -436,6 +447,12 @@ product multiplies that. Tested on a simulated radio with a PLL A − PLL
 B line made by `si5351v2.c`'s arithmetic: at 100 Hz steps it was found
 with slope +15.00, crossing the dial at 5.363786 MHz against 5.363785
 predicted.
+
+A steep line needs three sightings. Two sightings at neighbouring dials
+fit some whole-number slope within the tolerance about one time in five
+by chance, so two unrelated single lines would pass for one; the report
+counts such pairs and suggests a smaller step. (Learned from reanalysing
+the 60 m 1 kHz-step run, §2.5.)
 
 A step that gets no I/Q, or under half of it, is measured again once.
 
