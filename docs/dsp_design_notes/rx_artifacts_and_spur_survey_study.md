@@ -518,6 +518,59 @@ generator through `lpf_sweep.py` — would tell.
 28.63–28.74 MHz in A, 28.17–28.25 and 29.30–29.38 MHz in D), where no
 I/Q arrived. The tool now measures such a step again once (§4.3).
 
+### 2.6 Which are heard
+
+From 29 October 2026 the aim is narrower: the spurs heard by ear, over
+the antenna's noise, working CW and SSB; 60 m after every other band.
+A spur is heard when, at some dial, it is in the CW filter or the SSB
+passband and louder there than the antenna's noise in about 50 Hz
+(§4.9). Most of what the dummy-load surveys found isn't: it is outside
+the passband at every dial, or under the noise.
+
+The antenna's noise, measured at 13:20 local time (a survey with the
+antenna connected; its spur list is stations and is ignored), against
+the dummy load's floor in survey A:
+
+| Band | 80 m | 60 m | 40 m | 30 m | 20 m | 17 m | 15 m | 12 m | 10 m |
+|---|---|---|---|---|---|---|---|---|---|
+| Antenna, dBFS/Hz | −103.6 | −111.9 | −104.1 | −114.9 | −106.6 | −115.2 | −114.2 | −113.4 | −115.2 |
+| Over the dummy load, dB | 12.3 | 4.2 | 12.2 | 1.4 | 9.8 | 1.0 | 2.4 | 2.8 | 0.8 |
+
+On 30, 17, 15, 12 and 10 m the antenna adds almost nothing to the
+receiver's own noise that afternoon, so whatever the dummy load shows
+there is heard. Survey A's spurs (8 mA) judged against it:
+
+| Band | Heard | Within 6 dB under | Of those heard, the 48 kHz comb |
+|---|---|---|---|
+| 80 m | 6 | 3 | 0 |
+| 40 m | 0 | 4 | 0 |
+| 30 m | 2 | 0 | 0 |
+| 20 m | 2 | 4 | 0 |
+| 17 m | 3 | 0 | 1 |
+| 15 m | 8 | 0 | 6 |
+| 12 m | 3 | 0 | 1 |
+| 10 m | 48 | 0 | 30 |
+| 60 m | 3 | 0 | 0 |
+
+The loudest, in dB over the antenna's noise in 50 Hz:
+
+- 29.526826 MHz, +33 (10 m), and 29.162850 and 29.344836 MHz, +25 and
+  +22: the si5351's group 182 kHz apart (12), each with its image (13)
+  48 kHz up, +10 to +18;
+- 10.145584 MHz, +32: near the top of 30 m, 4 × clk1 − 6 × 25 MHz;
+- 14.308440 MHz, +24: in 20 m's SSB segment, the si5351's;
+- the 48 kHz comb (11): 30 lines on 10 m at +5 to +21, six on 15 m at
+  +2 to +12, one each on 12 and 17 m — in survey A, when the comb was
+  4–5 dB stronger than in the later ones;
+- 3.980863 MHz, +12, in 80 m's phone segment, the si5351's;
+- the fixed offset at +364 Hz (+301 Hz later), heard in USB at every
+  dial on 10–17 m at +7 to +9 — but at the passband's 300 Hz edge,
+  where the filter takes some of it.
+
+40 m has nothing heard, and 20 m only two. Not in these lists: the
+strongest single-dial lines (3.655, 7.300, 28.62 MHz), which a 5 kHz
+survey doesn't classify (`--range` at small steps would).
+
 ## 3. What removes which
 
 The question was whether spurs are addressed by board layout, better
@@ -733,6 +786,28 @@ noise floor, checking that each is found once, in its class, at the
 right frequency and level, and that nothing is reported from noise
 alone.
 
+### 4.9 Which are heard
+
+`--audible DUMMY_spurs.csv ANTENNA_bands.csv` judges a dummy-load run's
+spurs against the antenna's noise, from another run's `_bands.csv` made
+with the antenna connected. For each spur it works out the dials where
+it lands in a passband — the CW filter, `--cw-width` (300 Hz) wide
+around the pitch, so offsets within ±150 Hz of the dial in CW and CWR;
+SSB 300–3000 Hz, LSB below 10 MHz, USB above and on 60 m, none on 30 m
+— from its line (offset = slope × (dial − crossing)) within the dials it
+was seen from, and its margin: its level (dBFS) less the band's antenna
+floor taken in `--ear-hz` (50 Hz). 50 Hz is about the bandwidth the ear
+picks a steady tone out of noise with, so a tone at 0 dB is about at
+the edge of hearing, even though it is 17 dB under the noise in the
+whole 2.7 kHz. Spurs at 0 dB or more are listed worst first, then those
+within 6 dB under, 60 m last; a fixed offset within 100 Hz of a
+passband edge is marked, since the filter is rolling off there. Fixed-RF
+spurs with no suspects (runs before the comb was added) get the clock
+suspects worked out again.
+
+The antenna's noise is one afternoon's: it rises when a band opens and
+at night on the low bands. A quiet band is the worst case.
+
 ## 5. Other sources
 
 **The noise generator** is for shapes, not spurs: it raises the floor
@@ -763,6 +838,10 @@ Taken (29 October 2026):
 3. Detection threshold 7 dB and dwell 0.4 s.
 4. The dummy-load survey is in `08_troubleshooting_and_bringup.md`,
    "The receiver's own spurs".
+5. The aim from here: the spurs heard by ear over the antenna's noise,
+   working CW and SSB; 60 m after every other band (§2.6).
+6. `--audible` built to list them (§4.9), with 50 Hz as the bandwidth
+   the antenna's noise is taken in.
 
 Still open:
 
