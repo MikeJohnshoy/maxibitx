@@ -524,14 +524,26 @@ proposed:
   answer to a request can't reach the next transmission.
 - **TX_CHRONO pacing.** 1024 stereo frames per request; requests are
   sent while what is queued plus what is requested falls below
-  `tx_stream_audio_buffering` plus one request (so four at the start at
-  the default 50 ms), at most eight per 5 ms tick. Requests left
+  `tx_stream_audio_buffering`, but at least 250 ms, plus one request
+  (so thirteen at the start), at most eight per 5 ms tick. Requests left
   unanswered for 300 ms are forgotten, since a client may skip them.
+  The floor came from the running-dry report below: WSJT-X on Windows
+  answered 150-195 ms late at times, past the 71 ms the 50 ms default
+  kept asked for. It doesn't delay the start, since the audio thread
+  plays the first audio as it arrives.
+- **trx false plays out what is queued.** A client hands over its audio
+  as it is asked for, up to the 271 ms ahead, and sends `trx:0,false;`
+  once it has handed over the last of it. From the client holding TX
+  with its own audio, and with audio queued, trx false stops the
+  requests and holds TX until the queue is empty (at most 300 ms),
+  then drops TX and echoes. A second trx from that client meanwhile
+  ends it first; a disconnect or TX dropped elsewhere ends it too.
 - **Running dry.** If the ring is short once audio has started, the
   audio thread transmits silence for what is missing and counts it; the
   end of the transmission prints one line with the count, the silence,
-  the longest wait between the client's frames and how long the first
-  audio took (`MAXIBITX_TCI_TX_TIMING=1`: every transmission).
+  the longest wait between the client's frames, how long the first
+  audio took, how long TX was held after trx false and what was left
+  unplayed (`MAXIBITX_TCI_TX_TIMING=1`: every transmission).
   Added after occasional runs of two or three short gaps in WSJT-X's FT8
   over TCI, October 2026.
 - **I/Q orientation.** Sent conjugated, so a station above the dial is
