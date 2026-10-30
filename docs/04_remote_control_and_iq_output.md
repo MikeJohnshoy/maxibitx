@@ -407,8 +407,10 @@ client has started that stream.
 **Transmit audio.** A client that keys with `trx:0,true,tci;` supplies
 the transmit audio, in USB, LSB or DIGITAL; the TCI server sends it
 TX_CHRONO frames, each asking for 1024 stereo frames, keeping its
-`tx_stream_audio_buffering` (50 ms by default) requested ahead of what
-the audio thread still has to play. While TCI isn't supplying audio the
+`tx_stream_audio_buffering` (50 ms by default), but at least 250 ms,
+requested ahead of what the audio thread still has to play. Its
+`trx:0,false;` holds TX until what it has sent has played, at most
+300 ms. While TCI isn't supplying audio the
 audio thread discards anything in that ring every block, so a
 transmission never starts with audio left from the last. Without the
 `tci` source, PTT behaves as rigctld's `T` does: DIGITAL takes the USB
