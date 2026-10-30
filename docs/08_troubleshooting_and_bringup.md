@@ -290,19 +290,25 @@ transmitting releases TX and says so.
 
 **Short gaps in the transmitted audio.** TCI transmit audio is pulled:
 maxibitx asks the client for it about 21 ms at a time (TX_CHRONO),
-keeping `tx_stream_audio_buffering` (50 ms unless the client sets it)
-plus one request asked for ahead. If the client's answers come late -
-Windows scheduling the client late, Wi-Fi power saving, a busy network -
-the audio thread finds nothing to send and transmits silence until they
-arrive. At the end of a transmission where that happened, the console
-says so:
+keeping `tx_stream_audio_buffering` (50 ms unless the client sets it),
+but at least 250 ms, plus one request asked for ahead. If the client's
+answers come later than that - Windows scheduling the client late,
+Wi-Fi power saving, a busy network - the audio thread finds nothing to
+send and transmits silence until they arrive. At the end of a
+transmission where that happened, the console says so:
 
 ```
-tci: TX audio ran dry 3 times this transmission, 32 ms of silence; longest wait between the client's audio frames 96 ms, first audio 41 ms after TX on (71 ms asked for ahead)
+tci: TX audio ran dry 1 time this transmission, 41 ms of silence; longest wait between the client's audio frames 312 ms, first audio 110 ms after TX on (271 ms asked for ahead); TX held 262 ms after trx false, 0 ms unplayed
 ```
 
-A longest wait well past the time asked for ahead is the client or the
-network stalling. The wait for the first answers at the start of a
+A longest wait past the time asked for ahead is the client or the
+network stalling. (WSJT-X on Windows has been seen to wait 150-195 ms,
+which the 50 ms default didn't cover: hence the 250 ms floor.) The
+first audio's delay is the client's: it delays the transmission, and
+others see the DT that much higher. Since the client hands over its
+last audio well before it is on the air, a `trx:0,false;` holds TX until
+that has played - "TX held" - for at most 300 ms; anything still
+unplayed then is cut, and says so. The wait for the first answers at the start of a
 transmission, and the client stopping its audio before it drops TX at
 the end, aren't counted. `MAXIBITX_TCI_TX_TIMING=1` prints the line for
 every TCI transmission, dry or not, to see how much margin there is.
