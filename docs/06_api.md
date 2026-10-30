@@ -398,7 +398,7 @@ reserved - followed by the samples.
 | `audio_samplerate:8000\|12000\|24000\|48000;` | Lower rates through a decimating lowpass at 0.45 of the new rate. |
 | `audio_stream_sample_type:int16\|int24\|int32\|float32;`, `audio_stream_channels:1\|2;`, `audio_stream_samples:100-2048;` | Format, channels, and length per frame (default 2048 at 48 kHz, 1024 at 24, 512 at 12, 256 at 8). |
 | `iq_start:0;` / `iq_stop:0;`, `iq_samplerate:48000\|96000;` | I/Q, float32 complex, centred on the dial. 96 kHz (the default) as captured; 48 kHz decimated, flat to about ±18 kHz. 192 and 384 kHz aren't available and are answered with the rate in force. Unlike iq_stream and HPSDR, TCI's I/Q is the conventional way up: a station above the dial is at positive frequency (confirmed with sdrOxide). |
-| `tx_stream_audio_buffering:50-500;` | Transmit audio kept requested ahead, ms (default 50). |
+| `tx_stream_audio_buffering:50-500;` | Transmit audio kept requested ahead, ms (default 50). maxibitx keeps at least 250 ms asked for, whatever is set; the value set is what is echoed. |
 
 **PTT and transmit audio.** `trx:0,true,tci;` keys the transmitter with
 this client supplying the audio, in USB, LSB or DIGITAL: the server sends
@@ -412,7 +412,10 @@ USB gadget's audio, and USB, LSB and CW transmit nothing of their own.
 In every case: refused outside the `[tx_band]` table (answered
 `trx:0,false;`), ignored while the local key holds TX, ignored from other
 TCI clients while one holds TX (so one can't unkey another), and
-released if the client that set it disconnects.
+released if the client that set it disconnects. `trx:0,false;` from a
+client supplying its own audio holds TX until the audio already sent
+has played (at most 300 ms; a client hands over its last audio well
+before it is on the air), and is echoed when TX drops.
 
 **CW text**, in CW and CWR only (ignored, with a console line, in other
 modes), sent by the keyer as rigctld's `b` is - at the keyer's speed,
