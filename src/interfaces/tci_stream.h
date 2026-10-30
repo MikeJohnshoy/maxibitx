@@ -40,19 +40,25 @@ void tci_stream_set(int slot, const struct tci_stream_cfg *cfg);
 
 // TX audio from a client: begin makes it the source tci_pull_audio_tx()
 // reads and starts sending it TX_CHRONO frames, keeping buffering_ms
-// requested ahead; end stops both.
+// requested ahead (250 ms at least); end stops both. drain stops the
+// requests and leaves what is queued for the audio thread to play, before
+// an end; queued_frames is how much that is (48 kHz frames).
 void tci_stream_tx_begin(int slot, int buffering_ms);
 void tci_stream_tx_end(void);
+void tci_stream_tx_drain(void);
+long tci_stream_tx_queued_frames(void);
 
 // How the last transmission's TCI audio kept up, filled in by
 // tci_stream_tx_end(), which prints it when the audio ran dry. dry_events:
 // times the audio thread found the ring short once audio had started and
 // before it came back; silence_ms: what was played as silence then;
 // max_gap_ms: the longest wait between two of the client's TX audio frames;
-// first_audio_ms: from TX on to the first, -1 if none came.
+// first_audio_ms: from TX on to the first, -1 if none came; held_ms: how
+// long TX stayed up after the client's trx false, playing out what was
+// queued; unplayed_ms: what was still queued when TX dropped.
 struct tci_tx_stats {
   unsigned long dry_events;
-  double silence_ms, max_gap_ms, first_audio_ms;
+  double silence_ms, max_gap_ms, first_audio_ms, held_ms, unplayed_ms;
 };
 void tci_stream_tx_stats(struct tci_tx_stats *s);
 
