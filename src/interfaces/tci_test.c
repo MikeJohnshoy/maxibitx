@@ -588,7 +588,8 @@ static void test_tx(void) {
         "trx with source tci: TX on, audio from the client's stream");
   struct frame chronos[8];
   int n = chronos_within(a, 150, chronos, 8);
-  CHECK(n == 4, "%d TX_CHRONO (48 kHz float32 stereo, length 2048) - 50 ms + one request ahead", n);
+  CHECK(n == 13, "%d TX_CHRONO (48 kHz float32 stereo, length 2048) - 250 ms, the least kept "
+                 "ahead whatever the client asks, + one request", n);
   CHECK(chronos_within(b, 100, NULL, 0) == 0, "none to the client that didn't key");
   float value = 0.0f;
   for (int k = 0; k < n && k < 8; k++) {
@@ -596,7 +597,7 @@ static void test_tx(void) {
     free(chronos[k].data);
   }
   usleep(100000);
-  double out[4096];
+  double out[8192];
   int got = tci_pull_audio_tx(out, 4096);
   double worst = 0.0;
   for (int k = 0; k < got; k++)
@@ -632,7 +633,7 @@ static void test_tx(void) {
     free(chronos[k].data);
   }
   usleep(100000);
-  got = tci_pull_audio_tx(out, 4096);
+  got = tci_pull_audio_tx(out, 8192);
   int more = chronos_within(a, 150, chronos, 8);
   int dry = tci_pull_audio_tx(out, 512);
   for (int k = 0; k < more && k < 8; k++) {
@@ -647,12 +648,54 @@ static void test_tx(void) {
   expect(b, "trx:0,false;", 1000);
   struct tci_tx_stats st;
   tci_stream_tx_stats(&st);
-  CHECK(before == 0 && got == 4096 && more == 4 && dry == 0 && back == 512 && st.dry_events == 1 &&
+  CHECK(before == 0 && got == 8192 && more == 8 && dry == 0 && back == 512 && st.dry_events == 1 &&
             fabs(st.silence_ms - 512 / 48.0) < 0.01 && st.max_gap_ms > 50 && st.first_audio_ms >= 0,
         "TX audio ran dry %lu time(s), %.1f ms of silence (one 512-sample pull), longest wait %.0f ms "
         "- the start and the end not counted",
         st.dry_events, st.silence_ms, st.max_gap_ms);
   (void)tail;
+  tci_tx_audio_idle();
+  drain(a);
+  drain(b);
+
+  // trx false while audio is still queued: TX is held until it has played.
+  send_text(a, "trx:0,true,tci;");
+  expect(b, "trx:0,true;", 1000);
+  n = chronos_within(a, 150, chronos, 8);
+  for (int k = 0; k < n && k < 8; k++) {
+    answer_chrono(a, &chronos[k], &value);
+    free(chronos[k].data);
+  }
+  usleep(50000);
+  tci_pull_audio_tx(out, 2048); // 6144 frames (128 ms) left
+  drain(b);
+  send_text(a, "trx:0,false;");
+  gather(b, 60, txt, sizeof(txt));
+  CHECK(in_tx && !strstr(txt, "trx:0,false;"), "trx false with 128 ms queued: TX held to play it");
+  tci_pull_audio_tx(out, 4096);
+  tci_pull_audio_tx(out, 2048);
+  CHECK(expect(b, "trx:0,false;", 200) && !in_tx, "and dropped, and echoed, once it has played");
+  tci_stream_tx_stats(&st);
+  CHECK(st.held_ms > 50 && st.held_ms < 200 && st.unplayed_ms == 0,
+        "held %.0f ms after trx false, %.0f ms unplayed", st.held_ms, st.unplayed_ms);
+  tci_tx_audio_idle();
+  drain(a);
+  drain(b);
+
+  send_text(a, "trx:0,true,tci;");
+  expect(b, "trx:0,true;", 1000);
+  n = chronos_within(a, 150, chronos, 8);
+  for (int k = 0; k < n && k < 8; k++) {
+    answer_chrono(a, &chronos[k], &value);
+    free(chronos[k].data);
+  }
+  usleep(50000);
+  tci_pull_audio_tx(out, 512);
+  send_text(a, "trx:0,false;"); // and the audio thread stops reading
+  CHECK(expect(b, "trx:0,false;", 600) && !in_tx, "audio that never plays: TX drops anyway");
+  tci_stream_tx_stats(&st);
+  CHECK(st.held_ms >= 290 && st.held_ms < 400 && st.unplayed_ms > 100,
+        "after %.0f ms (at most 300), %.0f ms left unplayed", st.held_ms, st.unplayed_ms);
   tci_tx_audio_idle();
   drain(a);
   drain(b);
