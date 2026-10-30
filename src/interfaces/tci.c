@@ -24,8 +24,11 @@
 // PTT follows the rules rigctld T and CAT TX follow - refused outside the
 // [tx_band] table, ignored while the local key holds TX - plus: trx with
 // source "tci" takes the transmit audio from that client's stream; while one
-// TCI client holds TX, the others' trx is ignored; and a client that
-// disconnects while holding TX releases it.
+// TCI client holds TX, the others' trx is ignored; a client that
+// disconnects while holding TX releases it; and trx false from a client
+// sending its own audio holds TX until what is queued of it has played (at
+// most TCI_TX_DRAIN_MAX_MS) - a client hands over its last audio well ahead
+// of the air, then drops TX at once - and is echoed when TX drops.
 
 #define _GNU_SOURCE
 #include "tci.h"
@@ -55,6 +58,7 @@
 #define TCI_VFO_MAX 30000000
 #define TCI_MAX_ARGS 8
 #define TCI_UNMUTE_DEFAULT_PERCENT 67
+#define TCI_TX_DRAIN_MAX_MS 300 // trx false waits at most this for queued audio
 
 struct client {
   int in_use, id;
@@ -73,6 +77,7 @@ static struct client clients[WS_MAX_CLIENTS];
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static struct state pub;
 static int tx_owner = -1;    // slot whose trx holds TX, -1 none
+static long long drain_until; // trx false waiting for queued audio: its deadline, else 0
 static int unmute_percent = TCI_UNMUTE_DEFAULT_PERCENT;
 static int trace;            // MAXIBITX_TCI_TRACE: print every message
 static atomic_int running;
@@ -259,10 +264,32 @@ static void publish_changes(void) {
 
 static void tx_release_owner(void) {
   tx_owner = -1;
+  drain_until = 0;
   tci_stream_tx_end();
 }
 
+// TX off for the client holding it, and the echo.
+static void tx_off(int slot) {
+  if (in_tx && !cw_tx_active())
+    radio_set_tx(0);
+  if (tx_owner >= 0)
+    printf("tci: client %d TX off\n", slot);
+  tx_release_owner();
+  struct state s;
+  snapshot(&s);
+  pub_tx(&s);
+}
+
+// From the service thread: a trx false waiting for queued audio is done
+// once it has played, the deadline has passed, or TX dropped elsewhere.
+static void drain_service(void) {
+  if (drain_until && (tci_stream_tx_queued_frames() == 0 || now_ms() >= drain_until || !in_tx))
+    tx_off(tx_owner);
+}
+
 static void cmd_trx(int slot, int on, const char *source) {
+  if (drain_until && tx_owner == slot)
+    tx_off(slot); // a second trx while the first's audio plays out
   if (cw_tx_active()) {
     printf("tci: trx from client %d ignored - the local key holds TX\n", slot);
   } else if (tx_owner >= 0 && tx_owner != slot) {
@@ -285,11 +312,14 @@ static void cmd_trx(int slot, int on, const char *source) {
              : radio_get_mode() == RADIO_MODE_DIGITAL ? "the USB gadget"
                                                         : "no TCI stream");
     }
+  } else if (tx_owner == slot && in_tx && tci_tx_audio_owned() &&
+             tci_stream_tx_queued_frames() > 0) {
+    tci_stream_tx_drain(); // echoed by tx_off() once it has played
+    drain_until = now_ms() + TCI_TX_DRAIN_MAX_MS;
+    return;
   } else {
-    radio_set_tx(0);
-    if (tx_owner >= 0)
-      printf("tci: client %d TX off\n", slot);
-    tx_release_owner();
+    tx_off(slot);
+    return;
   }
   struct state s;
   snapshot(&s);
@@ -701,7 +731,7 @@ static void on_close(int id) {
     if (tx_owner == slot) {
       if (in_tx && !cw_tx_active())
         radio_set_tx(0);
-      tx_release_owner();
+      tx_release_owner(); // and any trx false still playing out
       printf("tci: client %d disconnected while holding TX - TX released\n", slot);
     }
     tci_stream_close(slot);
@@ -740,6 +770,7 @@ static void *service_main(void *arg) {
     clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next, NULL);
     pthread_mutex_lock(&lock);
     tci_stream_service();
+    drain_service();
     tci_cw_service();
     if (tick % TCI_STATE_TICKS == 0) {
       if (tx_owner >= 0 && !in_tx)
