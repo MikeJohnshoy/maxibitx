@@ -17,7 +17,8 @@
 // Transmit audio is pulled: the client that holds TX is sent TX_CHRONO
 // frames asking for 1024 stereo frames each, enough to keep its
 // tx_stream_audio_buffering requested ahead of what the audio thread has
-// still to play, and answers each with a TX audio frame. What arrives is
+// still to play - at least TCI_TX_MIN_AHEAD_MS, whatever the client asks -
+// and answers each with a TX audio frame. What arrives is
 // trusted by the header's length alone (JTDX leaves channels unset and pads
 // the payload): stereo is assumed, and the left channel is used. If the
 // audio thread finds the ring short once audio has started arriving, it
@@ -48,6 +49,11 @@
 #define IQ_FRAME_SAMPLES 2048 // complex samples per I/Q frame at 96 kHz (21 ms)
 #define TX_CHRONO_TIMEOUT_NS 300000000LL // requests unanswered this long are forgotten
 #define TX_CHRONO_MAX_PER_SERVICE 8
+// The least kept asked for ahead. WSJT-X on Windows has been seen to answer
+// a request 150-195 ms late, longer than the 50 ms default (plus one
+// request) covers. It doesn't delay the start: the audio thread plays the
+// first audio as it comes.
+#define TCI_TX_MIN_AHEAD_MS 250
 
 #define AUDIO_TAPS_MAX 191
 #define IQ_TAPS 95
@@ -216,7 +222,13 @@ static struct {
   long outstanding; // frames asked for and not yet received
   long long last_ns;
   long long begin_ns, first_ns, prev_ns, max_gap_ns; // TX audio frames' arrivals
+  int draining;
+  long long drain_ns; // when tci_stream_tx_drain() was called
 } tx;
+
+static int ahead_ms(void) {
+  return tx.buffering_ms > TCI_TX_MIN_AHEAD_MS ? tx.buffering_ms : TCI_TX_MIN_AHEAD_MS;
+}
 
 static int report_every; // MAXIBITX_TCI_TX_TIMING
 static struct tci_tx_stats last_stats;
@@ -442,16 +454,16 @@ void tci_stream_service(void) {
   }
   atomic_store_explicit(&iq_tail, tail, memory_order_release);
 
-  // TX_CHRONO: keep buffering_ms plus one request's worth asked for ahead of
-  // what is queued for the audio thread.
-  if (tx.active) {
+  // TX_CHRONO: keep ahead_ms() plus one request's worth asked for ahead of
+  // what is queued for the audio thread; nothing more once it is draining.
+  if (tx.active && !tx.draining) {
     long long now = now_ns();
     if (tx.outstanding > 0 && now - tx.last_ns > TX_CHRONO_TIMEOUT_NS) {
       tx.outstanding = 0; // the client let them go unanswered, as it may
       tx.last_ns = now;
     }
     long queued = (long)(atomic_load(&tx_head) - atomic_load(&tx_tail));
-    long target = (long)tx.buffering_ms * 48 + TCI_CHRONO_FRAMES;
+    long target = (long)ahead_ms() * 48 + TCI_CHRONO_FRAMES;
     for (int k = 0; k < TX_CHRONO_MAX_PER_SERVICE && queued + tx.outstanding < target; k++) {
       if (tx.outstanding == 0)
         tx.last_ns = now;
@@ -470,6 +482,8 @@ void tci_stream_tx_begin(int slot, int buffering_ms) {
   tx.outstanding = 0;
   tx.last_ns = tx.begin_ns = now_ns();
   tx.first_ns = tx.prev_ns = tx.max_gap_ns = 0;
+  tx.draining = 0;
+  tx.drain_ns = 0;
   atomic_store(&dry_events, 0);
   atomic_store(&dry_frames, 0);
   atomic_fetch_add(&tx_gen, 1);
@@ -482,6 +496,8 @@ static void tx_report(void) {
   s->silence_ms = atomic_load(&dry_frames) / 48.0;
   s->max_gap_ms = tx.max_gap_ns / 1e6;
   s->first_audio_ms = tx.first_ns ? (tx.first_ns - tx.begin_ns) / 1e6 : -1.0;
+  s->held_ms = tx.draining ? (now_ns() - tx.drain_ns) / 1e6 : 0.0;
+  s->unplayed_ms = tci_stream_tx_queued_frames() / 48.0;
   if (!s->dry_events && !(report_every && tx.first_ns))
     return;
   if (s->dry_events)
@@ -490,8 +506,20 @@ static void tx_report(void) {
   else
     printf("tci: TX audio never ran dry this transmission; ");
   printf("longest wait between the client's audio frames %.0f ms, first audio %.0f ms after "
-         "TX on (%d ms asked for ahead)\n",
-         s->max_gap_ms, s->first_audio_ms, tx.buffering_ms + TCI_CHRONO_FRAMES / 48);
+         "TX on (%d ms asked for ahead); TX held %.0f ms after trx false, %.0f ms unplayed\n",
+         s->max_gap_ms, s->first_audio_ms, ahead_ms() + TCI_CHRONO_FRAMES / 48, s->held_ms,
+         s->unplayed_ms);
+}
+
+long tci_stream_tx_queued_frames(void) {
+  return (long)(atomic_load(&tx_head) - atomic_load(&tx_tail));
+}
+
+void tci_stream_tx_drain(void) {
+  if (tx.active && !tx.draining) {
+    tx.draining = 1;
+    tx.drain_ns = now_ns();
+  }
 }
 
 void tci_stream_tx_end(void) {
