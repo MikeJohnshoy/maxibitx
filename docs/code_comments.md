@@ -19,6 +19,52 @@ machine code across the whole build:
 | `src/tx_pipeline.c` | 161 -> 48 |
 | `src/tx_pipeline.h` | 138 -> 59 |
 
+The second pass, 31 October 2026, checked the comments against the code
+as well as against the policy. Every object's code and data, and every
+file's comment-free token stream, compared identical before and after.
+Counts here are lines carrying a comment, so they don't compare with the
+table above:
+
+| file | comment lines before -> after |
+|---|---|
+| `src/rx_audio.h` | 263 -> 221 |
+| `src/rx_filter.h` | 142 -> 90 |
+| `src/rx_filter.c` | 43 -> 26 |
+| `src/fft_filter.h` | 137 -> 113 |
+| `src/fft_filter.c` | 159 -> 133 |
+| `src/interfaces/hpsdr_p1.c` | 176 -> 170 |
+| `src/interfaces/hpsdr_p1.h` | 1 -> 2 |
+| `src/interfaces/iq_stream.c` | 95 -> 91 |
+| `src/interfaces/iq_stream.h` | 34 -> 30 |
+| `src/upsample48k.h` | 51 -> 35 |
+| `src/upsample48k.c` | 25 -> 25 |
+| `src/decim48k.h` | 21 -> 22 |
+| `src/decim48k.c` | 22 -> 17 |
+| `src/antialias.h` | 18 -> 19 |
+| `src/gpio.h` | 58 -> 48 |
+| `src/gpio.c` | 12 -> 11 |
+| `src/i2c.h` | 11 -> 15 |
+| `src/i2c.c` | 42 -> 34 |
+| `src/si5351v2.c` | 62 -> 56 |
+| `src/vfo.h` | 1 -> 2 |
+| `src/vfo.c` | 23 -> 22 |
+| `src/hw_settings.h` | 107 -> 100 |
+| `src/hw_settings.c` | 46 -> 45 |
+| `src/maxibitx.c` | 117 -> 116 |
+
+Read line by line and found current: `antialias.c`, `si5351.h`,
+`radio_hw.c`, `radio_hw.h`. The files written after the policy was
+adopted were checked more lightly - their headers, every function a
+comment names, and `make check-comments-all` - and needed one-line fixes
+only (`tci.c`, `tone_gen.h`, and `rx_audio.c` from the first table):
+`tci.c/.h`, `tci_stream.c/.h`, `tci_ws.c/.h`, `tci_cw.c/.h`,
+`keyer.c/.h`, `keyer_straight.c`, `key_input.c/.h`, `morse.c/.h`,
+`cw_decoder.c/.h`, `cw_spot.c/.h`, `encoder.c/.h`, `knobs.c/.h`,
+`codec_check.c/.h`, `capture_dump.c/.h`, `tone_gen.c/.h`, and the
+generated `narrow_filter_bank.h`. Not yet reviewed: the bench tests
+(`src/*_test.c`) and the Makefile, whose comments still carry build
+history.
+
 This project records its engineering history carefully, and that record
 is worth keeping. But source comments are read by someone trying to
 change the code *as it is now*, and a paragraph about a design that no
