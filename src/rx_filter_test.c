@@ -26,8 +26,8 @@
 //   at a range of offsets from pitch, reporting the -3dB/-20dB/-60dB
 //   crossing points (interpolated between measured points, same
 //   methodology step 2's transition-width number used) - the real,
-//   bench-measured answer to rx_filter.h's derivation comment ("a
-//   ~100Hz target transition"), not just trusting the Harris-formula
+//   bench-measured answer to rx_filter.h's sizing comment (a transition
+//   nearer 100Hz), not just trusting the Harris-formula
 //   estimate that picked RX_FILTER_IMPULSE_LEN in the first place.
 // Case C - live retune sanity check: confirms rx_filter_retune()
 //   actually moves the passband at runtime (stronger than
