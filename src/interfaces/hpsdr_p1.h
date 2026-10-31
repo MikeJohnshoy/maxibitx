@@ -1,3 +1,5 @@
+// hpsdr_p1.h - the openHPSDR Protocol 1 server (hpsdr_p1.c).
+
 #ifndef HPSDR_P1_H
 #define HPSDR_P1_H
 
