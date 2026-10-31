@@ -1,7 +1,9 @@
 // antialias.h
 //
-// cleans up the self-image that synthesizing I/Q from a
-// single real ADC channel produces near the +-48kHz Nyquist edges.
+// Cleans up the self-image that synthesizing I/Q from a single real ADC
+// channel produces near the +-48kHz Nyquist edges: sound_process() runs
+// I and Q through it right after the fs/4 mix, before any I/Q consumer.
+// docs/dsp_design_notes/antialias_filter_design.md has the design.
 
 #ifndef ANTIALIAS_H
 #define ANTIALIAS_H
@@ -15,9 +17,8 @@
 // Double-length history buffer: every new sample is written at two
 // mirrored positions (see antialias_apply()), so the convolution always
 // reads a contiguous window with no modulo/wraparound check inside the
-// loop - that branch was the one thing stopping GCC from vectorizing
-// this at -O3. That gcc optimization cuts the cpu impact by half (though
-// the cpu impact of this filter was very low to start with)
+// loop - such a branch stops GCC vectorizing it at -O3, which halves this
+// (already small) filter's CPU cost.
 struct antialias_state {
     double hist[2 * ANTIALIAS_TAPS];
     int pos;   // write cursor, always in [0, ANTIALIAS_TAPS)
