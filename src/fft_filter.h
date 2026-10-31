@@ -8,27 +8,18 @@
 // elliptic bank offering a fixed set of pitches and widths.
 //
 // The frequency-domain design math (make_kaiser/window_filter/
-// filter_tune) is ported near-verbatim from real sbitx's
-// mj_zbitx/src/fft_filter.c - it's a proven, working technique, not
-// something worth re-deriving from scratch. What's NOT copied from
-// sbitx is how a live block gets convolved: sbitx does that with
-// several global buffers (fft_in/fft_out/fft_m) shared across every
-// filter instance and every mode, which is exactly the kind of
-// hidden-coupling this project is trying to avoid (see
-// docs/ARCHITECTURE.md §2). Here, filter_run() is self-contained: each
-// `struct filter` owns its own FFT scratch buffers, its own saved
-// overlap history, and its own FFTW plans, so two instances (e.g. a TX
-// filter and an RX filter) can run independently with nothing shared
-// between them.
+// filter_tune) is ported near-verbatim from sbitx's fft_filter.c
+// (mj_zbitx/src/fft_filter.c). The block convolution is not: sbitx shares
+// global buffers (fft_in/fft_out/fft_m) across every filter and mode,
+// where here each `struct filter` owns its FFT scratch buffers, its
+// overlap history and its FFTW plans, so instances (a TX filter and an RX
+// filter) run independently with nothing shared (docs/ARCHITECTURE.md
+// §2).
 //
-// Precision: single precision (fftwf/complex float) throughout, for
-// both the design math and the per-block convolution - unlike real
-// sbitx, which mixes fftwf (design) with plain fftw/double (block
-// convolution). float matches struct filter's own fir_coeff type
-// (already complex float even in sbitx), avoids linking two precisions
-// of FFTW, and vectorizes on the Pi's NEON unit, which has no
-// double-precision SIMD - see antialias.c's branch-free loop for the
-// same reasoning applied elsewhere in this tree.
+// Precision: single precision (fftwf/complex float) throughout, design
+// and convolution alike (sbitx convolves in double). It matches
+// fir_coeff's type, avoids linking two precisions of FFTW, and
+// vectorizes on the Pi's NEON unit, which has no double-precision SIMD.
 
 #ifndef FFT_FILTER_H
 #define FFT_FILTER_H
@@ -37,7 +28,7 @@
 #include <fftw3.h>
 
 struct filter {
-	int L;   // new input samples consumed per filter_run() call
+	int L;   // new input samples consumed per filter_forward()/filter_inverse() pair
 	int M;   // impulse response length (design-time only)
 	int N;   // FFT size, L + M - 1
 
@@ -51,47 +42,31 @@ struct filter {
 };
 
 // Allocates a filter sized for `block_len` new samples per call and an
-// `impulse_len`-long impulse response (impulse_len - 1 must not exceed
-// block_len for the FFT-size math below to make sense the way sbitx's
-// own 1024/1025 choice does - see filter_tune()'s header for why 1025,
-// not 1024 or 1026). Builds both FFTW plans up front with FFTW_MEASURE:
-// spends real time up front finding the fastest algorithm for this
-// machine, paid once at startup, not per block - see filter_tune()'s
-// comment on wisdom-file caching, not yet done here. Coefficients are
-// all-zero (full stop) until filter_tune() is called at least once.
-//
-// A thin wrapper over filter_new_ex() below, fixed at FFTW_MEASURE -
-// every caller that existed before filter_new_ex() (tx_pipeline.c, both
-// bench harnesses) keeps this exact behavior, unchanged.
+// `impulse_len`-long impulse response; the FFT size N is their sum less
+// one (sbitx's 1024/1025 gives 2048). Builds both FFTW plans up front
+// with FFTW_MEASURE: a search for this machine's fastest algorithm, paid
+// once at start-up (there is no wisdom-file cache), not per block.
+// Coefficients are all-zero (full stop) until filter_tune() is called.
+// A wrapper over filter_new_ex() at FFTW_MEASURE (tx_pipeline.c, the
+// bench harnesses).
 struct filter *filter_new(int block_len, int impulse_len);
 
-// Same as filter_new(), but with the FFTW plan-creation flags
-// (FFTW_MEASURE, FFTW_ESTIMATE, ...) exposed as a parameter instead of
-// hard-coded. Added at docs/ARCHITECTURE.md step 7's real-hardware
-// follow-up: rx_filter.c's RX_FILTER_N=4096 is bigger than
-// tx_pipeline.c's TX_PIPELINE_N=2048, and rx_audio_init() now pays that
-// FFTW_MEASURE search *in addition to* tx_pipeline.c's own (both run
-// during maxibitx's own startup sequence - see maxibitx.c), which is
-// what actually produced the user-visible extra startup delay reported
-// after wiring rx_filter.c in live. FFTW_ESTIMATE trades that one-time
-// search away for a good-enough (not necessarily fastest) plan chosen
-// immediately, the same trade window_filter() below already makes for
-// its own throwaway per-retune plans - the difference here is this
-// plan is the one reused every live audio block, so the per-block cost
-// of ESTIMATE (not just its startup savings) has to actually be
-// measured, not assumed, before relying on it for anything time-
-// critical. rx_filter.c is the first caller; filter_new() above stays
-// on FFTW_MEASURE for everyone else.
+// filter_new() with the FFTW plan flags (FFTW_MEASURE, FFTW_ESTIMATE, ...)
+// as a parameter. FFTW_ESTIMATE skips the search for a good-enough plan at
+// once - rx_filter.c uses it, so its N=4096 search doesn't add to
+// tx_pipeline.c's at start-up. That plan runs every block, so its
+// per-block cost is what to check (ARCHITECTURE.md §10 step 7's
+// follow-up).
 struct filter *filter_new_ex(int block_len, int impulse_len, unsigned fftw_flags);
 
 // (Re)designs the passband: everything in the normalized range
 // [low, high) (each a fraction of the sample rate, e.g. -0.5..0.5, same
 // convention as sbitx's own filter_tune()) passes; everything else is
 // stopped, with edges shaped by a Kaiser window of the given beta
-// (~5.0 for sbitx's proven ~54dB stopband target - see
-// docs/ARCHITECTURE.md §4's Kaiser-beta derivation). Safe to call again
-// at any time (e.g. live pitch/width changes) - it only touches
-// fir_coeff, not the running overlap-save state in history/time/freq.
+// (5.0 for sbitx's ~54dB stopband, docs/ARCHITECTURE.md §4). Safe to call
+// again at any time (live pitch/width changes) - it only touches
+// fir_coeff, not the running overlap-save state in history/time/freq -
+// but not from the audio thread: it allocates and plans.
 //
 // This is a single, one-sided passband interval - correct for isolating
 // one sideband of an analytic/SSB-style signal under construction
@@ -111,8 +86,7 @@ int filter_tune(struct filter *f, float low, float high, float kaiser_beta);
 // convention as filter_tune() above), so a genuinely real-valued
 // signal's energy on both sides of 0 Hz survives intact - see
 // filter_tune()'s own comment for why plain filter_tune() would instead
-// discard half of it. First user: rx_filter.c (rx_audio.c's stage 3,
-// docs/ARCHITECTURE.md §5/§10 step 6).
+// discard half of it. Used by rx_filter.c (rx_audio.c's stage 3).
 int filter_tune_real(struct filter *f, float low, float high, float kaiser_beta);
 
 // Replaces the response filter_tune()/filter_tune_real() just designed
@@ -131,7 +105,9 @@ int filter_tune_real(struct filter *f, float low, float high, float kaiser_beta)
 // does by default. See fft_filter.c for how the factorization works.
 int filter_min_phase(struct filter *f);
 
-// Phase 1 of filter_run(): prepends the saved M-1-sample history to
+// One block of overlap-save convolution, in two halves so a caller can act
+// on the spectrum in between. filter_forward(): prepends the saved
+// M-1-sample history to
 // `in`'s L new complex samples, forward-FFTs the result, and multiplies
 // by fir_coeff - all unconditional, mode-independent passband work.
 // Leaves the N-point result in f->freq for the caller to inspect or
@@ -140,7 +116,7 @@ int filter_min_phase(struct filter *f);
 // Also updates history for the next call, from this call's own input.
 void filter_forward(struct filter *f, const complex float *in);
 
-// Phase 2: inverse-FFTs f->freq (as filter_forward() left it, plus
+// filter_inverse(): inverse-FFTs f->freq (as filter_forward() left it, plus
 // whatever the caller changed) into f->time, discards the first M-1
 // samples (the circular-convolution wrap-around region overlap-save
 // exists to discard), and writes the remaining L valid samples to
