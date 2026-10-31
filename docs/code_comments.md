@@ -1,3 +1,4 @@
+[code_comments.md](https://github.com/user-attachments/files/34228270/code_comments.md)
 # Code comments vs. docs
 
 Status: adopted 2026-09-21. Applied so far, each with byte-identical
@@ -61,9 +62,11 @@ only (`tci.c`, `tone_gen.h`, and `rx_audio.c` from the first table):
 `keyer.c/.h`, `keyer_straight.c`, `key_input.c/.h`, `morse.c/.h`,
 `cw_decoder.c/.h`, `cw_spot.c/.h`, `encoder.c/.h`, `knobs.c/.h`,
 `codec_check.c/.h`, `capture_dump.c/.h`, `tone_gen.c/.h`, and the
-generated `narrow_filter_bank.h`. Not yet reviewed: the bench tests
-(`src/*_test.c`) and the Makefile, whose comments still carry build
-history.
+generated `narrow_filter_bank.h`. The Makefile followed (165 comment
+lines to 118): its build history went, two test descriptions moved to the
+targets they describe, and `make -n -B` for every target, with every
+variable, came out the same before and after. The bench tests
+(`src/*_test.c`) are left as they are, by choice.
 
 This project records its engineering history carefully, and that record
 is worth keeping. But source comments are read by someone trying to
