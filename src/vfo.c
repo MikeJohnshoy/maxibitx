@@ -1,8 +1,11 @@
 // vfo.c
 //
-// derived from Farhan's original vfo.c
-// Modified and extended to enable I and Q outputs for quadrature mixing
-// The vfo_read() is preserved but vfo_read_iq() is now preferred.
+// Table-driven numerically controlled oscillators, derived from Farhan's
+// vfo.c. The phase is 16 bits (65536 counts a cycle), so a frequency is
+// set in steps of sampling_freq/65536 (1.46Hz); output is Q30 (+-2^30), from
+// a quarter-wave sine table. vfo_read() gives the sine alone (cw.c's
+// sidetone); vfo_read_iq() cosine and sine together, for quadrature mixing
+// (sound.c's fs/4 mixer, rx_audio.c's BFO).
 
 #include "vfo.h"
 #include <math.h>
@@ -11,9 +14,8 @@
 // has both endpoints of a 90 degree range
 static int phase_table[MAX_PHASE_COUNT];
 
-// Must match the real ADC capture rate (sound.c's SAMPLE_RATE) - this is
-// what vfo_start()'s phase-increment math uses to convert RX_IF_FREQ_HZ
-// into an actual NCO rate. 
+// Must match the real ADC capture rate (sound.c's SAMPLE_RATE): it is what
+// vfo_start() converts a frequency in Hz to a phase increment with.
 int sampling_freq = 96000;
 
 // the only time we call this trig function is when we initialize the table
@@ -31,9 +33,7 @@ void vfo_start(struct vfo *v, int frequency_hz, int start_phase) {
 }
 
 // figure out what quadrant we are in and read the sine value
-// for a given phase without advancing
-// This function was pulled out of vfo_read() and
-// put here to be shared by vfo_read() and vfo_read_iq()
+// for a given phase without advancing (vfo_read() and vfo_read_iq())
 static int vfo_lookup(int phase) {
   int i = 0;
   phase &= 0xffff;
@@ -48,8 +48,7 @@ static int vfo_lookup(int phase) {
   return i;
 }
 
-// this was the original function call for real-only mixing
-// we should consider replacing calls to vfo_read() with calls to vfo_read_iq() instead
+// the sine alone, for a real-only oscillator
 int vfo_read(struct vfo *v) {
   int i = vfo_lookup(v->phase);
   // increment the phase and modulo-65536
