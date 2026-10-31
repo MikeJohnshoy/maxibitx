@@ -1,8 +1,11 @@
 // rx_audio.h
 //
-// Demodulates a listenable CW tone out of the receiver's own I/Q, so the
-// operator can hear a signal through the box's own local audio output -
-// see rx_audio.c for the design.
+// The receiver's audio: demodulates the I/Q sound.c mixes down (CW, CWR,
+// USB, LSB) through the wide image-reject filter, the narrow CW filter and
+// the AGC, to the local speaker and, before the volume, to WSJT-X and TCI.
+// Also the S-meter and SPOT's receive half. rx_audio.c's header has the
+// stages; docs/02_rx_processing_pipeline.md and
+// docs/dsp_design_notes/rx_audio_demod_design.md the design.
 
 #ifndef RX_AUDIO_H
 #define RX_AUDIO_H
@@ -10,9 +13,7 @@
 #include <stdint.h>
 
 // Which stage-3 ("single signal" selectivity) implementation is in use -
-// see rx_audio_set_narrow_filter_impl() below and rx_audio.c's file
-// header ("docs/ARCHITECTURE.md build order step 6/7") for what each one
-// is.
+// see rx_audio_set_narrow_filter_impl() below.
 enum rx_narrow_filter_impl {
 	RX_NARROW_FILTER_ELLIPTIC, // 8-pole elliptic IIR from the pre-designed
 	                            // bank, src/narrow_filter_bank.h
@@ -30,10 +31,8 @@ void rx_audio_init(void);
 // range), and 0% is a true mute.
 void rx_audio_set_volume(int percent);
 
-// Current volume, 0-100, in the same units rx_audio_set_volume() takes -
-// added for hamlib.c's "l AF" (get_level) rigctld command, so a remote
-// control panel can read back the volume it didn't itself just set (e.g.
-// on connect, before ever calling set_volume).
+// Current volume, 0-100, in the same units rx_audio_set_volume() takes,
+// so a client can read back a volume it didn't set (rigctld's "l AF").
 int rx_audio_get_volume(void);
 
 // Mute: 1 silences the local speaker without changing the volume, which
@@ -42,46 +41,29 @@ int rx_audio_get_volume(void);
 void rx_audio_set_mute(int on);
 int rx_audio_get_mute(void);
 
-// The narrow, post-demodulation "single signal" selectivity filter,
-// centered on the selected CW pitch - a separate stage from the wide
-// image-reject filter upstream of it (see rx_audio.c's file header and
-// docs/dsp_design_notes/rx_audio_demod_design.md §7/§8 for why those two
-// are deliberately independent). Originally one fixed 8-pole elliptic
-// design; pitch and width are now selectable from a pre-designed bank
-// (rx_audio_set_narrow_pitch()/_width() below). An earlier revision had a
-// rx_audio_set_filter_bw() here that took an arbitrary bandwidth; that one
-// is gone deliberately, not an oversight - see rx_audio_demod_design.md
-// §8.2 for why, and note that the bank answers it differently rather than
-// reviving it, by offering only widths that were designed and measured
-// offline:
-// the SHAPE (coefficients) was fixed. Whether the operator hears it at
-// all is a different, much cheaper question - rx_audio_set_narrow_filter()
-// below just switches between the filter's output and its bypass, no
-// coefficient math involved, so it doesn't reopen that earlier decision.
-//
-// A second stage-3 implementation sits alongside the elliptic bank -
-// src/rx_filter.c/.h, the same shared FFT overlap-save engine
-// tx_pipeline.c uses. It tunes its passband continuously rather than
-// selecting from designed-in values, and its stopband keeps descending
-// where an equiripple elliptic floors out around -50dB; it pays for both
-// with a slower attack on keyed CW. Both
-// implementations run continuously regardless of which one is currently
-// selected (same "keep it warm so switching doesn't thump" reasoning the
-// enable/bypass toggle already used, just extended to cover switching
-// BETWEEN implementations too, not only on/off) - see
-// rx_audio_set_narrow_filter_impl() below and rx_audio.c's own comment
-// on why. The FFT path is the default: the on-air comparison this
-// paragraph used to be waiting on (§10 step 7) came out in its favour, on
-// continuous tuning. The bank stays selectable regardless, being the
-// faster-attacking of the two and the odd-block-size fallback.
+// Stage 3: the narrow, post-demodulation "single signal" selectivity
+// filter, centred on the selected CW pitch - a separate stage from the wide
+// image-reject filter upstream of it, deliberately independent of it
+// (docs/dsp_design_notes/rx_audio_demod_design.md §7.6, §8). Two
+// implementations, both always running so switching between them never
+// thumps:
+//   - the FFT filter (src/rx_filter.c, the shared overlap-save engine
+//     tx_pipeline.c uses) - the default. Tunes pitch and width
+//     continuously, and its stopband keeps falling where an elliptic
+//     floors out near -50dB; its keyed attack is a little slower.
+//   - an 8-pole elliptic IIR from a bank designed offline
+//     (src/narrow_filter_bank.h): the faster attack, and the fallback for
+//     a block that isn't RX_FILTER_BLOCK_LEN long.
+// Pitch and width are chosen from the bank's values for both (below);
+// there is no arbitrary-bandwidth setter, by design (rx_audio_demod_
+// design.md §8.2). docs/dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md
+// compares the two, §16 on the default.
 
 // Enable (1, the default) or bypass (0) stage 3, the narrow filter
 // above. The filter itself keeps running either way (its history stays
 // warm) - only which signal reaches stage 4's AGC/output changes - so
-// there's no settling-time thump when toggling back on. Wired to
-// rigctld's "u"/"U NARROW" (hamlib.c) so the control panel (tools/
-// rigctl_panel.py) can toggle it remotely - see rx_audio.c for why this
-// is a plain on/off rather than a runtime-adjustable width.
+// there's no settling-time thump when toggling back on. rigctld's
+// "u"/"U NARROW" (hamlib.c).
 //
 // This is the operator's REQUEST. It is always remembered, but it only
 // reaches the audio when the mode-level inhibit below is clear.
@@ -107,7 +89,7 @@ int rx_audio_get_narrow_filter(void);
 // by the very client that needs the protection. Leaving a CW session's
 // 300Hz filter in hands the decoder a fraction of the ~2.7kHz window FT8
 // occupies. docs/dsp_design_notes/rx_uac_out_digital_mode_bandwidth.md
-// §2/§6 identified the trap; §11 records closing it.
+// §2, §6, §11.
 //
 // The operator's request survives the inhibit, so returning to CW restores
 // the filter they had rather than making them re-enable it.
@@ -130,8 +112,8 @@ int rx_audio_narrow_filter_inhibited(void);
 //
 // Both run every block regardless of which is selected, so switching never
 // thumps - and so selecting the cheaper filter saves no CPU, which is worth
-// knowing before reaching for it on a slow board. The design note's §17 has
-// the measured costs.
+// knowing before reaching for it on a slow board.
+// rx_narrow_filter_fft_vs_elliptic.md §17 has the measured costs.
 //
 // Wired to rigctld's "u"/"U FFTFILT" (hamlib.c) and the control panel.
 void rx_audio_set_narrow_filter_impl(int use_fft);
@@ -147,19 +129,12 @@ int rx_audio_get_narrow_filter_impl(void);
 //
 // Linear phase is not an operator choice. It has the same passband but
 // 16.0ms of group delay against minimum phase's 4.5ms, and a keyed element
-// takes 20.3ms to settle instead of 8.8ms - nobody listening to CW would
-// pick it, so the rigctld "U MINPHASE" command and the control panel's
-// checkbox were both retired.
-//
-// The capability stays because two harnesses need it, and deleting it would
-// cost more than it saves:
-//   - rx_filter_test.c Case E proves filter_min_phase() is correct by
-//     comparing its magnitude response against the linear-phase filter's
-//     (0.49dB worst-case deviation). Without a reachable linear-phase
-//     realization there is nothing to compare against, and the strongest
-//     check on that transformation disappears.
-//   - rx_audio_impulse_test.c uses linear phase as the extreme case that
-//     makes the AGC's group-delay misalignment visible at all.
+// takes 20.3ms to settle instead of 8.7ms (rx_narrow_filter_fft_vs_
+// elliptic.md §11, §16). It stays for rx_audio_impulse_test.c, which uses
+// linear phase as the extreme case that makes the AGC's group-delay
+// misalignment visible at all. (rx_filter_test.c's Case E checks the
+// minimum-phase transformation itself at rx_filter's own level,
+// rx_filter_set_min_phase().)
 //
 // Not for the audio thread either way: switching re-designs the response,
 // which allocates and builds FFTW plans.
@@ -265,43 +240,28 @@ void rx_audio_spot_reset(void);
 // was given.
 //
 // uac_out, if non-NULL, receives the SAME n samples one stage earlier -
-// post-AGC (stage 4's makeup gain already applied, so it doesn't ride the
-// input's own raw amplitude swings) but pre-rx_volume (the operator's
-// manual AF gain, applied only to out[] below). First use:
-// usb_gadget.c's WSJT-X audio bridge (docs/ARCHITECTURE.md) - decoded
-// audio sent to a fixed remote consumer must not silently change level
-// every time the operator touches their own listening volume, the same
-// reasoning a real rig's "line out"/ACC jack is independent of its front-
-// panel volume knob. Deliberately NOT also independent of the AGC:
-// AGC is signal-conditioning (keeps the level in a decodable range
-// regardless of band conditions), not an operator loudness preference -
-// a remote decoder wants that, the same way it wants stage 1/3's
-// filtering. Units match narrowed*gain's own natural scale (see
-// rx_audio.c's AGC_TARGET_AMPLITUDE) - unnormalized, uncapped to int32 -
-// deliberately: this is a different consumer with a different target
-// range (16-bit PCM, not the codec's int32 convention out[] uses), so
-// scaling/clamping into that range is usb_gadget.c's own job (its
-// UAC_RX_AUDIO_SCALE), not something baked in here.
+// post-AGC (stage 4's makeup gain already applied) but pre-rx_volume (the
+// operator's manual AF gain, applied only to out[]). It feeds the USB
+// gadget's audio (WSJT-X) and TCI's receive audio, decimated to 48kHz by
+// sound.c: a remote decoder's level mustn't change with the operator's
+// listening volume, as a rig's line-out is independent of its volume knob,
+// but it does want the AGC, which keeps the level decodable whatever the
+// band. Units are the AGC's own scale (rx_audio.c's AGC_TARGET_AMPLITUDE),
+// unnormalized and uncapped: each consumer scales and clamps to its own
+// range (usb_gadget.c's UAC_RX_AUDIO_SCALE, tci_stream.c's
+// TCI_RX_AUDIO_SCALE).
 void rx_audio_process(const double *i_samples, const double *q_samples,
                        int n, int32_t *out, double *uac_out);
 
-// Debug/test only - the AGC's current smoothed envelope estimate (see
-// rx_audio.c). Per rx_audio_demod_design.md §8.7-8.8, this tracks the RAW input I/Q's
-// magnitude, sampled before stage 1 even runs - deliberately moved there
-// (via an intermediate stop at stage 2's output, which had its own
-// problem - see the file header) so the AGC's makeup gain no longer
-// depends on any frequency-selective stage's own behavior, and so no
-// longer cancels out any of it in the final PCM output. That also means
-// this envelope is frequency-independent by construction (a steady tone
-// reads the same magnitude regardless of its frequency or which side of
-// dial center it's on) - it is NOT a window into any single stage's
-// selectivity any more, not stage 1's image rejection and not stage 3's
-// narrow filter. Measure the actual PCM output (rms/peak of
-// rx_audio_process()'s out[] array) for either of those instead, now
-// that the AGC no longer erases them. What this envelope IS still useful
-// for: confirming the AGC's own target-amplitude/gain math against a
-// known input amplitude (test_rx_audio.c's cases A/B/C). Not needed by
-// normal callers.
+// Debug/test only - the AGC's current smoothed envelope estimate. It
+// tracks the RAW input I/Q's magnitude, sampled before stage 1, so the
+// AGC's gain doesn't depend on (and so doesn't cancel) any frequency-
+// selective stage (rx_audio_demod_design.md §8.7-8.8). It is therefore
+// frequency-independent - a steady tone reads the same whatever its
+// frequency or side of the dial - and says nothing about stage 1's image
+// rejection or stage 3's selectivity: measure rx_audio_process()'s out[]
+// for those. Useful for checking the AGC's own gain math against a known
+// input amplitude. Not needed by normal callers.
 double rx_audio_debug_agc_envelope(void);
 
 // Debug/test only - the METER envelope's current smoothed estimate (see
@@ -309,9 +269,8 @@ double rx_audio_debug_agc_envelope(void);
 // Unlike rx_audio_debug_agc_envelope() above, this one DOES track stage
 // 1's image rejection and stage 3's selectivity/bypass state, by design -
 // it's tapped from narrowed (post-stage-3-or-bypass, pre-AGC-gain), not
-// the raw input. Exists mainly so test_rx_audio.c can check that
-// distinction directly rather than only indirectly through
-// rx_audio_get_strength_db()'s rounded dB output. Not needed by normal
+// the raw input - so rx_audio_test.c can check that directly rather than
+// through rx_audio_get_strength_db()'s rounded dB. Not needed by normal
 // callers.
 double rx_audio_debug_meter_envelope(void);
 
@@ -326,10 +285,9 @@ double rx_audio_debug_meter_envelope(void);
 // much energy is anywhere in the whole captured band" the way an
 // agc_env-based reading would. Read-only and NOT wattmeter/signal-
 // generator calibrated either way - see rx_audio.c and
-// docs/dsp_design_notes/rx_gain_and_level_calibration.md §9 for exactly
-// what the reference point does and doesn't mean, and for the earlier,
-// wideband version this replaced. No set_level equivalent, same as a
-// real rig's S-meter.
+// docs/dsp_design_notes/rx_gain_and_level_calibration.md §9 for what the
+// reference point does and doesn't mean. No set_level equivalent, same as
+// a real rig's S-meter.
 int rx_audio_get_strength_db(void);
 
 #endif /* RX_AUDIO_H */
