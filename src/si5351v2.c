@@ -1,4 +1,10 @@
 // si5351v2.c
+//
+// The si5351 clock generator: clk2 (the first LO, dial + xtal_filter_center)
+// on PLL A, clk1 (the second LO in receive, bfo_freq in transmit) on
+// PLL B; clk0 is off. Each output runs on an even integer divider, its
+// PLL a 25MHz multiple plus a fraction in 1/2^19 steps
+// (set_freq_fixeddiv()). Register formulas: SiLabs AN619.
 
 #include <stdio.h>
 #include <linux/types.h>
@@ -44,8 +50,7 @@
 
 #define PLL_N 35
 #define PLLFREQ (xtal_freq_calibrated * PLL_N)
-//int xtal_freq_calibrated = 25012725; // crystal oscillator 
-int xtal_freq_calibrated = 25000000; // tcxo
+int xtal_freq_calibrated = 25000000; // the TCXO's frequency, Hz (si5351_set_calibration())
 
 uint32_t plla_freq, pllb_freq;
 
@@ -62,12 +67,6 @@ static int clk1_divider = 0;
 #define SI_VCO_MAX_HZ 900000000u
 
 #define SI5351_ADDR 0x60              // I2C address of Si5351   (typical)
-
-/*
-void i2cSendRegister(uint8_t reg, uint8_t* data, uint8_t n){
-  i2c_write_i2c_block_data (SI5351_ADDR, reg, n, data);
-}
-*/
 
 #define I2C_SEND_MAX_ATTEMPTS 20   // ~20ms worst case (1ms delay/attempt) before giving up
 
@@ -86,16 +85,14 @@ void i2cSendRegister(uint8_t reg, uint8_t val){
   }
 }
 
+// Resets both PLLs (register 177), so they relock to their settings.
 void si5351_reset(){
   i2cSendRegister(SI_PLL_RESET, 0xA0);  
 }
 
 void si5351a_clkoff(uint8_t clk)
 {
-  //i2c_init();
   i2cSendRegister(clk, 0x80);   // Refer to SiLabs AN619 to see bit values - 0x80 turns off the output stage
-
-  //i2c_exit();
 }
 
 /*
@@ -211,18 +208,15 @@ static void setup_multisynth(uint8_t clk, uint8_t pllSource, uint32_t divider,  
   i2cSendRegister(control, dat);
 }
 
+// frequency on clk, from pll at frequency x divider: the PLL a whole
+// multiple of the TCXO plus num/2^19 of it, the output multisynth an
+// integer divider.
 static void set_freq_fixeddiv(int clk, int pll, uint32_t frequency, int divider,  uint8_t drive_strength){
   int32_t denom = 0x80000;
   int32_t pllfreq = frequency * divider;
   int32_t multi = pllfreq / xtal_freq_calibrated;
   int32_t num = ((uint64_t)(pllfreq % xtal_freq_calibrated) * 0x80000)/xtal_freq_calibrated;
 
-  //printf("fixeddiv clk:%d, freq:%d, pll:%d, pllfreq:%d, div: %d\n", clk, frequency, pll, pllfreq, divider);
-/*  Serial.print("317:");
-  Serial.print(multi);Serial.print(",");
-  Serial.print(num);Serial.print(",");
-  Serial.print(denom);Serial.print(",");
-  Serial.println(divider); */
   setup_pll(pll, multi, num, denom);
   setup_multisynth(clk, pll, divider, 0, 1, SI_R_DIV_1, drive_strength);
 }
@@ -259,8 +253,6 @@ void si5351bx_setfreq(uint8_t clk, uint32_t frequency){
   }
 
    set_freq_fixeddiv(clk, pll, frequency, pll_div, drive_strength);
-//	set_frequency_fixedpll(clk, pll, PLLFREQ, frequency, SI_R_DIV_1, 
-//		SI5351_CLK_DRIVE_STRENGTH_8MA);
 }
 
 int si5351_set_drive_ma(int ma){
