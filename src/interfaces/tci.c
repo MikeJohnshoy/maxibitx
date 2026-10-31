@@ -13,9 +13,9 @@
 // JTDX keys its TCI behaviour to, and as device maxibitx.
 //
 // One receiver, one VFO: vfo channel B and dds report channel A's frequency,
-// if is always 0, and split, XIT, tune and the DSP switches maxibitx lacks
-// report off. No tx_sensors are sent: a DE board has no power or SWR
-// measurement. Changes made elsewhere (rigctld, CAT, the panel, the key)
+// if is always 0, and split, tune and the DSP switches maxibitx lacks report
+// off; RIT and XIT are the radio's (radio.h). No tx_sensors are sent:
+// maxibitx reads no power or SWR measurement on either board. Changes made elsewhere (rigctld, CAT, the panel, the key)
 // have no notification, so a service thread samples the published state
 // every 50 ms and sends what changed; the same thread runs tci_stream.c.
 //
@@ -571,7 +571,7 @@ static void handle(int slot, char *cmd) {
       c->rx_sensors_ms = v < 30 ? 30 : v > 1000 ? 1000 : (int)v;
     c->rx_sensors_due = now_ms();
   } else if (!strcmp(name, "tx_sensors_enable")) {
-    // accepted; nothing is sent (a DE board has no power or SWR measurement)
+    // accepted; nothing is sent (no power or SWR measurement is read)
   } else if ((!strcmp(name, "audio_start") || !strcmp(name, "audio_stop")) && trx0) {
     c->cfg.audio_on = !strcmp(name, "audio_start");
     apply_stream(slot);
