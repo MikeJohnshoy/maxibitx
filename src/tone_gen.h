@@ -2,7 +2,7 @@
 //
 // TX test-tone generator: a transmit audio source for checking carrier
 // placement, power and linearity. While on, sound.c transmits these tones
-// instead of the mode's normal source (key tone, mic or USB audio); any
+// instead of the mode's normal source (key tone, mic, USB or TCI audio); any
 // PTT source keys it. Design and measurement procedure:
 // docs/dsp_design_notes/tx_test_tones_and_alc.md.
 //
