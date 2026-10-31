@@ -1,9 +1,8 @@
 // i2c.c
 //
-// This code was originally derived from Marek Wyborski's i2cbb.c
-// and used to bit-bang I2C over GPIO.  We now use the kernel's own
-// i2c subsystem and the bit-banging code is gone - so we
-// dropped the 'bb' from 'i2cbb.c'
+// I2C through the kernel's i2c-dev interface. Derived from Marek
+// Wyborski's i2cbb.c, which bit-banged I2C over GPIO; the bit-banging is
+// gone, and with it the 'bb' in the name.
 
 #include <stdio.h>
 #include <stdint.h>
@@ -18,9 +17,8 @@
 
 static int i2c_fd = -1;
 
-// Longest register write this wrapper will build: the command byte plus
-// its data. 32 matches the SMBus block limit the bit-banged code worked
-// to, which is more than anything on this board sends.
+// Longest block transfer this wrapper builds, beside the command byte:
+// the SMBus block limit, more than anything on this board sends.
 #define I2C_MAX_BLOCK 32
 
 void i2c_init(int i2c_bus_number) {
@@ -52,18 +50,16 @@ void i2c_init(int i2c_bus_number) {
 // Deliberately NOT the I2C_SLAVE-then-I2C_SMBUS pair the usual examples
 // show. That sets the target address as separate state on the shared fd,
 // which is a race with more than one thread on the bus: radio_tune_to()
-// reaches si5351v2.c from the rigctld, CAT and HPSDR threads while
+// reaches si5351v2.c from the rigctld, CAT, HPSDR and TCI threads while
 // radio.c's TX worker does the same on every T/R transition, so one
-// thread can change the address between another thread's two ioctls and
-// send its transfer to the wrong device. Nothing mis-addresses while all
-// runtime traffic goes to the si5351, but that ends as soon as anything
-// reads the power/SWR bridge at 0x8 during transmit
-// (dsp_design_notes/tx_test_tones_and_alc.md, step 5).
+// thread could change the address between another thread's two ioctls and
+// send its transfer to the wrong device - which matters once more than
+// one device is talked to at run time (the INA260; an sBitx v2's power
+// bridge, dsp_design_notes/tx_test_tones_and_alc.md step 5).
 //
 // An I2C_RDWR message carries its own address, so the whole exchange is
-// indivisible in one ioctl and needs no lock at all - better than the
-// mutex this replaced, which would have been a lock two threads could
-// queue on.
+// indivisible in one ioctl and needs no lock at all: nothing for two
+// threads to queue on.
 static int i2c_transfer(struct i2c_msg *msgs, int nmsgs) {
 	if (i2c_fd < 0)
 		return -1;
@@ -77,7 +73,7 @@ static int i2c_transfer(struct i2c_msg *msgs, int nmsgs) {
 	return 0;
 }
 
-// This executes the SMBus "write byte" protocol, returning negative errno else zero on success.
+// See i2c.h for these four.
 int32_t i2c_write_byte_data(uint8_t i2c_address, uint8_t command, uint8_t value) {
 	uint8_t buf[2] = { command, value };
 	struct i2c_msg msg = { .addr = i2c_address, .flags = 0, .len = 2, .buf = buf };
@@ -90,7 +86,6 @@ int32_t i2c_write_byte_data(uint8_t i2c_address, uint8_t command, uint8_t value)
 	return 0;
 }
 
-// This executes the SMBus "read byte" protocol, returning negative errno else a data byte received from the device.
 int32_t i2c_read_byte_data(uint8_t i2c_address, uint8_t command) {
 	uint8_t reg = command;
 	uint8_t value = 0;
@@ -109,7 +104,6 @@ int32_t i2c_read_byte_data(uint8_t i2c_address, uint8_t command) {
 	return value & 0xFF;
 }
 
-// This executes the SMBus "block write" protocol, returning negative errno else zero on success.
 int32_t i2c_write_i2c_block_data(uint8_t i2c_address, uint8_t command, uint8_t length,
         const uint8_t * values) {
 	if (length > I2C_MAX_BLOCK) {
@@ -135,8 +129,6 @@ int32_t i2c_write_i2c_block_data(uint8_t i2c_address, uint8_t command, uint8_t l
 	return 0;
 }
 
-// This executes the SMBus "block read" protocol, returning negative errno else the number
-// of data bytes in the slave's response.
 int32_t i2c_read_i2c_block_data(uint8_t i2c_address, uint8_t command, uint8_t length,
         uint8_t* values) {
 	if (length == 0 || length > I2C_MAX_BLOCK) {
