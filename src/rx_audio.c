@@ -264,8 +264,8 @@ static void ssb_filter_apply(struct ssb_filter_state *f, double i_in, double q_i
 // need offline design, so rather than one fixed filter there is a bank of
 // 24, pre-designed at six pitches and four widths and selected at
 // runtime - narrow_filter_bank.h, generated and verified by
-// tools/gen_narrow_filters.py. The 700Hz/300Hz entry is bit-for-bit the
-// single filter this stage used to carry, so the default is unchanged.
+// tools/gen_narrow_filters.py. The 700Hz/300Hz entry is
+// rx_audio_demod_design.md §8.2's design, bit for bit.
 //
 // Why a bank of fixed filters rather than the FFT filter's continuous
 // pitch/width: the FFT path is the tunable one and it is still here
