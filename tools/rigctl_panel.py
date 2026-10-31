@@ -28,9 +28,15 @@ the macro fields. A field is a name and a value, MYCALL and PARK to
 start with, up to eight; a macro's {NAME} is replaced by the value, and
 a macro naming a field with no value isn't sent.
 
-The trace is the average of the FFTs since the last frame, about six,
-so the noise floor holds steady without signals widening; a dimmer peak
-line behind it falls back 15 dB a second (off in Settings if unwanted).
+The trace is the average of the FFTs since the last frame, so the noise
+floor holds steady without signals widening; a dimmer peak line behind
+it falls back 15 dB a second (off in Settings if unwanted). The FFT is
+longer at the narrower spans - bins of 23, 11.7 and 5.9 Hz at 25, 10 and
+5 kHz - so a narrow span resolves finer: a CW signal's keying sidebands,
+two stations close together, FT8's tones in the waterfall. Each pixel
+shows the strongest bin under it. Finer bins hold less noise, so the
+noise floor reads lower at a narrower span and a narrow signal stands
+higher above it.
 
 RIT and XIT: the two buttons pick which offset the steps and the value
 set (tap the value to clear it), and the group's title says where it
@@ -187,9 +193,14 @@ DEFAULT_MACROS = (
 IQ_STREAM_PORT = 4536          # src/interfaces/iq_stream.h's IQ_STREAM_PORT
 IQ_STREAM_MAGIC = b"IQS1"
 SUBSCRIBE_INTERVAL_S = 1.0     # comfortably under iq_stream.c's 5 s subscriber timeout
-FFT_SIZE = 2048                # 96000/2048 = 46.875 Hz/bin across the full +-48 kHz
-FFT_HOP = FFT_SIZE // 2        # half-overlapped FFTs: about 94 a second
-SPECTRUM_REDRAW_MS = 66        # about 15 frames a second, each the average of ~6 FFTs
+# The FFT length for each half-span: bins about as many as the trace's
+# pixels (about 850-1070 across the span), so a narrow span resolves finer
+# rather than spreading the same bins wider. 16384 points is 171 ms, about
+# one FT8 symbol (160 ms), with 5.9 Hz bins: FT8's 6.25 Hz tones show.
+# Longer FFTs smear in time - 85 ms at 8192 is longer than a 20 WPM dit.
+SPECTRUM_FFT_SIZES = {2500: 16384, 5000: 8192, 12500: 4096}
+FFT_OVERLAP = 4                # a new FFT every quarter: 94, 47 and 23 a second
+SPECTRUM_REDRAW_MS = 66        # about 15 frames a second
 # The peak line: each bin holds its highest level and falls back at this
 # rate, so a CW station's dits leave a steady outline between them.
 PEAK_DECAY_DB_PER_S = 15.0
@@ -220,9 +231,8 @@ WATERFALL_TOP_DEFAULT_DB = 40
 WATERFALL_TOP_MIN_DB = 20
 WATERFALL_TOP_MAX_DB = 80
 WATERFALL_TOP_STEP_DB = 5
-# Displayed half-spans. The FFT always covers the full +-48 kHz at
-# 46.875 Hz/bin; these crop it, so a narrow span spreads the same bins
-# wider rather than resolving finer. The widest stays inside the crystal
+# Displayed half-spans, cropped from the FFT's full +-48 kHz at
+# SPECTRUM_FFT_SIZES' resolution. The widest stays inside the crystal
 # filter: the sBitx's is about 27 kHz wide at -6 dB, so a 30 kHz span
 # showed its skirts at both edges (the zBitx's is about 35 kHz).
 SPECTRUM_SPAN_CHOICES_HZ = (2500, 5000, 12500)
@@ -418,10 +428,11 @@ class RigctlClient:
 
 
 class SpectrumClient:
-    """Subscribes to iq_stream.c's UDP stream and FFTs it, FFT_SIZE samples
-    at a time, every FFT_HOP. get_latest() returns the average power of the
-    FFTs since the last call: averaged over time, never across bins, so the
-    noise floor steadies and signals stay as narrow as one FFT shows them.
+    """Subscribes to iq_stream.c's UDP stream and FFTs it, fft_size samples
+    at a time (set_fft_size(), which the span picks), every quarter of
+    that. get_latest() returns the average power of the FFTs since the last
+    call: averaged over time, never across bins, so the noise floor steadies
+    and signals stay as narrow as one FFT shows them.
 
     Independent of the rigctld connection: its own socket, its own
     keepalive (iq_stream.c drops a subscriber silent for 5 s) and its own
@@ -429,7 +440,7 @@ class SpectrumClient:
     and the controls keep working.
 
     dB: iq_stream.c scales a full-scale tone to int16 full scale, and the
-    FFT is normalised by FFT_SIZE * mean(window), so 0 dB is one
+    FFT is normalised by its length * mean(window), so 0 dB is one
     full-scale tone, as an uncalibrated SDR display reads.
     """
 
@@ -442,8 +453,21 @@ class SpectrumClient:
         self.latest_db = None  # fftshifted, low to high frequency, or None
         self.power_sum = None  # FFT power summed since the last get_latest()
         self.power_count = 0
-        self.window = np.hanning(FFT_SIZE)
-        self.window_mean = float(np.mean(self.window)) or 1.0
+        self.ever = False      # an FFT has finished since start()
+        self.fft_gen = 0       # bumped by set_fft_size(): the receive thread starts afresh
+        self.set_fft_size(SPECTRUM_FFT_SIZES[SPECTRUM_DEFAULT_HALF_SPAN_HZ])
+
+    def set_fft_size(self, n):
+        """FFTs of n samples from the next packet on; get_latest() returns
+        None until the first is done."""
+        window = np.hanning(n)
+        with self.lock:
+            self.fft = (n, window, float(np.mean(window)) or 1.0)
+            self.fft_size = n
+            self.fft_gen += 1
+            self.latest_db = None
+            self.power_sum = None
+            self.power_count = 0
 
     def start(self, host):
         self.stop()
@@ -456,6 +480,7 @@ class SpectrumClient:
             self.latest_db = None
             self.power_sum = None
             self.power_count = 0
+            self.ever = False
         threading.Thread(target=self._recv_loop, daemon=True).start()
         threading.Thread(target=self._keepalive_loop, daemon=True).start()
 
@@ -479,6 +504,7 @@ class SpectrumClient:
             time.sleep(SUBSCRIBE_INTERVAL_S)
 
     def _recv_loop(self):
+        gen = None
         while not self.stop_event.is_set():
             sock = self.sock
             if sock is None:
@@ -498,20 +524,28 @@ class SpectrumClient:
             # (sound.c's mixer), and the display wants it at +d, on the
             # right, as SDR displays draw it.
             samples = (iq[:, 0] - 1j * iq[:, 1]) / 32767.0
+            with self.lock:
+                if self.fft_gen != gen:  # a new FFT length: start afresh
+                    gen = self.fft_gen
+                    n, window, window_mean = self.fft
+                    self.sample_buf = np.zeros(0, dtype=np.complex128)
             self.sample_buf = np.concatenate((self.sample_buf, samples))
-            if len(self.sample_buf) > FFT_SIZE * 4:   # behind: drop the oldest
-                self.sample_buf = self.sample_buf[-FFT_SIZE:]
-            while len(self.sample_buf) >= FFT_SIZE:
-                block = self.sample_buf[:FFT_SIZE]
-                self.sample_buf = self.sample_buf[FFT_HOP:]
-                spectrum = np.fft.fftshift(np.fft.fft(block * self.window))
-                power = (np.abs(spectrum) / (FFT_SIZE * self.window_mean)) ** 2
+            if len(self.sample_buf) > n * 4:   # behind: drop the oldest
+                self.sample_buf = self.sample_buf[-n:]
+            while len(self.sample_buf) >= n:
+                block = self.sample_buf[:n]
+                self.sample_buf = self.sample_buf[n // FFT_OVERLAP:]
+                spectrum = np.fft.fftshift(np.fft.fft(block * window))
+                power = (np.abs(spectrum) / (n * window_mean)) ** 2
                 with self.lock:
+                    if self.fft_gen != gen:
+                        break  # the length changed while this one ran
                     if self.power_sum is None:
                         self.power_sum = power
                     else:
                         self.power_sum += power
                     self.power_count += 1
+                    self.ever = True
 
     def get_latest(self):
         """The average since the last call, in dB; the previous one again
@@ -2076,19 +2110,29 @@ class Panel(tk.Tk):
             return
         c = self.canvas
         w = self.canvas_w
+        want = SPECTRUM_FFT_SIZES.get(self.half_span(), SPECTRUM_FFT_SIZES[SPECTRUM_DEFAULT_HALF_SPAN_HZ])
+        if self.spectrum.fft_size != want:
+            # A new span: the bins change width, so the noise per bin moves
+            # (3-9 dB) - the auto floor and the peak line start again.
+            self.spectrum.set_fft_size(want)
+            self.noise_db = None
         db = self.spectrum.get_latest()
+        if db is None and self.spectrum.ever:
+            # the new length's first FFT isn't done: keep what is drawn
+            self.after(SPECTRUM_REDRAW_MS, self.redraw_spectrum)
+            return
         c.delete("trace")
         readout = ""
         if db is None or w < 2:
             readout = f"waiting for I/Q on UDP {IQ_STREAM_PORT}"
         else:
-            # db covers the full +-48 kHz around the receive frequency (bin
-            # FFT_SIZE/2), which RIT moves off the dial. The display shows
+            # db covers the full +-48 kHz around the receive frequency (the
+            # middle bin), which RIT moves off the dial. The display shows
             # +-span around the dial, so a signal stays put when RIT moves
             # and the RIT marker moves onto it. (rigctld's "j" reports the
             # offset even when CAT or TCI has switched RIT off; the panel
             # then shifts by an offset the radio isn't applying.)
-            bin_hz = 96000.0 / FFT_SIZE
+            bin_hz = 96000.0 / len(db)
             half = len(db) // 2
             half_bins = min(max(int(round(self.half_span() / bin_hz)), 2), half // 2)
             center = half - int(round(self.rit_hz / bin_hz))
@@ -2103,8 +2147,16 @@ class Panel(tk.Tk):
                         - floor_db) / (SPECTRUM_DB_CEILING - floor_db)
 
             def trace(levels, color, width):
-                coords = np.empty(n * 2)
-                coords[0::2] = np.arange(n) * (w / n)
+                # Bin k at x = k * w / n (the dial's bin, n/2, mid-screen);
+                # with more bins than pixels, each pixel the strongest of
+                # its bins, as the waterfall does.
+                if n > w:
+                    levels = np.maximum.reduceat(levels, (np.arange(w) * n) // w)
+                    xs = np.arange(w, dtype=float)
+                else:
+                    xs = np.arange(n) * (w / n)
+                coords = np.empty(len(xs) * 2)
+                coords[0::2] = xs
                 coords[1::2] = TRACE_H - 2 - to_frac(levels) * (TRACE_H - 6)
                 c.create_line(*coords.tolist(), fill=color, width=width, tags="trace")
 
