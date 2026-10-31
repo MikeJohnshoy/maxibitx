@@ -19,7 +19,7 @@ static const double fir_coeffs[UPSAMPLE48K_TAPS] = {
 };
 
 // Interpolation makeup gain: zero-stuffing halves the signal's average
-// energy (half of every two output samples is now exactly zero going
+// energy (half of every two output samples is exactly zero going
 // into the filter) - this restores unity passband gain for the
 // interpolated output. The standard L=2 interpolator correction, not
 // specific to this filter's own coefficients.
