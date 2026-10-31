@@ -9,11 +9,8 @@
 // subscriber is simply dropped - no explicit unsubscribe needed, so a
 // client that crashes or is closed without cleanup doesn't leak a slot
 // forever). Up to MAX_SUBSCRIBERS clients can be subscribed at once,
-// each getting an identical copy of the same stream - this runs
-// completely independently of hpsdr_p1.c's own single-client I/Q link,
-// so a client here (tools/rigctl_panel.py's spectrum display) can be
-// open at the same time as WSJT-X/Thetis on the HPSDR link without
-// either disturbing the other.
+// each getting an identical copy of the same stream, independently of
+// hpsdr_p1.c's single-client I/Q link and of TCI.
 //
 // Data packet layout (all multi-byte fields big-endian/network order,
 // same convention hpsdr_p1.c uses):
@@ -26,11 +23,12 @@
 //   8       4     n_samples (uint32) - always SAMPLES_PER_PACKET today,
 //                 sent explicitly so a client doesn't have to hardcode it
 //   12      4*n   n_samples pairs of (int16 I, int16 Q), each scaled so
-//                 full-scale baseband amplitude reads close to full
-//                 int16 range - plenty of dynamic range for a spectrum
-//                 display, which only needs relative levels, not the
-//                 calibrated absolute amplitude hpsdr_p1.c's SDR-app
-//                 audience wants (see its own 24-bit choice)
+//                 a full-scale baseband tone reads full int16 range
+//                 (x32767) - plenty of dynamic range for a spectrum
+//                 display, which needs relative levels (hpsdr_p1.c
+//                 sends 24-bit samples to its SDR apps). As sound.c
+//                 mixes it, inverted: a station d Hz above the dial is
+//                 at -d Hz
 //
 // Real-time safety follows hpsdr_p1.c's own pattern exactly: the audio
 // thread (iq_stream_send(), the producer) only ever appends to a
@@ -41,9 +39,9 @@
 // listener thread (writer) and the pacer thread (reader) - both
 // ordinary-priority threads, never the SCHED_FIFO audio thread - so a
 // plain mutex around it is fine here; it would not be fine around the
-// sample ring buffer, which is why that part stays lock-free (see
-// hpsdr_p1.c's own comment on the priority-inversion trap a mutex caused
-// there when one side was the real-time audio thread).
+// sample ring buffer, which the audio thread writes: a mutex shared with
+// it is a priority-inversion trap (docs/04_remote_control_and_iq_output.md,
+// "Outbound (I/Q)").
 
 #include "iq_stream.h"
 #include <arpa/inet.h>
@@ -208,9 +206,7 @@ static void build_and_send_packet(void) {
   for (int s = 0; s < SAMPLES_PER_PACKET; s++) {
     uint8_t *sp = pkt + 12 + s * 4;
 
-    // Scaled so full-scale baseband amplitude reads close to full int16
-    // range - see file header on why this doesn't need hpsdr_p1.c's
-    // calibrated 24-bit scale factor.
+    // A full-scale baseband tone reads full int16 range (file header).
     int32_t i_val = (int32_t)(pkt_buf_i[s] * 32767.0);
     if (i_val > 32767)
       i_val = 32767;
