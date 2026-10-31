@@ -1,20 +1,16 @@
 // iq_stream.h
 //
-// A minimal, protocol-free UDP telemetry stream of raw baseband I/Q
-// sample pairs - built so a simple network client (tools/rigctl_panel.py's
-// spectrum display) can get real I/Q without implementing openHPSDR
-// Protocol 1 (hpsdr_p1.c) or UAC2 (usb_gadget.c), both of which carry a
-// lot of protocol machinery (discovery, start/stop, C&C registers, MOX,
-// USB gadget setup) that a client only wanting "pairs of I/Q numbers for
-// a spectrum plot" has no use for. See iq_stream.c's file header for the
-// wire format and docs/dsp_design_notes/iq_stream_design.md for why this
-// exists as a third, independent path rather than reusing the other two.
+// A minimal, protocol-free UDP stream of raw baseband I/Q sample pairs,
+// so a simple network client can get real I/Q without implementing
+// openHPSDR Protocol 1 (hpsdr_p1.c) or TCI, with their discovery,
+// start/stop and command machinery. Its clients are tools/rigctl_panel.py's
+// spectrum and the measuring tools (xtal_sweep.py, lpf_sweep.py,
+// spur_survey.py). iq_stream.c's file header has the wire format;
+// docs/dsp_design_notes/iq_stream_design.md why it is a separate path.
 //
-// Like hpsdr_p1.c and usb_gadget.c, this is fed its own copy of the I/Q
-// from sound_process() and knows nothing about either of the other two -
-// it can run alongside WSJT-X/Thetis on hpsdr_p1.c or a UAC2 host without
-// disturbing either, which was the whole point of not just teaching
-// hpsdr_p1.c's own single-client link a second listener.
+// Like the other I/Q consumers, it is fed its own copy of the I/Q from
+// sound_process() and knows nothing about them, so it runs alongside an
+// SDR app on hpsdr_p1.c or a TCI client without disturbing either.
 
 #ifndef IQ_STREAM_H
 #define IQ_STREAM_H
