@@ -10,9 +10,8 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
-// BCM2711 (Pi 4) exposes every header GPIO through this one chip - unlike
-// some other SoCs/boards, there's no need to search /dev/gpiochip* for
-// the right one here.
+// On the Pi 4 (BCM2711) and the Zero 2W every header GPIO is on this one
+// chip, so there's no need to search /dev/gpiochip* for the right one.
 #define GPIO_CHIP_PATH "/dev/gpiochip0"
 
 // Shared by gpio_request_output()/gpio_request_input(): opens the chip,
