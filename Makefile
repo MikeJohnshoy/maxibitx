@@ -1,41 +1,17 @@
 CC      := gcc
-# -march=native detects this machine's actual CPU (NEON on the Pi) at
-# build time - maxibitx should be built directly on the Pi
-# it'll run on, but a binary built this way
-# shouldn't be copied to a different Pi model; drop -march=native if
-# that's ever needed. It's what lets antialias.c's branch-free FIR loop
-# (see antialias.c) actually vectorize instead of just being eligible to.
-# -Isrc/interfaces (alongside the implicit "search the including file's
-# own directory" gcc already does for quoted #includes) is what lets
-# src/interfaces/*.c keep saying #include "cw.h"/"rx_audio.h" etc.
-# unqualified even though those headers live one directory up in plain
-# src/ - and lets sound.c/maxibitx.c (in src/) keep saying
-# #include "hpsdr_p1.h" etc. unqualified even though those headers moved
-# into src/interfaces/. Added when hpsdr_p1.c/usb_gadget.c/iq_stream.c/
-# hamlib.c (the four modules that talk to an external SDR app - HPSDR
-# Protocol 1, the UAC2/CAT USB gadget, the lightweight I/Q telemetry
-# stream, and the rigctld server) moved out of plain src/ into their own
-# subfolder, to keep them visually separate from the DSP/radio-control
-# core (sound.c, rx_audio.c, radio.c, cw.c, vfo.c, ...) - see
-# docs/04_remote_control_and_iq_output.md's intro. Not a real
-# architectural boundary (nothing stops a src/interfaces file from
-# including a core header or vice versa, same as before) - just where
-# the file sits.
+# maxibitx and its bench harnesses.
 #
-# This Makefile, and everything under src/ it builds, was carried over
-# unchanged from minibitx as maxibitx's step-1 bootstrap (repo skeleton
-# only - see docs/ARCHITECTURE.md). The only maxibitx-specific change
-# here is the output binary's name; src/maxibitx.c is minibitx's
-# src/minibitx.c, renamed to match this project, not yet rewritten.
-# -lfftw3f: single-precision FFTW, needed since docs/ARCHITECTURE.md
-# build order step 5 wired src/tx_pipeline.c/src/fft_filter.c (the
-# shared FFT TX pipeline, step 4) into sound.c for real, live CW TX -
-# see fft_filter.h/tx_pipeline.h for why fftwf (not the double-precision
-# fftw3) specifically. src/rx_filter.c joined SRC/OBJ below at step 7,
-# for the same reason - rx_audio.c now calls it directly (as a
-# selectable stage-3 option, not yet the default - see rx_audio.h's
-# rx_audio_set_narrow_filter_impl()), even though FFTW itself was
-# already a real link dependency by then.
+# -march=native builds for this machine's own CPU (NEON on the Pi): build
+# maxibitx on the Pi it will run on, and don't copy the binary to a
+# different Pi model (drop -march=native if that's ever needed). It is what
+# lets the FIR loops (antialias.c, rx_audio.c's stage 1) vectorize.
+# -Isrc/interfaces lets every file include the interface headers
+# (src/interfaces/: hpsdr_p1, usb_gadget, iq_stream, hamlib, tci) and the
+# core ones (src/) unqualified, wherever it sits. The split is where the
+# files sit, not an architectural boundary
+# (docs/04_remote_control_and_iq_output.md).
+# -lfftw3f: single-precision FFTW, for fft_filter.c's transmit and receive
+# filters (fft_filter.h says why single precision).
 # The CW keyer: keyer.c offers every mode (straight, bug, ultimatic, iambic
 # A/B); `make KEYER=keyer_straight` builds keyer_straight.c instead, the
 # straight key alone - which is how the paddle keyer is removed, and the
@@ -88,7 +64,7 @@ check-comments-all:
 	python3 tools/check_comments.py --all
 
 # Verifies src/narrow_filter_bank.h still matches what
-# tools/gen_narrow_filters.py designs, and that all twelve sets still pass
+# tools/gen_narrow_filters.py designs, and that all 24 sets still pass
 # their stability/shape/attack checks. A separate target because it needs
 # scipy: a Pi building this needs the generated header, not the design tools.
 check-filters:
@@ -132,48 +108,30 @@ clean:
 		$(KEYERS:%=src/%.o)
 	rm -rf test-logs
 
-# docs/ARCHITECTURE.md step 2: fft_filter.c/.h's own standalone bench
-# harness (fft_filter_test.c) against synthetic tones - fft_filter.c
-# itself is real, shipped code now (part of $(SRC)/$(OBJ) above, since
-# step 5), but this harness stays separate, same "not part of the
-# build" convention docs/dsp_design_notes/rx_audio_demod_design.md
-# describes for test_rx_audio.c: a verification tool, not something the
-# shipped maxibitx binary links.
+# fft_filter.c's bench harness (fft_filter_test.c), on synthetic tones.
+# Like every test- target below, a program of its own that the daemon
+# doesn't link, needing no radio. docs/ARCHITECTURE.md §10 step 2.
 test-fft-filter: src/fft_filter.c src/fft_filter_test.c src/fft_filter.h
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/fft_filter.c src/fft_filter_test.c -o $@ -lfftw3f -lm $(TEST_LIBS)
 
-# docs/ARCHITECTURE.md step 4: tx_pipeline.c/.h's own standalone bench
-# harness (tx_pipeline_test.c) against a synthetic stand-in for cw.c's
-# sidetone - tx_pipeline.c itself is real, shipped code now (part of
-# $(SRC)/$(OBJ) above, wired into sound.c/cw.c for live CW TX as of
-# step 5), but this harness stays separate, same "not part of the
-# build" convention as test-fft-filter above. Depends on fft_filter.c/.h
-# (step 2) and cw.h (CW_PITCH_HZ only - NOT cw.c itself, see
-# tx_pipeline_test.c's header comment for why).
+# tx_pipeline.c's bench harness (tx_pipeline_test.c), with a synthetic
+# stand-in for cw.c's sidetone and tone_gen.c's tones. cw.h is for
+# CW_PITCH_HZ only, not cw.c (tx_pipeline_test.c says why).
+# docs/ARCHITECTURE.md §10 step 4.
 test-tx-pipeline: src/tx_pipeline.c src/tx_pipeline_test.c src/tx_pipeline.h src/fft_filter.c src/fft_filter.h src/cw.h src/tone_gen.c src/tone_gen.h
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/fft_filter.c src/tx_pipeline.c src/tone_gen.c src/tx_pipeline_test.c -o $@ -lfftw3f -lm $(TEST_LIBS)
 
-# docs/ARCHITECTURE.md step 6: rx_filter.c/.h's own standalone bench
-# harness (rx_filter_test.c) against synthetic tones, standing in for
-# rx_audio.c stage 2's real demodulated audio - rx_filter.c itself is
-# real, shipped code now (part of $(SRC)/$(OBJ) above, since step 7
-# wired it into rx_audio.c as a selectable stage-3 option), but this
-# harness stays separate, same "not part of the build" convention as the
-# other two targets above. Depends on fft_filter.c/.h (step 2, including
-# its new filter_tune_real()) and cw.h (CW_PITCH_HZ only - NOT cw.c/
-# rx_audio.c themselves, same "no hardware deps in a bench test"
-# precedent).
+# rx_filter.c's bench harness (rx_filter_test.c), on synthetic tones
+# standing in for rx_audio.c stage 2's demodulated audio. cw.h is for
+# CW_PITCH_HZ only. docs/ARCHITECTURE.md §10 step 6.
 test-rx-filter: src/rx_filter.c src/rx_filter_test.c src/rx_filter.h src/fft_filter.c src/fft_filter.h src/cw.h
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/fft_filter.c src/rx_filter.c src/rx_filter_test.c -o $@ -lfftw3f -lm $(TEST_LIBS)
 
-# docs/ARCHITECTURE.md step 7: rx_audio_test.c - an integration smoke
-# test for rx_audio.c's OWN new wiring (the implementation selector, the
-# two-pass buffering, the block-mismatch fallback), distinct from
-# rx_filter_test.c above (which never touches rx_audio.c at all, and
-# only re-tests rx_filter.c's own DSP correctness). Links vfo.c directly
-# (no hardware deps - see vfo.c's own #include list) alongside
-# rx_audio.c/fft_filter.c/rx_filter.c; cw.h is header-only here too
-# (CW_PITCH_HZ), same as the other harnesses.
+# rx_audio.c's own wiring (rx_audio_test.c): the stage-3 implementation
+# selector, the bypass, the fallback for a block that isn't
+# RX_FILTER_BLOCK_LEN long - which test-rx-filter, never touching
+# rx_audio.c, can't see. vfo.c is linked as it is (no hardware); cw.h is for
+# CW_PITCH_HZ only. docs/ARCHITECTURE.md §10 step 7.
 test-rx-audio: src/rx_audio.c src/rx_audio_test.c src/rx_audio.h src/vfo.c src/vfo.h src/fft_filter.c src/rx_filter.c src/cw.h src/cw_decoder.c src/cw_decoder.h src/morse.c src/cw_spot.c src/cw_spot.h
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/rx_audio.c src/vfo.c src/fft_filter.c src/rx_filter.c src/cw_decoder.c src/morse.c src/cw_spot.c src/rx_audio_test.c -o $@ -lfftw3f -lm $(TEST_LIBS)
 
@@ -187,15 +145,11 @@ test-rx-audio: src/rx_audio.c src/rx_audio_test.c src/rx_audio.h src/vfo.c src/v
 test-rx-audio-impulse: src/rx_audio.c src/rx_audio_impulse_test.c src/rx_audio.h src/vfo.c src/vfo.h src/fft_filter.c src/rx_filter.c src/cw.h src/cw_decoder.c src/cw_decoder.h src/morse.c src/cw_spot.c src/cw_spot.h
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/rx_audio.c src/vfo.c src/fft_filter.c src/rx_filter.c src/cw_decoder.c src/morse.c src/cw_spot.c src/rx_audio_impulse_test.c -o $@ -lfftw3f -lm $(TEST_LIBS)
 
-# WSJT-X TX audio bridge: upsample48k.c/.h's own standalone bench harness
-# (upsample48k_test.c) against synthetic tones, the interpolation-side
-# counterpart to decim48k.c (which has no bench harness of its own - see
-# docs/dsp_design_notes/usb_uac_decimation_design.md; this is the first
-# one either direction has had). upsample48k.c itself is real, shipped
-# code now (part of $(SRC)/$(OBJ) above, wired into sound.c's
-# RADIO_MODE_DIGITAL TX branch), but this harness stays separate, same
-# "not part of the build" convention as the other test- targets above.
-# No dependencies beyond upsample48k.c/.h itself - no hardware, no FFTW.
+# upsample48k.c's bench harness (upsample48k_test.c), on synthetic tones:
+# the 48 to 96kHz interpolation the gadget's and TCI's transmit audio go
+# through. No hardware, no FFTW. (decim48k.c, its counterpart, has no
+# harness: docs/dsp_design_notes/usb_uac_decimation_design.md checks it
+# numerically.)
 test-upsample48k: src/upsample48k.c src/upsample48k_test.c src/upsample48k.h
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/upsample48k.c src/upsample48k_test.c -o $@ -lm $(TEST_LIBS)
 
@@ -205,8 +159,7 @@ test-upsample48k: src/upsample48k.c src/upsample48k_test.c src/upsample48k.h
 # each mark and space at the envelope's 50% points against the time between
 # the edges, and TX request and release. Links cw.c, key_input.c, gpio.c
 # and vfo.c with the radio calls stubbed (cw_envelope_test.c) - the GPIO
-# code is linked but never called, so no hardware or FFTW. Same "not part of
-# the build" convention as the other test- targets above. See
+# code is linked but never called, so no hardware or FFTW. See
 # docs/dsp_design_notes/cw_keyer_design_study.md §16 and §17.
 test-cw: src/cw.c src/cw.h src/cw_envelope_test.c src/key_input.c src/key_input.h src/keyer.c src/keyer.h src/morse.c src/morse.h src/gpio.c src/vfo.c src/vfo.h
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/cw.c src/key_input.c src/keyer.c src/morse.c src/gpio.c src/vfo.c src/cw_envelope_test.c -o $@ -lm -lpthread $(TEST_LIBS)
@@ -234,12 +187,6 @@ test-radio: src/radio.c src/radio.h src/radio_test.c src/vfo.c src/vfo.h
 test-encoder: src/encoder.c src/encoder.h src/knobs.c src/knobs.h src/encoder_test.c src/gpio.c src/radio_hw.h
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/encoder.c src/knobs.c src/gpio.c src/encoder_test.c -o $@ -lpthread $(TEST_LIBS)
 
-# keyer.h, twice: test-keyer against keyer.c - the design study's golden
-# cases, random paddle input checked sample for sample against the
-# specification model (tools/keyer_study/keyer_spec_model.c, compiled into
-# the harness), the speed/mode-change rules, and text (with morse.c) - and
-# test-keyer-straight against keyer_straight.c, which must pass every case it
-# offers and refuse the rest. See keyer_test.c.
 # The CW decoder (cw_decoder.c) on synthetic keyed CW in noise: machine and
 # hand-sent fists from 5 to 35 WPM, Farnsworth, 6 dB, noise alone, a second
 # station after a pause, and the text reader. tools/cw_study/cw_bench.py is
@@ -263,11 +210,25 @@ test-capture-dump: src/capture_dump.c src/capture_dump.h src/capture_dump_test.c
 test-codec-check: src/codec_check.c src/codec_check.h src/codec_check_test.c
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -DCODEC_CHECK_SETTLE_MS=100 src/codec_check.c src/codec_check_test.c -o $@ -lpthread -lm $(TEST_LIBS)
 
+# keyer.h, twice: test-keyer against keyer.c - the design study's golden
+# cases, random paddle input checked sample for sample against the
+# specification model (tools/keyer_study/keyer_spec_model.c, compiled into
+# the harness), the speed/mode-change rules, and text (with morse.c) - and
+# test-keyer-straight against keyer_straight.c, which must pass every case it
+# offers and refuse the rest. See keyer_test.c.
 test-keyer: src/keyer.c src/keyer.h src/morse.c src/morse.h src/keyer_test.c src/key_input.h tools/keyer_study/keyer_spec_model.c
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Itools/keyer_study src/keyer.c src/morse.c src/keyer_test.c -o $@ -lpthread $(TEST_LIBS)
 
 test-keyer-straight: src/keyer_straight.c src/keyer.h src/morse.c src/morse.h src/keyer_test.c src/key_input.h tools/keyer_study/keyer_spec_model.c
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Itools/keyer_study src/keyer_straight.c src/morse.c src/keyer_test.c -o $@ -lpthread $(TEST_LIBS)
+
+# The board layer: hw_settings.c's sbitx_version and i2c_bus keys, and
+# radio_hw.c's board profiles - which pins each board claims and at what
+# level, LPF selection (at every retune on the sBitx, at transmit on the
+# zBitx) and the relay half of the T/R sequence - with gpio.c and i2c.c
+# stubbed. See docs/dsp_design_notes/zbitx_port_study.md §5.
+test-radio-hw: src/radio_hw.c src/radio_hw.h src/hw_settings.c src/hw_settings.h src/radio_hw_test.c
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces src/radio_hw.c src/hw_settings.c src/radio_hw_test.c -o $@ -lm -lpthread $(TEST_LIBS)
 
 # The TCI server, twice, over loopback with no radio. test-tci-ws: tci_ws.c's
 # WebSocket server alone - the RFC 6455 accept vector, handshake, framing,
@@ -278,14 +239,6 @@ test-keyer-straight: src/keyer_straight.c src/keyer.h src/morse.c src/morse.h sr
 # the keyer keys). `./test-tci --serve [port]` runs that stubbed server
 # with a test tone, for trying a client without a radio. See
 # docs/dsp_design_notes/tci_design_study.md §13.
-# The board layer: hw_settings.c's sbitx_version and i2c_bus keys, and
-# radio_hw.c's board profiles - which pins each board claims and at what
-# level, LPF selection, the relay half of the T/R sequence, and that the
-# zBitx cannot transmit - with gpio.c and i2c.c stubbed. See
-# docs/dsp_design_notes/zbitx_port_study.md §5.
-test-radio-hw: src/radio_hw.c src/radio_hw.h src/hw_settings.c src/hw_settings.h src/radio_hw_test.c
-	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -Isrc/interfaces src/radio_hw.c src/hw_settings.c src/radio_hw_test.c -o $@ -lm -lpthread $(TEST_LIBS)
-
 TCI_TEST_HDRS := src/interfaces/tci.h src/interfaces/tci_ws.h src/interfaces/tci_stream.h src/interfaces/ws_test_client.h
 
 test-tci-ws: src/interfaces/tci_ws.c src/interfaces/tci_ws_test.c $(TCI_TEST_HDRS)
