@@ -25,20 +25,13 @@ extern int hw_i2c_bus;
 // ---- Per-band TX power calibration -------------------------------------
 //
 // hw_settings.ini carries a repeated [tx_band] section per band, each
-// with f_start/f_stop (Hz) and a 'scale' value - the exact same file,
-// same section layout, same numbers real sbitx's own bands.ini-derived
-// calibration (calibrate_tx_drive() in sbitx.c) writes, bench-measured
-// against a real wattmeter/power bridge to flatten PA gain across HF
-// (sbitx.c's own comment: "the PA gain varies across the band from 3.5
-// MHz to 30 MHz, here we adjust the drive levels to keep it up, almost
-// level"). Real sbitx applies it as tx_amp = tx_drive * band.scale,
-// multiplied into its (very differently-scaled) FFT-domain TX samples -
-// minibitx's simpler oscillator+envelope CW path can't reuse that exact
-// numeric formula (the two codebases' internal sample magnitudes aren't
-// in the same units), but the *relative* scale values across bands are
-// real, physical, already-calibrated data for this exact board and are
-// worth using instead of one flat, uncalibrated guess. See the
-// TX_SAMPLE_HEADROOM comment in sound.c for how it's applied.
+// with f_start/f_stop (Hz) and a 'scale' value, in sbitx's layout
+// (calibrate_tx_drive() in sbitx.c). Each scale sets that band's drive so
+// the PA, whose gain varies across HF, makes the same power everywhere -
+// measured with a wattmeter on the board. maxibitx's samples aren't in
+// sbitx's units, so sound.c anchors them to one band's value (its
+// TX_SAMPLE_HEADROOM comment); what counts is the scales' ratios.
+// docs/dsp_design_notes/tx_power_calibration.md.
 
 #define HW_MAX_TX_BANDS 16
 
@@ -62,7 +55,7 @@ double hw_settings_tx_scale(int freq_hz);
 // 1 if freq_hz lies inside one of the loaded [tx_band] entries, so
 // transmitting there is calibrated and permitted. radio_set_tx() refuses
 // PTT when this is 0, which covers every PTT source at once - the key,
-// rigctld, CAT and HPSDR MOX.
+// rigctld, CAT, HPSDR MOX and TCI.
 //
 // Returns 1 for every frequency when no [tx_band] entries were loaded at
 // all (no hw_settings.ini, or one with no [tx_band] sections). An empty
