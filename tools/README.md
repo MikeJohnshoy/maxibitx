@@ -98,10 +98,14 @@ The screen, top to bottom:
   pitch). In DIGI the radio holds the filter out of circuit and the
   group says so.
 - **Spectrum:** span (5, 10 or 25 kHz), a status line, the S-meter, then
-  the trace, a frequency scale and the waterfall under it. Each frame
-  averages the 6 or so FFTs since the last one, over time and never
-  across frequencies, so the noise floor holds steady and signals stay
-  narrow. A dimmer peak line behind the trace holds each frequency's
+  the trace, a frequency scale and the waterfall under it. The FFT is
+  longer at the narrower spans (bins of 23, 11.7 and 5.9 Hz at 25, 10
+  and 5 kHz), so a narrow span resolves finer - a CW signal's keying
+  sidebands, two stations 20 Hz apart, FT8's tones in the waterfall -
+  and the noise floor reads lower there, a narrow signal higher above
+  it; each pixel shows the strongest bin under it. Each frame averages
+  the FFTs since the last one, over time and never across frequencies,
+  so the noise floor holds steady and signals stay narrow. A dimmer peak line behind the trace holds each frequency's
   highest level and falls back 15 dB a second, which leaves a CW
   station's outline standing between its dits; it can be switched off
   in Settings. With auto floor (on by default), the bottom of the trace
