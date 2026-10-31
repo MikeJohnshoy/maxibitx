@@ -2,15 +2,10 @@
 //
 // Coefficients from docs/dsp_design_notes/usb_uac_decimation_design.md
 //
-// This filter's job is narrower than antialias.c's: by the time IQ
-// reaches here (sound_process() applies antialias_apply() to every
-// sample before this), content above ~47.5kHz is already suppressed
-// by that filter's own ~-81dB stopband. This filter only needs to
-// guard the "gap" between the new 24kHz Nyquist (once decimated to
-// 48kHz) and where antialias.c's own rejection has already taken over
-// - see the design doc for the full cascade reasoning and why that
-// keeps this filter cheap despite a much narrower transition band
-// (15kHz-24kHz here, vs. antialias.c's 32kHz-47.5kHz).
+// A 25-tap lowpass, passband to 15kHz and stopband from the new 24kHz
+// Nyquist. Its input is rx_audio.c's demodulated audio, already
+// band-limited to a few kHz by stage 1, so the short filter's gentle
+// 15-24kHz transition costs nothing.
 
 #include "decim48k.h"
 
