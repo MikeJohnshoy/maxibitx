@@ -1,30 +1,21 @@
 // gpio.h
 //
 // Direct-to-kernel GPIO access via the Linux GPIO character-device ioctl
-// API (uAPI v2, <linux/gpio.h>) - replaces radio_hw.c's earlier
-// dependency on wiringPi (unmaintained upstream, no Pi 5 support - not a
-// concern for minibitx's Pi 4 target today, but the character-device API
-// is the kernel's own current supported interface either way, not a
-// workaround chosen just to drop a dependency). Same "let the kernel
-// driver do it, no vendor library" precedent i2c.c already set when it
-// replaced this project's old bit-banged I2C with plain ioctl() calls
-// against /dev/i2c-N.
+// API (uAPI v2, <linux/gpio.h>): the kernel's own supported interface, no
+// vendor library (wiringPi, which maxibitx once used, is unmaintained) -
+// as i2c.c talks to /dev/i2c-N directly.
 //
-// One line request (and one open file descriptor) per GPIO line - this
-// matches how radio_hw.c already treats each pin as its own independent
-// handle (pinMode() + digitalWrite()/digitalRead() by pin number). The one
-// exception is the key jack: key_input.c takes both of its contacts in a
-// single request with edge events (gpio_request_edge_inputs()), so every
-// edge on either contact arrives, kernel-timestamped, on one fd.
+// One line request (and one open file descriptor) per GPIO line, each
+// pin its own handle. The exception is the key jack: key_input.c takes
+// both of its contacts in a single request with edge events
+// (gpio_request_edge_inputs()), so every edge on either contact arrives,
+// kernel-timestamped, on one fd.
 //
 // All offsets passed in here are BCM GPIO numbers - the kernel's own
-// numbering, and what /dev/gpiochip0 expects - NOT wiringPi's own pin
-// numbers, which is what radio_hw.h's pin constants used to be before
-// this rewrite. The BCM numbers radio_hw.h now uses were derived from a
-// `gpio readall` capture on real sBitx v2 hardware (see
-// docs/01_hardware_init_and_control.md) - if this is ever ported to a
-// different board/pinout, that mapping needs re-deriving the same way,
-// not assumed.
+// numbering, and what /dev/gpiochip0 expects - not wiringPi's pin numbers.
+// radio_hw.h's BCM numbers come from the boards' wiring
+// (docs/01_hardware_init_and_control.md, "Migrating off wiringPi: BCM pin
+// mapping"); another board's need deriving the same way, not assuming.
 
 #ifndef GPIO_H
 #define GPIO_H
@@ -32,9 +23,8 @@
 // Requests bcm_gpio as an output line, driven immediately to
 // initial_value (0 or nonzero) as part of the same request - there's no
 // separate "set mode, then write" step the way wiringPi needed.
-// consumer_label shows up in tools like `gpio readall` or
-// /sys/kernel/debug/gpio, so future debugging can identify which pin is
-// which without cross-referencing this source.
+// consumer_label shows up in `gpioinfo` and /sys/kernel/debug/gpio, so a
+// pin can be identified without cross-referencing this source.
 //
 // Returns an opaque line handle (an fd, but callers should treat it as
 // opaque) to pass to gpio_write(), or -1 on failure (already logged its
