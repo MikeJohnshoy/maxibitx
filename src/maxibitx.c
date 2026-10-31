@@ -155,7 +155,7 @@ int main(int argc, char **argv) {
          keyer_mode_name(keyer_get_mode()), keyer_get_wpm());
 
   // RX audio demod (src/rx_audio.c) - turns the receiver's own I/Q into
-  // an audible CW tone on the local monitor output. Needs the phase
+  // audio, in every mode, for the speaker, WSJT-X and TCI. Needs the phase
   // table above already built, same as cw_init(); no hardware of its
   // own to fail to open, so nothing to report but success.
   rx_audio_init();
@@ -217,8 +217,8 @@ int main(int argc, char **argv) {
   printf("init: HPSDR Protocol 1 listening on UDP %d\n", HPSDR_PORT);
 
   // Lightweight multi-subscriber I/Q telemetry stream (iq_stream.c) -
-  // fully independent of HPSDR above; initially exists to serve a radio
-  // control panel for testing and demonstartion purposes
+  // fully independent of HPSDR above; for the control panel's spectrum
+  // and the measuring tools (tools/)
   if (iq_stream_init() < 0) {
     printf("init: I/Q telemetry stream unavailable on UDP %d, continuing without it\n",
            IQ_STREAM_PORT);
@@ -228,9 +228,9 @@ int main(int argc, char **argv) {
   }
 
   // Bring up the USB Audio Class (UAC2) gadget if the hardware/kernel
-  // support it (uses rpi4's USB-C device-mode controller and libcomposite). Not a
-  // hard failure if it's unavailable - maxiBitx keeps running with
-  // HPSDR/UDP or iq_streamer either way. uac_init() reports its own success ("init: USB
+  // support it (the Pi's USB device-mode port and libcomposite). Not a
+  // hard failure if it's unavailable - maxiBitx keeps running on its
+  // network interfaces either way. uac_init() reports its own success ("init: USB
   // gadget bound to UDC...").
   if (uac_init() < 0) {
     printf("init: USB gadget unavailable, continuing without it\n");
@@ -239,8 +239,8 @@ int main(int argc, char **argv) {
   // Bring up the Kenwood TS-480-subset CAT control surface (the CAT
   // section of src/interfaces/usb_gadget.c), over the same gadget's CDC-ACM
   // function uac_init() just created above. Hans Summers @ QRPLabs used the TS-480
-  // commands because they were old and supported by lots of software, me might 
-  // have been better off now following the QMX implementation
+  // commands because they were old and supported by lots of software; we might
+  // have been better off following the QMX implementation
   if (cat_init() < 0) {
     printf("init: CAT (ACM) unavailable, continuing without it\n");
   }
@@ -312,8 +312,7 @@ int main(int argc, char **argv) {
              "give no usable TX IF\n", bfo_freq, radio_get_xtal_filter_center());
   }
 
-  // Graceful shutdown - roughly the reverse of bring-up
-  // still running above it.
+  // Graceful shutdown - roughly the reverse of bring-up.
   printf("\nmaxiBitx: shutting down now!\n");
  
   // Park external PTT and the T/R relay low in case the key happened to be down at
