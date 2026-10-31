@@ -43,19 +43,12 @@ struct filter *filter_new_ex(int block_len, int impulse_len, unsigned fftw_flags
 	memset(f->time, 0, f->N * sizeof(complex float));
 	memset(f->freq, 0, f->N * sizeof(complex float));
 
-	// fftw_flags is normally FFTW_MEASURE (via filter_new() below):
-	// worth the one-time startup cost (benchmarks a few candidate
-	// algorithms against this actual machine) because this plan is
-	// reused every filter_forward()/filter_inverse() call - once per
-	// audio block (~10.7ms at minibitx's 96kHz/PERIOD_FRAMES=1024 - see
-	// sound.c - which is also exactly this L, not a coincidence: it's
-	// the block size this filter was designed to match). No wisdom
-	// file yet (unlike sbitx's WISDOM_MODE, which caches a MEASURE
-	// search's result across process restarts) - see
-	// docs/ARCHITECTURE.md's open questions; on the Pi this means every
-	// process start pays the MEASURE search once per filter_new_ex()
-	// call, not on every block. rx_filter.c instead passes
-	// FFTW_ESTIMATE here - see filter_new_ex()'s own header comment.
+	// These plans run every filter_forward()/filter_inverse() call, once
+	// per audio block (10.7ms: sound.c's PERIOD_FRAMES, which is L), so
+	// FFTW_MEASURE's one-time search is normally worth it (filter_new()).
+	// With no wisdom file (sbitx's WISDOM_MODE caches the search across
+	// restarts; ARCHITECTURE.md §9), every start pays it once per filter.
+	// rx_filter.c passes FFTW_ESTIMATE (fft_filter.h).
 	f->plan_fwd = fftwf_plan_dft_1d(f->N, f->time, f->freq, FFTW_FORWARD, fftw_flags);
 	f->plan_rev = fftwf_plan_dft_1d(f->N, f->freq, f->time, FFTW_BACKWARD, fftw_flags);
 
@@ -104,19 +97,11 @@ static void make_kaiser(float *window, unsigned int M, float beta)
 // response: round-trips `response` (N-point, frequency domain) through
 // an inverse FFT, truncates/windows the time-domain impulse to M taps,
 // zero-pads back out to N, and FFTs forward again - in place. Ported
-// from mj_zbitx/src/fft_filter.c's window_filter(), with one deliberate
-// change: FFTW_ESTIMATE instead of WISDOM_MODE/FFTW_MEASURE for this
-// function's own throwaway plans. This runs at filter_tune() time, not
-// per audio block - i.e. at human-interaction speed (a pitch/width
-// control changing), where FFTW_MEASURE's benchmarking search would
-// make every retune visibly stall without a wisdom-file cache to
-// amortize it. ESTIMATE picks a good-enough (not necessarily fastest)
-// algorithm immediately; for an N this small (2048 points), the
-// resulting transform still runs in well under a millisecond, so
-// "good enough" costs nothing measurable here - unlike filter_new()'s
-// persistent per-block plans above, where MEASURE's payoff (a faster
-// per-block transform, paid 96000/1024 ≈ 94 times a second) is worth
-// its one-time search cost.
+// from mj_zbitx/src/fft_filter.c's window_filter(), but its throwaway
+// plans use FFTW_ESTIMATE rather than WISDOM_MODE/FFTW_MEASURE: this runs
+// when a filter is retuned (a pitch or width change), where a MEASURE
+// search would stall every retune, and at N of 2048 or 4096 the
+// ESTIMATE plan's transform still takes well under a millisecond.
 static void window_filter(int L, int M, complex float *response, float beta)
 {
 	int const N = L + M - 1;
@@ -168,24 +153,13 @@ static int filter_tune_ex(struct filter *f, float low, float high, float kaiser_
 	// filter_tune_real()'s header comment for why a real-signal filter
 	// needs that second interval too.
 	//
-	// gain = 1/N^2, not real sbitx's 1/N: window_filter() below is a
+	// gain = 1/N^2, not sbitx's 1/N: window_filter() below is a
 	// backward-FFT/window/forward-FFT round trip, and FFTW normalizes
-	// neither direction, so each of those two transforms multiplies
-	// magnitude by an extra, uncompensated N. 1/N here cancels only the
-	// first (backward) one - real sbitx's own filter_tune() does exactly
-	// that, leaving every filter's passband gain at a real, measured
-	// +20*log10(N) (+66dB at this N=2048) that its rx_linear()/
-	// tx_process() apparently never corrects for as such - it's
-	// presumably just folded, unremarked, into whatever their other
-	// empirically-bench-tuned gain constants (ssb_val, tx_amp, volume,
-	// TX_GAIN_CORRECTION-alikes) happen to land on. Verified here by
-	// running this bench harness with plain 1/N first: case A's
-	// passband measured +66.23dB, not ~0dB, exactly 20*log10(2048).
-	// Squaring it - 1/N^2 - cancels both transforms, so this port's
-	// filter is unity-gain by construction: whatever gain constants get
-	// added later (build order step 7's power/ALC calibration) are
-	// calibrating real analog/mixer gain, not partly undoing an
-	// unlabeled FFT-normalization artifact mixed in with it.
+	// neither direction, so each transform multiplies magnitude by N.
+	// 1/N cancels only one, leaving the passband at +20*log10(N) (+66dB
+	// at N=2048), as sbitx's is; 1/N^2 cancels both, so the filter is
+	// unity gain and the gain constants downstream calibrate real analog
+	// gain only. docs/09_faq.md has how it was found.
 	float gain = 1. / ((float)f->N * (float)f->N);
 	for (int n = 0; n < f->N; n++) {
 		float s = (n <= f->N / 2) ? (float)n / f->N : (float)(n - f->N) / f->N;
