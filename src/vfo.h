@@ -1,3 +1,5 @@
+// vfo.h - table-driven numerically controlled oscillators (vfo.c).
+
 #ifndef VFO_H
 #define VFO_H
 
