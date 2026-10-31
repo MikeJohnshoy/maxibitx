@@ -29,7 +29,7 @@
 //   A - Passband: a tone well inside the passband survives near 0dB -
 //       the sanity check the other three assume already holds.
 //
-// All at minibitx's real sample rate and block size (96000 Hz,
+// All at maxibitx's real sample rate and block size (96000 Hz,
 // L=1024 - sound.c's PERIOD_FRAMES) so every Hz/dB number below is
 // what the real audio thread would actually see, not a scaled-down
 // stand-in.
