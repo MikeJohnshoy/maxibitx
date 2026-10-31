@@ -1,13 +1,13 @@
 // hw_settings.c
 //
-// Reader for data/hw_settings.ini. That file is the same file sbitx
-// uses, so 'cal' (the si5351 reference), 'bfo_freq' and the per-band
-// 'scale' table carry over. 'xtal_filter_center' is new here (not read
-// by real sbitx), added alongside bfo_freq for the same reason - all of
-// them are board-specific measurements, not source-code constants.
-// 'sbitx_version' names the radio board, and is required: maxibitx.c
-// will not start without it (radio_hw_select_board()). Other keys the
-// file leaves out take their compiled-in defaults.
+// Reader for data/hw_settings.ini. It reads sbitx's file format, so 'cal'
+// (the si5351 reference), 'bfo_freq' and the per-band 'scale' table carry
+// over; 'xtal_filter_center' and the other keys hw_settings.h lists are
+// maxibitx's own. All are board-specific measurements or choices, not
+// source-code constants. 'sbitx_version' names the radio board, and is
+// required: maxibitx.c will not start without it
+// (radio_hw_select_board()). Other keys the file leaves out take their
+// compiled-in defaults.
 
 #include "hw_settings.h"
 #include "si5351.h" // si5351_set_calibration() - the "cal" key below
@@ -33,9 +33,9 @@ char tci_bind[64] = "";
 char sbitx_version[32] = "";
 int hw_i2c_bus = -1;
 
-// Section state while scanning the file - only [tx_band] sections are
-// acted on today; [tcxo] and any others are recognized (so their key=value
-// lines aren't mistaken for top-level keys) but not yet applied.
+// Section state while scanning the file. [tx_band] sections are read, and
+// [tcxo]'s 'cal'; other sections are recognized (so their key=value lines
+// aren't mistaken for top-level keys) and read past.
 enum hw_section { HW_SECTION_TOP, HW_SECTION_TCXO, HW_SECTION_TX_BAND, HW_SECTION_OTHER };
 
 // Keys that only take effect above the first [section]. One written further
@@ -251,8 +251,7 @@ void hw_settings_load(void) {
         }
       }
     }
-    // ssb_val and any other top-level keys: read past, not applied yet.
-    // HW_SECTION_OTHER (e.g. [tcxo]): keys read past, not applied yet.
+    // Anything else (ssb_val, other sections' keys): read past.
   }
 
   fclose(f);
