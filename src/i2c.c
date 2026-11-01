@@ -4,8 +4,10 @@
 // Wyborski's i2cbb.c, which bit-banged I2C over GPIO; the bit-banging is
 // gone, and with it the 'bb' in the name.
 
+#include <dirent.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -151,4 +153,56 @@ int32_t i2c_read_i2c_block_data(uint8_t i2c_address, uint8_t command, uint8_t le
 	// there is no device-reported count to clamp against - unlike the
 	// SMBus block protocol, which puts a length byte on the wire.
 	return length;
+}
+
+// Whether a device acknowledges a read of its register 0 on bus: a
+// throwaway fd, so the bus i2c_init() opened is untouched.
+static int answers_on_bus(int bus, uint8_t address) {
+	char path[32];
+	snprintf(path, sizeof(path), "/dev/i2c-%d", bus);
+	int fd = open(path, O_RDWR);
+	if (fd < 0)
+		return 0;
+	uint8_t reg = 0, value = 0;
+	struct i2c_msg msgs[2] = {
+		{ .addr = address, .flags = 0,        .len = 1, .buf = &reg },
+		{ .addr = address, .flags = I2C_M_RD, .len = 1, .buf = &value },
+	};
+	struct i2c_rdwr_ioctl_data xfer = { .msgs = msgs, .nmsgs = 2 };
+	int ok = ioctl(fd, I2C_RDWR, &xfer) >= 0;
+	close(fd);
+	return ok;
+}
+
+static int compare_int(const void *a, const void *b) {
+	return *(const int *)a - *(const int *)b;
+}
+
+int i2c_find_bus_with(int preferred, uint8_t address, const char *dev_dir,
+                      int (*answers)(int bus, uint8_t address)) {
+	if (preferred >= 0 && answers(preferred, address))
+		return preferred;
+
+	int buses[64], n = 0;
+	DIR *d = opendir(dev_dir);
+	if (!d)
+		return -1;
+	struct dirent *e;
+	while ((e = readdir(d)) != NULL && n < (int)(sizeof(buses) / sizeof(buses[0]))) {
+		int bus;
+		char tail;
+		if (sscanf(e->d_name, "i2c-%d%c", &bus, &tail) == 1 && bus >= 0 && bus != preferred)
+			buses[n++] = bus;
+	}
+	closedir(d);
+	qsort(buses, (size_t)n, sizeof(buses[0]), compare_int);
+
+	for (int i = 0; i < n; i++)
+		if (answers(buses[i], address))
+			return buses[i];
+	return -1;
+}
+
+int i2c_find_bus(int preferred, uint8_t address) {
+	return i2c_find_bus_with(preferred, address, "/dev", answers_on_bus);
 }
