@@ -337,11 +337,17 @@ returns: the board profile's usual bus, unless `hw_settings.ini` has a
 top-level `i2c_bus` key, which overrides it. On the sBitx that is bus
 22, the physical bus it shares with the board's RTC via the
 `i2c-rtc-gpio` device tree overlay (`i2cdetect -y 22` shows a device at
-`0x60`); on the zBitx it is bus 3. The startup log names it
-(`init: si5351 oscillator ready on I2C bus N, ...`). It's a
-Linux-assigned bus number, not a fixed hardware address, so it can
-change across kernel/config updates; `i2c_bus` is the fix without a
-rebuild. See
+`0x60`); on the zBitx it is bus 3. It's a Linux-assigned bus number,
+not a fixed hardware address, so it can change across kernel or
+`config.txt` updates. `si5351bx_init()` therefore looks for it
+(`i2c_find_bus()`): if nothing answers at `0x60` on that bus, it tries
+every other `/dev/i2c-N` in number order and uses the first where
+something does, saying so (`init: no si5351 on I2C bus 22, but one
+answers on bus 21 - using that ...`). "Answers" is a read of register 0
+acknowledged, which changes nothing on any device. The startup log names
+the bus in use (`init: si5351 oscillator ready on I2C bus N, ...`).
+`i2c_bus` in `hw_settings.ini` changes which bus is tried first, and so
+skips the search. See
 [`08_troubleshooting_and_bringup.md`](08_troubleshooting_and_bringup.md)
 if the si5351 ever stops responding after an OS update.
 
