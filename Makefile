@@ -78,7 +78,7 @@ check-filters:
 TESTS := test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse \
 	test-upsample48k test-cw test-key-input test-radio test-encoder test-keyer \
 	test-keyer-straight test-radio-hw test-tci-ws test-tci test-cw-decoder test-cw-spot test-capture-dump \
-	test-codec-check
+	test-codec-check test-i2c
 KEYERS := keyer keyer_straight
 OBJ_NO_KEYER := $(filter-out src/$(KEYER).o,$(OBJ))
 
@@ -102,7 +102,7 @@ test:
 	if [ $$fail -eq 0 ]; then echo "all passed"; else echo "$$fail FAILED - see test-logs/"; exit 1; fi
 
 clean:
-	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw test-key-input test-keyer test-keyer-straight test-tci-ws test-tci test-radio-hw test-encoder test-radio test-cw-decoder test-cw-spot test-capture-dump test-codec-check \
+	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw test-key-input test-keyer test-keyer-straight test-tci-ws test-tci test-radio-hw test-encoder test-radio test-cw-decoder test-cw-spot test-capture-dump test-codec-check test-i2c \
 		src/fft_filter.o src/fft_filter_test.o src/tx_pipeline.o src/tx_pipeline_test.o \
 		src/rx_filter.o src/rx_filter_test.o src/rx_audio_test.o src/rx_audio_impulse_test.o src/upsample48k_test.o \
 		$(KEYERS:%=src/%.o)
@@ -209,6 +209,11 @@ test-capture-dump: src/capture_dump.c src/capture_dump.h src/capture_dump_test.c
 # codec; the settle time shortened so the runs are quick.
 test-codec-check: src/codec_check.c src/codec_check.h src/codec_check_test.c
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc -DCODEC_CHECK_SETTLE_MS=100 src/codec_check.c src/codec_check_test.c -o $@ -lpthread -lm $(TEST_LIBS)
+
+# i2c.c's bus search, with the device nodes faked and which bus answers
+# decided by the harness: no I2C hardware. See i2c_test.c.
+test-i2c: src/i2c.c src/i2c.h src/i2c_test.c
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/i2c.c src/i2c_test.c -o $@ $(TEST_LIBS)
 
 # keyer.h, twice: test-keyer against keyer.c - the design study's golden
 # cases, random paddle input checked sample for sample against the
