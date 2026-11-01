@@ -742,7 +742,7 @@ whole-spectrum fit.
    depth: the edges are trustworthy down to it, and the centre even when
    it is only a few dB.
 3. Put the reported `xtal_filter_center` in `hw_settings.ini` (above the
-   `[tcxo]` line) and restart maxibitx.
+   first `[section]` line) and restart maxibitx.
 4. On a board that transmits, the carrier stays on the dial whatever the
    setting, because the TX shift follows it. `bfo_freq`, which places the
    unwanted mixer product beyond the filter's edge, is calibrated
