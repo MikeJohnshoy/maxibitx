@@ -22,9 +22,19 @@ The frequency is tuned digit by digit: tap a digit to make it the tuning
 step, then turn the mouse wheel, drag up or down, or use the arrow keys.
 Double-click (or double-tap) the frequency to type one in.
 
+Click to tune: a click (or tap) on the trace, the scale or the waterfall
+moves the dial to the frequency under it, to the nearest 10 Hz in CW and
+CWR and the nearest 100 Hz in USB and LSB. In CW, click on the signal;
+in USB and LSB, on the voice's edge nearest the dial, where its carrier
+would be. A click does nothing in DIGI, where WSJT-X chooses the audio
+offset, or while transmitting. Like any retune, it clears RIT and XIT.
+With "SPOT after a click" on in Settings, a click in CW or CWR is
+followed by SPOT 2 s later, once maxibitx has heard 1.5 s of audio at
+the new frequency, putting the station exactly on the pitch.
+
 The gear (and the RX/TX button) opens Settings: the connection, the CW
-filter type, paddle reversal, the TX test tones, the macro texts, and
-the macro fields. A field is a name and a value, MYCALL and PARK to
+filter type, paddle reversal, SPOT after a click, the TX test tones, the
+macro texts, and the macro fields. A field is a name and a value, MYCALL and PARK to
 start with, up to eight; a macro's {NAME} is replaced by the value, and
 a macro naming a field with no value isn't sent.
 
@@ -242,6 +252,12 @@ SPECTRUM_DEFAULT_HALF_SPAN_HZ = 12500
 SCALE_TICKS_HZ = {2500: (1000, 500), 5000: (2000, 500), 12500: (5000, 1000)}
 TRACE_H = 70                   # spectrum trace height, px
 SCALE_H = 18                   # frequency scale strip height, px
+# Click to tune: what the dial is rounded to in each mode. DIGI isn't
+# here - WSJT-X chooses the audio offset, so a click doesn't move the dial.
+CLICK_STEP_HZ = {"CW": 10, "CWR": 10, "USB": 100, "LSB": 100}
+# SPOT after a click waits for 1.5 s of audio at the new frequency
+# (cw_spot.h's CW_SPOT_SAMPLES), plus time for the F command to arrive.
+CLICK_SPOT_DELAY_MS = 2000
 WATERFALL_STOPS = ((0.00, (8, 19, 28)), (0.30, (0, 0, 150)), (0.50, (0, 170, 230)),
                    (0.70, (240, 230, 0)), (0.85, (250, 60, 0)), (1.00, (255, 255, 255)))
 
@@ -877,7 +893,10 @@ class SettingsDialog(tk.Toplevel):
         cw = ttk.LabelFrame(f, text="CW", padding=8)
         cw.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
         ttk.Checkbutton(cw, text="Reverse paddles", variable=p.padrev_var, style="Toolbutton",
-                        command=p.on_padrev_toggled).grid(row=0, column=0, columnspan=2, sticky="w")
+                        command=p.on_padrev_toggled).grid(row=0, column=0, sticky="w")
+        ttk.Checkbutton(cw, text="SPOT after a click", variable=p.click_spot_var,
+                        style="Toolbutton", command=p.save_settings).grid(row=0, column=1,
+                                                                          sticky="w", padx=(4, 0))
         ttk.Label(cw, text="Filter type", style="PanelMuted.TLabel").grid(row=1, column=0, sticky="w",
                                                                           pady=(10, 2))
         ttk.Radiobutton(cw, text="FFT", variable=p.fftfilt_var, value=True, style="Toolbutton",
@@ -1051,6 +1070,8 @@ class Panel(tk.Tk):
         self.band_memory = dict(cfg.get("band_memory", {}))
         self.peak_var = tk.BooleanVar(value=cfg.get("peak_line", True))
         self.auto_floor_var = tk.BooleanVar(value=cfg.get("auto_floor", True))
+        self.click_spot_var = tk.BooleanVar(value=cfg.get("click_spot", False))
+        self.click_spot_job = None   # the after() that runs SPOT after a click
         top = cfg.get("waterfall_top_db", WATERFALL_TOP_DEFAULT_DB)
         if not isinstance(top, (int, float)):
             top = WATERFALL_TOP_DEFAULT_DB
@@ -1215,6 +1236,7 @@ class Panel(tk.Tk):
         self.waterfall_rows = np.zeros((1, 1, 3), np.uint8)
         self.waterfall_image = None
         self.canvas.bind("<Configure>", self.on_canvas_resized)
+        self.canvas.bind("<Button-1>", self.on_spectrum_click)
 
         # The CW decoder's text, under the waterfall in CW and CWR only.
         self.decode_text = tk.Text(spec, height=DECODE_LINES, wrap="char", bg=PANEL, fg=TEXT,
@@ -1378,6 +1400,7 @@ class Panel(tk.Tk):
         for combo in (self.width_combo, self.pitch_combo):
             combo.configure(state="disabled" if gated else "readonly")
         self.filter_frame.configure(text="FILTER - out of circuit in DIGI" if gated else "FILTER")
+        self.canvas.configure(cursor="crosshair" if mode_name in CLICK_STEP_HZ else "")
 
     # ---- status line ----
 
@@ -1493,6 +1516,7 @@ class Panel(tk.Tk):
             "band_memory": self.band_memory,
             "peak_line": self.peak_var.get(),
             "auto_floor": self.auto_floor_var.get(),
+            "click_spot": self.click_spot_var.get(),
             "waterfall_top_db": self.wf_top_var.get(),
         })
         save_config(self.cfg)
@@ -1794,6 +1818,36 @@ class Panel(tk.Tk):
             self.send_xit(self.xit_hz + delta)
         else:
             self.send_rit(self.rit_hz + delta)
+
+    def on_spectrum_click(self, event):
+        """Click to tune: the dial onto the frequency under the click,
+        rounded for the mode, by the scale's own sum (draw_scale())."""
+        step = CLICK_STEP_HZ.get(self.mode)
+        if step is None or self.current_freq_hz is None or self.canvas_w < 2:
+            if self.mode == "DIGI":
+                self.say("DIGI: choose the signal in WSJT-X")
+            return
+        if self.ptt_var.get():
+            self.say("Click to tune: not while transmitting")
+            return
+        span_hz = self.half_span()
+        hz = self.current_freq_hz + (event.x - self.canvas_w / 2) / self.canvas_w * 2 * span_hz
+        hz = int(round(hz / step) * step)
+        if hz != self.current_freq_hz:
+            self.freq_display.set_hz(hz)
+            self.on_freq_tuned(hz)
+        if self.click_spot_job is not None:
+            self.after_cancel(self.click_spot_job)
+            self.click_spot_job = None
+        if self.mode in ("CW", "CWR") and self.click_spot_var.get():
+            self.click_spot_job = self.after(CLICK_SPOT_DELAY_MS, lambda: self.click_spot(hz))
+
+    def click_spot(self, hz):
+        """SPOT after a click - unless the dial, the mode or PTT has moved
+        on in the meantime."""
+        self.click_spot_job = None
+        if self.current_freq_hz == hz and self.mode in ("CW", "CWR") and not self.ptt_var.get():
+            self.on_spot()
 
     def on_spot(self):
         """SPOT: the dial onto the strongest CW tone near the pitch."""
