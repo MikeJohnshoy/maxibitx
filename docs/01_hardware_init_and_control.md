@@ -321,7 +321,8 @@ see [`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md) and
 
 Every clock is derived from the si5351's reference oscillator, a nominal
 25 MHz TCXO. `hw_settings.ini`'s `cal` key gives its measured frequency,
-in sbitx's own `[tcxo]` section (accepted at the top level too);
+at the top level or in sbitx's own `[tcxo]` section, so a file needs no
+`[tcxo]` section;
 `hw_settings_load()` passes it to `si5351_set_calibration()` before any
 clock is set, and with it left out the nominal 25,000,000 is used. An
 error here moves transmit and receive in *opposite* directions, both in
