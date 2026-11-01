@@ -111,15 +111,15 @@ int main(int argc, char **argv) {
   }
  
   // Initialize the si5351 clock generator (this also brings up the I2C
-  // bus it needs, the board's). si5351bx_init() powers down all three
-  // clocks, so clk1 has to be started here before anything downstream
-  // needs it - at its RX value; it only switches to bfo_freq during a TX
-  // burst
-  si5351bx_init(radio_hw_i2c_bus());
+  // bus it is on: the board's usual one, or whichever it answers on).
+  // si5351bx_init() powers down all three clocks, so clk1 has to be
+  // started here before anything downstream needs it - at its RX value;
+  // it only switches to bfo_freq during a TX burst
+  int i2c_bus = si5351bx_init(radio_hw_i2c_bus());
   si5351bx_setfreq(1, xtal_filter_center + RX_IF_FREQ_HZ);
   si5351_reset();
   printf("init: si5351 oscillator ready on I2C bus %d, clk1 (RX) at %d Hz\n",
-         radio_hw_i2c_bus(), xtal_filter_center + RX_IF_FREQ_HZ);
+         i2c_bus, xtal_filter_center + RX_IF_FREQ_HZ);
  
   // The INA260 power monitor needs the I2C bus si5351bx_init() just
   // brought up, so it can only be probed after it, not before.
