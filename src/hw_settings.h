@@ -16,8 +16,10 @@ void hw_settings_load(void);
 // maxibitx.c refuses to start. There is no default, so a board is never
 // driven with another board's pins. zbitx's own hw= key is not read.
 //
-// i2c_bus, optional: the Linux I2C bus the si5351 is on (`i2cdetect -l`),
-// for when it isn't the board's usual one. -1 if absent.
+// i2c_bus, optional: the Linux I2C bus to look for the si5351 on first
+// (`i2cdetect -l`), instead of the board's usual one. Rarely needed:
+// si5351bx_init() searches the other buses when it isn't there. -1 if
+// absent.
 // docs/dsp_design_notes/zbitx_port_study.md §9.
 extern char sbitx_version[32];
 extern int hw_i2c_bus;
