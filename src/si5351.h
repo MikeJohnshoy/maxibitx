@@ -6,9 +6,13 @@
 #include <stdint.h>
 
 void si5351_set_calibration(int32_t cal);
-// Brings up the I2C bus the si5351 is on, resets it and stops all three
-// clocks.
-void si5351bx_init(int i2c_bus);
+// Finds the si5351 - on preferred_bus, the board's usual bus or
+// hw_settings.ini's i2c_bus, or failing that on whichever other bus it
+// answers - brings that bus up, resets it and stops all three clocks.
+// Returns the bus it is using; says on the console when that isn't
+// preferred_bus, or when no bus has it (preferred_bus is used anyway, and
+// every write to it will fail).
+int si5351bx_init(int preferred_bus);
 void si5351bx_setfreq(uint8_t clknum, uint32_t fout);
 void si5351_reset();
 void si5351a_clkoff(uint8_t clk);
