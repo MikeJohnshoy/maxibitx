@@ -10,6 +10,18 @@
 // `i2cdetect -l`, e.g. 22) via the kernel's i2c-dev interface.
 void i2c_init(int i2c_bus_number);
 
+// The bus a device answers on: `preferred` if it answers there, otherwise
+// the lowest-numbered other /dev/i2c-N where it does; -1 if none does.
+// "Answers" is a read of its register 0 acknowledged, which changes
+// nothing on the device. Keeps nothing open. For a board whose bus number
+// the kernel assigns, which the OS's overlays can change.
+int i2c_find_bus(int preferred, uint8_t address);
+
+// i2c_find_bus() with the test supplied, and the directory of i2c-N device
+// nodes ("/dev" for i2c_find_bus()) - for the bench harness.
+int i2c_find_bus_with(int preferred, uint8_t address, const char *dev_dir,
+                      int (*answers)(int bus, uint8_t address));
+
 // Writes value to register command: the SMBus "write byte" framing.
 // Returns 0.
 int32_t i2c_write_byte_data(uint8_t i2c_address, uint8_t command, uint8_t value);
