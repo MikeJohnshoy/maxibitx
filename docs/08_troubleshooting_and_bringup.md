@@ -10,9 +10,11 @@ Hardware bring-up gotchas that don't belong in the design docs proper:
 
 - The si5351's I2C bus number is Linux-assigned (22 on the sBitx via
   the `i2c-rtc-gpio` overlay, 3 on the zBitx), not a fixed hardware
-  address — re-check with `i2cdetect -l` if the si5351 ever stops
-  responding after an OS/kernel update, and set `i2c_bus` in
-  `hw_settings.ini` if it has moved, per the note in
+  address. If it moves after an OS/kernel update, maxibitx finds the
+  si5351 on its new bus and says so at start-up; `i2c_bus = N` in
+  `hw_settings.ini` makes that the bus tried first. If no bus answers
+  (`init: no si5351 answers at 0x60 on any I2C bus`), the overlay isn't
+  loaded: check `i2cdetect -l` and `config.txt`. See
   [`01_hardware_init_and_control.md`](01_hardware_init_and_control.md).
 - maxibitx refusing to start because `hw_settings.ini` doesn't name the
   board, and the zBitx's `RX_LINE` needing the UART off
