@@ -504,8 +504,9 @@ transmit, a higher audio IF goes out at a higher RF.
 
 The si5351 runs from a TCXO whose actual frequency, measured on the
 bench, is the `cal` value in `hw_settings.ini` (nominally 25 MHz). It
-sits at address 0x60 on the board's I2C bus: bus 22 on the sBitx, or
-the bus `hw_settings.ini`'s `i2c_bus` key names. Every clock change is an
+sits at address 0x60 on the board's I2C bus: bus 22 on the sBitx, 3 on
+the zBitx, or whichever bus it answers on if Linux has numbered them
+differently. Every clock change is an
 I2C transaction, which is one reason clock changes stay off the audio
 thread.
 
@@ -1340,6 +1341,7 @@ real time. Run it before uploading a change.
 | `make test-tci-ws` | `tci_ws.c` over loopback: the WebSocket handshake and its refusals, every frame length encoding, fragmentation, close, oversize and malformed frames, the client limit, and the send queue's drop policy |
 | `make test-tci` | the TCI server over loopback, with the radio stubbed: a JTDX-style start-up, state echoes, PTT rules, receive audio in every format and rate, I/Q at both rates, transmit audio paced by `TX_CHRONO`, and CW text read back from what the real keyer keys |
 | `make test-radio-hw` | `hw_settings.c`'s `sbitx_version` and `i2c_bus` keys and `radio_hw.c`'s board profiles, with GPIO and I2C stubbed: the pins each board claims and their levels, LPF selection, the order of the T/R relay sequence, the zBitx's LPF chosen at the transmit frequency and no transmit where there is no LPF, and each board's knob pins, clear of every other pin in use |
+| `make test-i2c` | `i2c.c`'s search for the si5351's bus, with the device nodes faked: the usual bus first, then the others in number order, and none found |
 
 `make check-comments` runs `tools/check_comments.py` over the sources,
 enforcing the comment policy: comments state what the code does now,
