@@ -63,7 +63,8 @@ static const struct board boards[] = {
         .tx_permitted = 1,
         // The si5351 shares the RTC's bus (GPIO13/GPIO6), which the
         // i2c-rtc-gpio overlay makes bus 22 (`i2cdetect -l`, then
-        // `i2cdetect -y 22` shows it at 0x60). The kernel can renumber it.
+        // `i2cdetect -y 22` shows it at 0x60). The kernel can renumber it;
+        // si5351bx_init() then finds it on its new bus.
         .i2c_bus = 22,
         .tx_line_pin = 23,
         .tx_power_pin = 16,
