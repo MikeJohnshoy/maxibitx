@@ -38,14 +38,15 @@ int hw_i2c_bus = -1;
 // aren't mistaken for top-level keys) and read past.
 enum hw_section { HW_SECTION_TOP, HW_SECTION_TCXO, HW_SECTION_TX_BAND, HW_SECTION_OTHER };
 
-// Keys that only take effect above the first [section]. One written further
-// down - most easily by appending it to the end of the file, which is inside
-// the last [tx_band] - would otherwise be skipped without a word.
+// Keys that only take effect above the first [section] ('cal' also in
+// [tcxo]). One written further down - most easily by appending it to the end
+// of the file, which is inside the last [tx_band] - would otherwise be
+// skipped without a word.
 static int is_top_level_key(const char *key) {
   static const char *const keys[] = { "bfo_freq", "xtal_filter_center", "full_scale_power",
                                       "max_power", "ext_ptt_delay_ms", "key_debounce_ms",
                                       "tci_port", "tci_max_clients", "tci_bind",
-                                      "sbitx_version", "i2c_bus" };
+                                      "sbitx_version", "i2c_bus", "cal" };
   for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
     if (!strcmp(key, keys[i]))
       return 1;
