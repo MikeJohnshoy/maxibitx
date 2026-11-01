@@ -13,8 +13,8 @@
 #include "i2c.h"
 #include "si5351.h"
 
-// The I2C bus is the board's (radio_hw_i2c_bus()), passed to
-// si5351bx_init().
+// The I2C bus is found by si5351bx_init(), starting from the board's
+// (radio_hw_i2c_bus()).
 
 #define SI_CLK0_CONTROL  16      // Register definitions
 #define SI_CLK1_CONTROL 17
@@ -284,7 +284,17 @@ void si5351_set_calibration(int32_t cal){
     xtal_freq_calibrated = cal;
 }
 
-void si5351bx_init(int i2c_bus){
+int si5351bx_init(int preferred_bus){
+  int i2c_bus = i2c_find_bus(preferred_bus, SI5351_ADDR);
+  if (i2c_bus < 0) {
+    printf("init: no si5351 answers at 0x%02x on any I2C bus - trying bus %d anyway; "
+           "check the board's I2C overlay (i2cdetect -l)\n", SI5351_ADDR, preferred_bus);
+    i2c_bus = preferred_bus;
+  } else if (i2c_bus != preferred_bus) {
+    printf("init: no si5351 on I2C bus %d, but one answers on bus %d - using that "
+           "(i2c_bus = %d in hw_settings.ini skips the search)\n",
+           preferred_bus, i2c_bus, i2c_bus);
+  }
   i2c_init(i2c_bus);
 	usleep(10000);
   si5351_reset();
@@ -292,4 +302,5 @@ void si5351bx_init(int i2c_bus){
   si5351a_clkoff(SI_CLK0_CONTROL);
   si5351a_clkoff(SI_CLK1_CONTROL);
   si5351a_clkoff(SI_CLK2_CONTROL);
+  return i2c_bus;
 }
