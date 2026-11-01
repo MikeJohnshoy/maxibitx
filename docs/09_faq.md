@@ -216,11 +216,13 @@ belong in a file for exactly that reason.
 
 One trap in that file is worth knowing, because it has cost time once
 already: the parser tracks `[sections]`, so a *top-level* key placed
-below a section header belongs to that section and is silently ignored.
-`bfo_freq`, `xtal_filter_center`, `full_scale_power` and `max_power`
-must all appear before the `[tcxo]` line. (`cal` is the exception — it
-is accepted both inside `[tcxo]`, where sbitx puts it, and at the top
-level.) A key that goes missing without complaint is the symptom.
+below a section header belongs to that section and is ignored.
+`bfo_freq`, `xtal_filter_center`, `full_scale_power`, `max_power` and
+the other top-level keys must all appear before the first `[section]`
+line. `cal` may be at the top level too, or inside `[tcxo]`, where sbitx
+puts it - so a file needs no `[tcxo]` section. It used to be silent; now
+the console says `init: <key> in data/hw_settings.ini is inside a
+[section], so it is ignored` for any of them, `cal` included.
 
 ### How do we control GPIO for the LPF relays and PTT — with wiringPi?
 
