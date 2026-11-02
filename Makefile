@@ -78,7 +78,7 @@ check-filters:
 TESTS := test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse \
 	test-upsample48k test-cw test-key-input test-radio test-encoder test-keyer \
 	test-keyer-straight test-radio-hw test-tci-ws test-tci test-cw-decoder test-cw-spot test-capture-dump \
-	test-codec-check test-i2c
+	test-codec-check test-i2c test-cw-shape
 KEYERS := keyer keyer_straight
 OBJ_NO_KEYER := $(filter-out src/$(KEYER).o,$(OBJ))
 
@@ -102,7 +102,7 @@ test:
 	if [ $$fail -eq 0 ]; then echo "all passed"; else echo "$$fail FAILED - see test-logs/"; exit 1; fi
 
 clean:
-	rm -f $(OBJ) maxibitx test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw test-key-input test-keyer test-keyer-straight test-tci-ws test-tci test-radio-hw test-encoder test-radio test-cw-decoder test-cw-spot test-capture-dump test-codec-check test-i2c \
+	rm -f $(OBJ) maxibitx test-cw-shape test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw test-key-input test-keyer test-keyer-straight test-tci-ws test-tci test-radio-hw test-encoder test-radio test-cw-decoder test-cw-spot test-capture-dump test-codec-check test-i2c \
 		src/fft_filter.o src/fft_filter_test.o src/tx_pipeline.o src/tx_pipeline_test.o \
 		src/rx_filter.o src/rx_filter_test.o src/rx_audio_test.o src/rx_audio_impulse_test.o src/upsample48k_test.o \
 		$(KEYERS:%=src/%.o)
@@ -163,6 +163,13 @@ test-upsample48k: src/upsample48k.c src/upsample48k_test.c src/upsample48k.h
 # docs/dsp_design_notes/cw_keyer_design_study.md §16 and §17.
 test-cw: src/cw.c src/cw.h src/cw_envelope_test.c src/key_input.c src/key_input.h src/keyer.c src/keyer.h src/morse.c src/morse.h src/gpio.c src/vfo.c src/vfo.h
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/cw.c src/key_input.c src/keyer.c src/morse.c src/gpio.c src/vfo.c src/cw_envelope_test.c -o $@ -lm -lpthread $(TEST_LIBS)
+
+# The transmitted CW's keying sidebands: a held dot paddle keyed through
+# key_input.c, keyer.c and cw.c into tx_pipeline.c, at full and reduced
+# power, its spectrum checked against the CSI mask at 40 WPM
+# (cw_shape_test.c; docs/dsp_design_notes/tx_cw_keying_spectrum.md).
+test-cw-shape: src/cw.c src/cw.h src/cw_shape_test.c src/key_input.c src/key_input.h src/keyer.c src/keyer.h src/morse.c src/morse.h src/gpio.c src/vfo.c src/vfo.h src/fft_filter.c src/fft_filter.h src/tx_pipeline.c src/tx_pipeline.h
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/cw.c src/key_input.c src/keyer.c src/morse.c src/gpio.c src/vfo.c src/fft_filter.c src/tx_pipeline.c src/cw_shape_test.c -o $@ -lfftw3f -lm -lpthread $(TEST_LIBS)
 
 # key_input.c's input logic without the GPIO: synthetic edges, bounce and
 # plug scenarios fed to the same steps its thread runs, checking debounce,
