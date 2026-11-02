@@ -73,7 +73,8 @@ double cw_get_sample(void);
 double cw_envelope_level(void);
 
 // Samples each fall is held off after key-up for 1:1 weighting, derived from
-// the envelope table at cw_init(): 150 (1.56 ms) for the current table.
+// the envelope table at cw_init(): 0 for DL1YCF's ramp, which crosses 50% at
+// its midpoint.
 int cw_weighting_hold_samples(void);
 
 // Retunes the keyed tone. Not a control in its own right: the sidetone has
