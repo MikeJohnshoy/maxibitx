@@ -86,6 +86,7 @@ static int64_t last_capture_ns = 0;
 static int weighting_hold = 0;
 static int hold_remaining = 0; // samples of the current hold still to run
 
+// calculate every element of the waveform shape table
 static void make_envelope(void) {
     for (int i = 0; i < CW_ENVELOPE_LEN; i++) {
         double y = (double)i / CW_RAMP_SAMPLES;
