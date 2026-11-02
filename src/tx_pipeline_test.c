@@ -39,11 +39,10 @@
 //   a *steady* tone across a block boundary in step 2's bench; this
 //   checks the same claim holds for a tone whose amplitude is actively
 //   changing across that boundary too, which step 2 never exercised.
-//   Uses a synthetic linear ramp standing in for cw.c's real
-//   Blackman-Harris envelope table (private to cw.c, not exported) -
-//   close enough to prove the pipeline itself adds no discontinuity; a
-//   real on-air/scope check with the actual envelope table remains open
-//   per §9.
+//   Uses a synthetic linear ramp standing in for cw.c's real keying
+//   ramp (private to cw.c, not exported) - close enough to prove the
+//   pipeline itself adds no discontinuity. test-cw-shape runs cw.c's own
+//   ramp through the pipeline and checks its spectrum.
 
 #include <stdio.h>
 #include <math.h>
@@ -373,8 +372,7 @@ int main(void)
 		// TX_PIPELINE_BLOCK_LEN samples - the actual internal seam this
 		// case needs to straddle is between two separate *calls*, not
 		// just some index inside one big buffer. RAMP_START is chosen
-		// so the ramp (480 samples - the same span cw.c's real
-		// CW_ENVELOPE_LEN uses, ~5ms at 96kHz) is centered exactly on
+		// so the ramp (480 samples, 5ms at 96kHz) is centered exactly on
 		// the boundary between call 2's block and call 3's
 		// (TX_PIPELINE_BLOCK_LEN*3 = sample 3072), with steady key-down
 		// before it and steady key-up (silence) after.
