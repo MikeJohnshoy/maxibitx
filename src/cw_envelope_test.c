@@ -7,7 +7,8 @@
 // every sample that transmits, as sound.c does. Checks, at the envelope's
 // 50% points (cw_envelope_level()):
 //
-//   - the hold cw_init() derives from the table is 150 samples;
+//   - the hold cw_init() derives from the table is 0 samples, since the
+//     ramp crosses 50% at its midpoint;
 //   - each mark and space equals the time between the key's edges: within
 //     0.23 samples on block boundaries, within a sample more anywhere else
 //     (an edge's position rounds down), including a mark shorter than a
@@ -38,7 +39,7 @@
 
 #define BLOCK 1024
 #define FS 96000.0
-#define EXPECTED_HOLD 150
+#define EXPECTED_HOLD 0
 #define T0 1000000000LL // simulated capture clock, ns; 0 is kept clear
 #define MS 1000000LL
 
@@ -267,9 +268,10 @@ int main(void) {
   r = run(e, n, 100, 0);
   report(&r, 1.3);
 
-  printf("a 5 ms tap inside one block, 480.5 samples long\n");
+  printf("a 9 ms tap inside one block, 864.5 samples long - the shortest mark\n"
+         "that reaches full output, so the shortest that keeps its length\n");
   e[0] = (struct edge){(int64_t)(31.2 * MS), KEY_RING, 1};
-  e[1] = (struct edge){(int64_t)(31.2 * MS) + 5005208, KEY_RING, 0};
+  e[1] = (struct edge){(int64_t)(31.2 * MS) + 9005208, KEY_RING, 0};
   r = run(e, 2, 50, 0);
   report(&r, 1.3);
 
