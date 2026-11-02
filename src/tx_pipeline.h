@@ -87,8 +87,14 @@ enum tx_pipeline_signal {
 // average would be a speech compressor, which belongs upstream of this
 // file. Envelope means 2*|out_c[i]|, the magnitude of the still-complex
 // signal, not the input audio's peak. A constant-envelope signal at or
-// below the ceiling - CW key-down, a steady tone - never moves the gain.
-// Why each of those: docs/03_tx_processing_pipeline.md, "Setting power".
+// below the ceiling - a steady tone, or CW, which is driven at the ceiling
+// (below) - never moves the gain. Why each of those: docs/03_tx_processing_pipeline.md, "Setting power".
+//
+// CW is driven at the ceiling instead (cw_drive), so each element keeps
+// cw.c's shape at any POWER; limited, the gain moves on every rise and
+// widens the keying sidebands (tx_cw_keying_spectrum.md §5). cw_drive
+// follows a new ceiling over TX_CW_DRIVE_SLEW_S, so a POWER change
+// mid-element doesn't click.
 //
 // The output is delayed by TX_ALC_LOOKAHEAD_SAMPLES while the gain is
 // computed from the undelayed signal, and attack is rate-limited to
@@ -101,6 +107,7 @@ enum tx_pipeline_signal {
 #define TX_ALC_RELEASE_S 0.25f        // slow enough not to pump in a syllable
 #define TX_ALC_METER_DECAY_S 1.0f     // peak-hold decay for the ALC readout
 #define TX_ALC_METER_RANGE_DB 20.0f   // dB the meter falls in one decay time
+#define TX_CW_DRIVE_SLEW_S 0.02f      // cw_drive's time to cross 0 to 1
 
 struct tx_pipeline {
 	struct filter *filt;
@@ -123,6 +130,8 @@ struct tx_pipeline {
 	                             // since the block length isn't a multiple
 	                             // of the look-ahead
 	volatile float meter_db;   // gain reduction in dB, peak-held
+	float cw_drive;             // CW's input scale, following ceiling;
+	                             // below 0 until the first CW block
 };
 
 // Allocates the pipeline and tunes its filter to 300-3000Hz, keeping both
@@ -148,7 +157,8 @@ void tx_pipeline_process_block(struct tx_pipeline *p, enum tx_pipeline_signal si
 // transmission starts from silence rather than from the tail of the last
 // one. Clears the overlap-save history (about a block of the previous
 // burst), the limiter's look-ahead delay line and its gain, the ALC
-// meter, and the block counter the per-block sign flip is derived from.
+// meter, the block counter the per-block sign flip is derived from, and
+// CW's drive, which starts the next transmission at the ceiling.
 //
 // Keeps the things that describe the radio rather than the signal: the
 // filter's passband, the IF placement and the limiter's ceiling all
