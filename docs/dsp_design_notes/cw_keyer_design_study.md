@@ -699,6 +699,12 @@ Each step stands alone and is useful even if the keyer is never finished.
 
 ## 13. Reproducing the numbers
 
+These numbers are for the keying table `cw.c` had when the study was
+made. It has since been replaced by DL1YCF's 9 ms ramp
+(`tx_cw_keying_spectrum.md`), and `envelope_study.py` reads whichever
+`cw.c` it is given: for these, give it the earlier one, with
+`--cw` and `git show acd67bf:src/cw.c > /tmp/cw_bh.c`.
+
 ```
 python3 tools/keyer_study/envelope_study.py --ref PATH/TO/modem_cw.c --limiter
 gcc -O2 -std=gnu11 tools/keyer_study/iambic_sim.c -o iambic_sim && ./iambic_sim
@@ -1138,6 +1144,10 @@ anything else. `snd_pcm_status()`'s hardware timestamps would remove even
 that dependence if it ever mattered (§6).
 
 ## 17. Weighting with the existing table
+
+(The table below has since been replaced: `tx_cw_keying_spectrum.md`.
+The same derivation gives C = 0 for DL1YCF's ramp, which crosses 50% at
+its midpoint.)
 
 The table's rise crosses 50% at index `i50` = 314.6 of `N − 1` = 479, and
 the fall, reading the same table backwards, crosses 50% at `N − 1 − i50`
