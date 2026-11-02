@@ -10,31 +10,40 @@ mask, its rise and fall times, its speed and weighting, and its chirp.
     cw_shape.py --replay sig.npy                   # measure a recording again
     cw_shape.py --simulate dl1ycf --snr 80         # a synthetic signal: check the tool
 
-It records --seconds of I/Q (30 by default), finds the signal, brings it to
-zero and decimates it to 6 kHz, then measures:
+It records --seconds of I/Q (30 by default), finds the signal (the
+strongest at its peak, so a keyed signal rather than a steady carrier),
+brings it to zero and decimates it to 6 kHz, then measures:
 
   - Keying sidebands: the strongest level, over the recording, beyond each
-    offset from the carrier, each side, relative to the carrier, from
-    frames of 1024 samples at 6 kHz (5.9 Hz bins, Blackman-Harris) held at
-    their peak. The CSI mask as DL1YCF reads it - the mask's 180, 300 and
-    675 Hz are bandwidths, so these are offsets - is -20 dBc beyond 90 Hz,
-    -40 beyond 150 and -60 beyond 338; DL1YCF's own -80, -100 and -120 dBc
-    beyond 600, 900 and 1200 Hz are shown for comparison.
+    offset from the carrier, each side, within 1500 Hz, relative to the
+    carrier, from frames of 1024 samples at 6 kHz (5.9 Hz bins,
+    Blackman-Harris) held at their peak, with where it is. The CSI mask as
+    DL1YCF reads it - the mask's 180, 300 and 675 Hz are bandwidths, so
+    these are offsets - is -20 dBc beyond 90 Hz, -40 beyond 150 and -60
+    beyond 338; DL1YCF's own -80, -100 and -120 dBc beyond 600, 900 and
+    1200 Hz are shown for comparison.
+  - Speed and weighting, from the dots' length between the 50% points of
+    an envelope within 100 Hz of the carrier, which noise doesn't break up.
   - Rise and fall times, 10% to 90% of the key-down level, the median over
-    every element that starts and ends at the floor.
-  - Speed and weighting from the dots' length between the 50% points.
-  - Chirp: the frequency in the first 3 ms after each element reaches 90%,
-    against the rest of the element.
+    the elements, and chirp: the frequency in the first 3 ms after each
+    element reaches 90%, against the rest of it. Measured on the widest
+    envelope - within 1200, 600, 300 or 150 Hz - that is at least 26 dB
+    above the noise and clear of any other station; the filter's own rise
+    time is printed beside them, and a rise near it isn't resolved. Too
+    weak for 150 Hz, they are left out.
 
 What it can see. Off the air, a signal is measured only as far down as
-the noise lets it: a signal 50 dB above the noise can't show -60 dBc.
-Each mask point therefore says PASS, FAIL, or "can't tell" when what
-rises above the limit is only the noise (held at its peak, from the
-recording's silent frames, and within 3 dB of it). A neighbouring signal inside 2.4 kHz shows up as a FAIL on its
-side - check the plot (--plot, needs matplotlib) before believing one.
-Fading changes the carrier's level between frames and smears the result;
-stronger and steadier is better. A measurement of real hardware ahead of
-ARRL's lab numbers, not in place of them.
+the noise lets it. The noise is measured from 1.6 to 2.3 kHz from the
+carrier, on whichever side is quieter; held at its peak it reaches about
+6 dB above its median, and that level is printed and drawn. Each mask
+point says PASS, FAIL, "can't tell" when the level above the limit is
+within 6 dB of the noise (a sideband and the noise in the same bin add),
+or "another signal?" when something stronger
+than -20 dBc lies past 338 Hz - a neighbouring station, most likely;
+check the plot (--plot, needs matplotlib). Fading changes the carrier's
+level between frames and smears the result; stronger and steadier is
+better. A measurement of real hardware ahead of ARRL's lab numbers, not
+in place of them.
 
 Your own transmitter: the sBitx can't hear itself (receive is muted in
 transmit). Key it into a dummy load, couple a small sample of its output
@@ -45,7 +54,8 @@ splatter you are trying to measure.
 
 --simulate SHAPE makes a 96 kHz recording instead: bursts of dots at
 --wpm with gaps, 500 Hz above the dial, in noise --snr dB below the
-carrier in 2500 Hz, quantised as iq_stream.c sends it. SHAPE is dl1ycf
+carrier in 2500 Hz, quantised as iq_stream.c sends it; --neighbour HZ
+adds a steady carrier that far from it, 6 dB weaker. SHAPE is dl1ycf
 (cw.c's ramp, 9 ms), bh5 (cw.c's earlier ramp: the rising half of a
 Blackman-Harris window, 5 ms, with its 1.56 ms weighting hold) or hard
 (0.1 ms). docs/dsp_design_notes/tx_cw_keying_spectrum.md has the
@@ -73,7 +83,14 @@ LOCATE_NFFT = 16384
 DC_GUARD_HZ = 30                   # the dial's own zero is skipped when searching
 CSI_MASK = ((90, -20), (150, -40), (338, -60))
 DL1YCF_EXTRA = ((600, -80), (900, -100), (1200, -120))
-CANT_TELL_DB = 3                   # noise within this of a limit: can't tell
+SEARCH_HZ = 1500                   # the mask is checked within this of the carrier
+NOISE_HZ = (1600, 2300)            # the noise is measured here, the quieter side
+NOISE_PEAK_DB = 6                  # peak-held noise's peaks above its median
+CLEAR_DB = 6                       # a FAIL must stand this far above the noise
+NEIGHBOUR_DBC = -20                # stronger than this past 338 Hz: another station?
+MARK_HZ = 100                      # the envelope that finds the elements, either side
+TIMING_HZ = (1200, 600, 300, 150)  # rise and fall: the widest the noise allows
+TIMING_SNR_DB = 26                 # the 10% point is -20 dB, plus 6 dB of margin
 CHIRP_EARLY_MS = 3.0
 
 # cw.c's ramp: DL1YCF's coefficients for sin(2 pi k y), k = 1 to 5.
@@ -99,7 +116,7 @@ def ramp(shape):
     return np.linspace(0, 1, 11), 0
 
 
-def simulate(shape, wpm, snr_db, seconds, seed=1):
+def simulate(shape, wpm, snr_db, seconds, neighbour_hz=None, seed=1):
     edge, hold = ramp(shape)
     dot = int(round(1.2 / wpm * IQ_RATE_HZ))
     key = np.zeros(int(seconds * IQ_RATE_HZ), dtype=bool)
@@ -122,8 +139,10 @@ def simulate(shape, wpm, snr_db, seconds, seed=1):
         pos = min(pos + 1, top) if k else max(pos - 1, 0)
         env[i] = edge[pos]
     n = np.arange(len(env))
-    amp = 10 ** (-10 / 20)                      # carrier at -10 dBFS
+    amp = 10 ** (-30 / 20)                      # carrier at -30 dBFS
     sig = amp * env * np.exp(2j * np.pi * 500.0 * n / IQ_RATE_HZ)
+    if neighbour_hz:                            # a steady carrier, 6 dB weaker
+        sig += 0.5 * amp * np.exp(2j * np.pi * (500.0 + neighbour_hz) * n / IQ_RATE_HZ)
     rng = np.random.default_rng(seed)
     sigma = amp / math.sqrt(10 ** (snr_db / 10) * 2500.0 / IQ_RATE_HZ)
     sig += sigma / math.sqrt(2) * (rng.standard_normal(len(n)) + 1j * rng.standard_normal(len(n)))
@@ -165,14 +184,14 @@ def dial_of(host):
 
 def locate(x, offset, search_hz):
     """The signal's frequency in Hz from the dial: near --offset if given,
-    else the strongest within search_hz, refined between bins."""
+    else the strongest within search_hz, refined between bins. Strongest at
+    its peak, not on average, so a keyed signal wins over a steady carrier
+    of the same strength."""
     n = LOCATE_NFFT
     w = np.hanning(n)
     acc = np.zeros(n)
-    frames = 0
-    for s in range(0, len(x) - n, n):
-        acc += np.abs(np.fft.fft(x[s:s + n] * w)) ** 2
-        frames += 1
+    for s in range(0, len(x) - n, n // 2):
+        acc = np.maximum(acc, np.abs(np.fft.fft(x[s:s + n] * w)) ** 2)
     f = np.fft.fftfreq(n, 1 / IQ_RATE_HZ)
     if offset is not None:
         allowed = np.abs(f - offset) <= 100
@@ -195,6 +214,24 @@ def baseband(x, f0):
     return np.fft.ifft(Y * taper)[::DECIM]
 
 
+def lowpass(b, hz):
+    """b kept within +-hz of the carrier: a zero-phase filter, flat to hz and
+    falling to nothing at 1.25 hz."""
+    F = np.fft.fft(b)
+    f = np.abs(np.fft.fftfreq(len(b), 1 / RATE))
+    t = np.clip((1.25 * hz - f) / (0.25 * hz), 0, 1)
+    return np.fft.ifft(F * (0.5 - 0.5 * np.cos(np.pi * t)))
+
+
+def filter_rise_ms(hz):
+    """lowpass(hz)'s own 10-90% rise for a hard step: what it can resolve."""
+    step = np.concatenate([np.zeros(3000), np.ones(3000)]).astype(complex)
+    y = np.abs(lowpass(step, hz))[1500:4500]
+    t10 = np.argmax(y >= 0.1)
+    t90 = np.argmax(y >= 0.9)
+    return (t90 - t10) / RATE * 1e3
+
+
 def bh4(n):
     x = 2 * np.pi * np.arange(n) / (n - 1)
     return 0.35875 - 0.48829 * np.cos(x) + 0.14128 * np.cos(2 * x) - 0.01168 * np.cos(3 * x)
@@ -205,34 +242,41 @@ def key_down_level(env):
     return float(np.median(env[env > 0.5 * top]))
 
 
-def spectra(b, level):
-    """(freqs, peak-held dBc, average dBc, noise peak-held dBc or None,
-    silent frames)"""
+def spectra(b):
+    """(freqs, peak-held dBc, average power, the carrier's peak-held power,
+    the window's sum of squares)"""
     w = bh4(FRAME)
-    env = np.abs(b)
     peak = np.full(FRAME, 1e-30)
     avg = np.zeros(FRAME)
-    quiet = np.full(FRAME, 1e-30)
-    n_frames = n_quiet = 0
+    n = 0
     for s in range(0, len(b) - FRAME, HOP):
         p = np.abs(np.fft.fftshift(np.fft.fft(b[s:s + FRAME] * w))) ** 2
-        if env[s:s + FRAME].max() < 0.1 * level:
-            quiet = np.maximum(quiet, p)
-            n_quiet += 1
-        else:
-            peak = np.maximum(peak, p)
-            avg += p
-            n_frames += 1
+        peak = np.maximum(peak, p)
+        avg += p
+        n += 1
     f = np.fft.fftshift(np.fft.fftfreq(FRAME, 1 / RATE))
     ref = peak.max()
-    db = lambda v: 10 * np.log10(v / ref + 1e-30)
-    noise = db(quiet) if n_quiet >= 5 else None
-    return f, db(peak), db(avg / max(n_frames, 1)), noise, n_quiet
+    return f, 10 * np.log10(peak / ref + 1e-30), avg / max(n, 1), ref, float(np.sum(w * w))
+
+
+def noise_estimate(f, held, avg):
+    """The noise's median, peak-held (dBc) and average power, from NOISE_HZ on
+    whichever side is quieter - so another station on one side is skipped."""
+    best = None
+    for side in (-1, 1):
+        sel = (side * f >= NOISE_HZ[0]) & (side * f <= NOISE_HZ[1])
+        m = (float(np.median(held[sel])), float(np.median(avg[sel])))
+        if best is None or m[0] < best[0]:
+            best = m
+    return best
 
 
 def beyond(f, v, hz, side):
-    sel = (f > hz) & (f <= KEEP_HZ) if side > 0 else (f < -hz) & (f >= -KEEP_HZ)
-    return float(v[sel].max())
+    """The strongest level more than hz from the carrier on one side, within
+    SEARCH_HZ, and where it is."""
+    sel = (f > hz) & (f <= SEARCH_HZ) if side > 0 else (f < -hz) & (f >= -SEARCH_HZ)
+    i = np.flatnonzero(sel)[np.argmax(v[sel])]
+    return float(v[i]), float(f[i])
 
 
 def cross(env, i, level, step):
@@ -277,22 +321,35 @@ def elements(env, level):
     return marks
 
 
-def timing(marks):
+def speed(marks):
+    """(WPM from the dots, dot:space), either None when there aren't enough
+    marks."""
+    lens = np.array([(m["down50"] - m["up50"]) / RATE for m in marks])
+    spaces = np.array([(b["up50"] - a["down50"]) / RATE for a, b in zip(marks, marks[1:])])
+    if len(lens) < 5:
+        return None, None
+    dots = lens[lens < 2 * np.percentile(lens, 20)]
+    dot = float(np.median(dots))
+    el_sp = spaces[spaces < 2 * dot]
+    return 1.2 / dot, (dot / float(np.median(el_sp)) if len(el_sp) else None)
+
+
+def edges(marks):
     rises = [(m["up90"] - m["up10"]) / RATE * 1e3 for m in marks
              if m["up10"] is not None and m["up90"] is not None and m["up90"] < m["down50"]]
     falls = [(m["down10"] - m["down90"]) / RATE * 1e3 for m in marks
              if m["down10"] is not None and m["down90"] is not None and m["down90"] > m["up50"]]
-    lens = np.array([(m["down50"] - m["up50"]) / RATE for m in marks])
-    spaces = np.array([(b["up50"] - a["down50"]) / RATE for a, b in zip(marks, marks[1:])])
-    out = {"rises": rises, "falls": falls, "wpm": None, "weight": None}
-    if len(lens) >= 5:
-        dots = lens[lens < 2 * np.percentile(lens, 20)]
-        if len(dots):
-            dot = float(np.median(dots))
-            out["wpm"] = 1.2 / dot
-            el_sp = spaces[spaces < 2 * dot]
-            if len(el_sp):
-                out["weight"] = dot / float(np.median(el_sp))
+    return rises, falls
+
+
+def confirmed(marks, guide):
+    """The marks whose middle falls inside one of guide's marks: the
+    narrowband envelope's, which noise doesn't break up."""
+    out = []
+    for m in marks:
+        c = 0.5 * (m["up50"] + m["down50"])
+        if any(g["up50"] <= c <= g["down50"] for g in guide):
+            out.append(m)
     return out
 
 
@@ -319,72 +376,95 @@ def pct(v):
            f"{np.percentile(v, 90):.2f}, {len(v)} elements)"
 
 
-def judge(worst, limit, noise_at):
-    """PASS below the limit; "can't tell" when what is above it is the
-    noise (the worst level is within CANT_TELL_DB of the noise there)."""
+def judge(worst, at_hz, limit, noise_peak):
+    """PASS below the limit; "can't tell" when what is above it is within
+    CLEAR_DB of the noise, since a sideband and the noise in the same bin
+    add (a -62 dBc line read -57 with the noise's peaks at -59); otherwise
+    FAIL - or, well away from the carrier and strong, more likely another
+    station."""
     if worst <= limit:
         return "PASS"
-    if noise_at is not None and worst <= noise_at + CANT_TELL_DB:
+    if worst <= noise_peak + CLEAR_DB:
         return "can't tell"
+    if worst > NEIGHBOUR_DBC and abs(at_hz) > 338:
+        return "another signal?"
     return "FAIL"
 
 
 def report(x, f0, dial, label):
     peak_dbfs = 20 * math.log10(max(np.abs(x.real).max(), np.abs(x.imag).max(), 1e-12))
     b = baseband(x, f0)
-    env = np.abs(b)
-    level = key_down_level(env)
-    f, held, avg, noise, n_quiet = spectra(b, level)
+    narrow = np.abs(lowpass(b, MARK_HZ))
+    level = key_down_level(narrow)
+    f, held, avg, ref, wsum2 = spectra(b)
+    held_med, avg_med = noise_estimate(f, held, avg)
+    noise_peak = held_med + NOISE_PEAK_DB
+    psd = avg_med / (wsum2 * RATE)                     # noise power per Hz
+    snr = lambda width_hz: 10 * math.log10(level ** 2 / (psd * width_hz))
     where = f"{(dial + f0) / 1e6:.6f} MHz" if dial else f"{f0:+.1f} Hz from the dial"
     print(f"\n{label}: signal at {where}")
     print(f"  stream peak {peak_dbfs:.1f} dBFS" +
           ("  - above -6 dBFS: the receiver may be overloaded" if peak_dbfs > -6 else ""))
-    if noise is None:
-        far = np.abs(f) > 1800
-        floor = float(np.median(held[far]))
-        print(f"  fewer than 5 silent frames: noise taken as the median beyond 1.8 kHz, "
-              f"{floor:.1f} dBc")
-        noise_at = lambda hz, side: floor
+    print(f"  carrier {snr(2500):.1f} dB above the noise in 2500 Hz; the noise, held at its "
+          f"peak, reaches about {noise_peak:.1f} dBc, so nothing below that can be seen")
+
+    print(f"  keying sidebands, strongest beyond each offset, within {SEARCH_HZ} Hz:")
+    print(f"  {'':22s}  {'below the carrier':>24s}   {'above the carrier':>24s}")
+    for name, pts in (("CSI", CSI_MASK), ("DL1YCF", DL1YCF_EXTRA)):
+        for hz, limit in pts:
+            cols = []
+            for side in (-1, 1):
+                v, at = beyond(f, held, hz, side)
+                cols.append(f"{v:6.1f} at {at:+6.0f} Hz {judge(v, at, limit, noise_peak):15s}")
+            print(f"    {name:7s}{hz:5d} Hz {limit:5d} dBc   " + "  ".join(cols))
+
+    guide = elements(narrow, level)
+    wpm, weight = speed(guide)
+    if wpm:
+        w = f", dot:space {weight:.2f}" if weight else ""
+        print(f"  speed {wpm:.1f} WPM from the dots{w} (from the envelope within "
+              f"{MARK_HZ} Hz, {len(guide)} elements)")
     else:
-        print(f"  noise held at its peak, from {n_quiet} silent frames: "
-              f"{float(np.median(noise[np.abs(f) > 300])):.1f} dBc")
-        noise_at = lambda hz, side: beyond(f, noise, hz, side)
+        print(f"  speed: too few elements found ({len(guide)})")
 
-    print("  keying sidebands, strongest beyond each offset (below / above the carrier):")
-    for hz, limit in CSI_MASK:
-        lo, hi = beyond(f, held, hz, -1), beyond(f, held, hz, 1)
-        print(f"    CSI     {hz:4d} Hz  {limit:5d} dBc:  {lo:6.1f} {judge(lo, limit, noise_at(hz, -1)):10s}"
-              f"  {hi:6.1f} {judge(hi, limit, noise_at(hz, 1))}")
-    for hz, limit in DL1YCF_EXTRA:
-        lo, hi = beyond(f, held, hz, -1), beyond(f, held, hz, 1)
-        print(f"    DL1YCF  {hz:4d} Hz  {limit:5d} dBc:  {lo:6.1f} {judge(lo, limit, noise_at(hz, -1)):10s}"
-              f"  {hi:6.1f} {judge(hi, limit, noise_at(hz, 1))}")
+    # The widest band the noise allows, and that leaves out any other
+    # station: its filter reaches to 1.25 times the width.
+    others = np.abs(f[(np.abs(f) > 338) & (np.abs(f) <= KEEP_HZ) & (held > NEIGHBOUR_DBC)])
+    nearest = float(others.min()) if len(others) else None
+    if nearest is not None:
+        print(f"  another signal {nearest:.0f} Hz away: the timing below keeps clear of it")
+    width = next((w for w in TIMING_HZ if snr(2 * w) >= TIMING_SNR_DB
+                  and (nearest is None or 1.25 * w < nearest)), None)
+    if width is None:
+        print(f"  rise, fall and chirp: too weak or too crowded to measure - "
+              f"{snr(2 * TIMING_HZ[-1]):.1f} dB above the noise within {TIMING_HZ[-1]} Hz, "
+              f"and they need {TIMING_SNR_DB}")
+    else:
+        bw = lowpass(b, width)
+        env = np.abs(bw)
+        marks = confirmed(elements(env, key_down_level(env)), guide)
+        rises, falls = edges(marks)
+        print(f"  rise and fall measured within {width} Hz ({snr(2 * width):.1f} dB above the "
+              f"noise), which itself rises in {filter_rise_ms(width):.2f} ms:")
+        print(f"    rise 10-90%: " + (pct(rises) if rises else "none measured"))
+        print(f"    fall 90-10%: " + (pct(falls) if falls else "none measured"))
+        c, n = chirp(bw, marks)
+        if c is not None:
+            print(f"    chirp: {c:+.1f} Hz in the first {CHIRP_EARLY_MS:g} ms against the rest "
+                  f"(median of {n} elements)")
+    return f, held, 10 * np.log10(avg / ref + 1e-30), noise_peak
 
-    marks = elements(env, level)
-    t = timing(marks)
-    print(f"  rise 10-90%: " + (pct(t["rises"]) if t["rises"] else "none measured"))
-    print(f"  fall 90-10%: " + (pct(t["falls"]) if t["falls"] else "none measured"))
-    if t["wpm"]:
-        w = f", dot:space {t['weight']:.2f}" if t["weight"] else ""
-        print(f"  speed {t['wpm']:.1f} WPM from the dots{w}")
-    c, n = chirp(b, marks)
-    if c is not None:
-        print(f"  chirp: {c:+.1f} Hz in the first {CHIRP_EARLY_MS:g} ms against the rest "
-              f"(median of {n} elements)")
-    return f, held, avg, noise
 
-
-def write_csv(path, f, held, avg, noise):
+def write_csv(path, f, held, avg):
     with open(path, "w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["offset_hz", "peak_held_dbc", "average_dbc", "noise_peak_held_dbc"])
+        w.writerow(["offset_hz", "peak_held_dbc", "average_dbc"])
         for i in range(len(f)):
-            w.writerow([f"{f[i]:.2f}", f"{held[i]:.2f}", f"{avg[i]:.2f}",
-                        "" if noise is None else f"{noise[i]:.2f}"])
+            w.writerow([f"{f[i]:.2f}", f"{held[i]:.2f}", f"{avg[i]:.2f}"])
     print(f"  spectrum written to {path}")
 
 
-def plot(path, f, held, noise, title):
+def plot(path, f, held, noise_peak, title):
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -394,17 +474,16 @@ def plot(path, f, held, noise, title):
         return
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.plot(f, held, lw=0.9, label="signal, peak held")
-    if noise is not None:
-        ax.plot(f, noise, lw=0.7, color="0.6", label="noise, peak held")
+    ax.axhline(noise_peak, color="0.5", lw=0.9, ls=":", label="noise reaches here")
     for pts, style, name in ((CSI_MASK, "-", "CSI mask"), (DL1YCF_EXTRA, "--", "DL1YCF")):
         for side in (-1, 1):
             xs, ys = [], []
             for i, (hz, lim) in enumerate(pts):
-                end = pts[i + 1][0] if i + 1 < len(pts) else KEEP_HZ
+                end = pts[i + 1][0] if i + 1 < len(pts) else SEARCH_HZ
                 xs += [side * hz, side * end]
                 ys += [lim, lim]
             ax.plot(xs, ys, style, color="C3", lw=1.2, label=name if side > 0 else None)
-    ax.set_xlim(-1500, 1500)
+    ax.set_xlim(-SEARCH_HZ, SEARCH_HZ)
     ax.set_ylim(-130, 5)
     ax.set_xlabel("offset from carrier, Hz")
     ax.set_ylabel("dBc")
@@ -433,6 +512,8 @@ def main():
     ap.add_argument("--wpm", type=float, default=40, help="--simulate's speed")
     ap.add_argument("--snr", type=float, default=80,
                     help="--simulate's carrier to noise in 2500 Hz, dB")
+    ap.add_argument("--neighbour", type=float,
+                    help="--simulate: add a steady carrier this far from the signal, Hz")
     a = ap.parse_args()
 
     dial = None
@@ -444,17 +525,17 @@ def main():
         x = np.load(a.replay)
         label = os.path.basename(a.replay)
     else:
-        x = simulate(a.simulate, a.wpm, a.snr, a.seconds)
+        x = simulate(a.simulate, a.wpm, a.snr, a.seconds, a.neighbour)
         label = f"simulated {a.simulate}, {a.wpm:g} WPM, {a.snr:g} dB SNR"
     if a.save:
         np.save(a.save, x.astype(np.complex64))
         print(f"  recording saved to {a.save}")
     f0 = locate(x, a.offset, a.search)
-    f, held, avg, noise = report(x, f0, dial, label)
+    f, held, avg, noise_peak = report(x, f0, dial, label)
     if a.csv:
-        write_csv(a.csv, f, held, avg, noise)
+        write_csv(a.csv, f, held, avg)
     if a.plot:
-        plot(a.plot, f, held, noise, label)
+        plot(a.plot, f, held, noise_peak, label)
 
 
 if __name__ == "__main__":
