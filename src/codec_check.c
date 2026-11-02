@@ -35,20 +35,32 @@ static atomic_int outcome = CODEC_CHECK_RUNNING;
 static double power[CODEC_CHECK_PERIOD];
 static int counted, phase, have_prev;
 static int32_t prev;
-static double score;
 static sem_t done;
 static int (*restart_fn)(void);
 
-double codec_check_score(const double p[CODEC_CHECK_PERIOD]) {
-  double mean = 0, re = 0, im = 0;
-  for (int k = 0; k < CODEC_CHECK_PERIOD; k++) {
-    double a = 2 * M_PI * CODEC_CHECK_HARMONIC * k / CODEC_CHECK_PERIOD;
+double codec_check_score(const double p[CODEC_CHECK_PERIOD], int *harmonic) {
+  double mean = 0;
+  for (int k = 0; k < CODEC_CHECK_PERIOD; k++)
     mean += p[k];
-    re += p[k] * cos(a);
-    im += p[k] * sin(a);
-  }
   mean /= CODEC_CHECK_PERIOD;
-  return mean > 0 ? 2 * hypot(re, im) / CODEC_CHECK_PERIOD / mean : 0;
+  double best = 0;
+  int best_h = 0;
+  for (int h = 1; h <= CODEC_CHECK_HARMONICS && mean > 0; h++) {
+    double re = 0, im = 0;
+    for (int k = 0; k < CODEC_CHECK_PERIOD; k++) {
+      double a = 2 * M_PI * h * k / CODEC_CHECK_PERIOD;
+      re += p[k] * cos(a);
+      im += p[k] * sin(a);
+    }
+    double s = 2 * hypot(re, im) / CODEC_CHECK_PERIOD / mean;
+    if (s > best) {
+      best = s;
+      best_h = h;
+    }
+  }
+  if (harmonic)
+    *harmonic = best_h;
+  return best;
 }
 
 static void start_over(void) {
@@ -79,7 +91,6 @@ void codec_check_block(const int32_t *interleaved, int frames, int channels, int
       double d = (double)r - (double)prev;
       power[phase] += d * d;
       if (++counted == CODEC_CHECK_FRAMES) {
-        score = codec_check_score(power);
         atomic_store_explicit(&state, DONE, memory_order_release);
         sem_post(&done);
         return;
@@ -97,8 +108,10 @@ static void sleep_ms(int ms) {
     ;
 }
 
-// One measurement's score, or -1 if none came (transmitting, or no audio).
-static double measure(void) {
+// One measurement's score and its harmonic, or -1 if none came
+// (transmitting, or no audio). Scored here, not on the audio thread, which
+// leaves power[] alone once it has posted.
+static double measure(int *harmonic) {
   atomic_store_explicit(&state, ASKED, memory_order_release);
   struct timespec until;
   clock_gettime(CLOCK_REALTIME, &until);
@@ -109,7 +122,7 @@ static double measure(void) {
       return -1;
     }
   }
-  double s = score;
+  double s = codec_check_score(power, harmonic);
   atomic_store(&state, IDLE);
   return s;
 }
@@ -117,7 +130,8 @@ static double measure(void) {
 static void *check(void *arg) {
   (void)arg;
   sleep_ms(CODEC_CHECK_SETTLE_MS);
-  double first = measure(), s = first;
+  int h = 0;
+  double s = measure(&h);
   for (int restarts = 0;; restarts++) {
     if (s < 0) {
       printf("codec: couldn't check the sampling state (no receive audio for %d s)\n",
@@ -135,9 +149,9 @@ static void *check(void *arg) {
       break;
     }
     if (restarts == 0)
-      printf("codec: started with a 128-sample timing pattern (%.3f) - every signal "
-             "would have ghosts every 750 Hz%s\n",
-             s, restart_fn ? "; restarting its interface" : " - restart maxibitx");
+      printf("codec: started with a 128-sample timing pattern (%.3f at its harmonic %d) - "
+             "every signal would have ghosts%s\n",
+             s, h, restart_fn ? "; restarting its interface" : " - restart maxibitx");
     if (!restart_fn) {
       atomic_store(&outcome, CODEC_CHECK_BAD_STATE);
       break;
@@ -154,7 +168,7 @@ static void *check(void *arg) {
       break;
     }
     sleep_ms(RESTART_SETTLE_MS);
-    s = measure();
+    s = measure(&h);
   }
   fflush(stdout);
   return NULL;
