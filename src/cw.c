@@ -9,19 +9,18 @@
 // CWR that keys the transmitter, with semi break-in; in USB/LSB the ring
 // (sbitx's PTT line) is a mic PTT switch.
 //
-// Keying envelope: a table-driven Blackman-Harris ramp, 480 samples (5ms
-// at 96kHz), from ~0 to 1.0 - similar to sBitx's own keyer (modem_cw.c).
-// Read forward for attack and backward for decay. A different keying
-// shape is a table swap, not a logic change.
+// Keying envelope: DL1YCF's ramp (piHPSDR's transmitter.c), 9 ms at every
+// speed, from exactly 0 to 1.0, computed into a table at cw_init() and read
+// forward for attack and backward for decay. Its five sine terms are
+// optimised so a string of dots at 40 WPM meets ARRL's Clean Signal
+// Initiative mask; test-cw-shape checks it through tx_pipeline.c, and
+// docs/dsp_design_notes/tx_cw_keying_spectrum.md has the numbers.
 //
-// Weighting: the table is the rising half of a Blackman-Harris window, so it
-// crosses 50% well past its midpoint. Read forward it reaches 50% late, read
-// backward it reaches 50% early, and a mark measured between the 50% points
-// comes out shorter than the key was down - by 150 samples (1.56ms) for this
-// table. So every fall is held off by that many samples after key-up
-// (weighting_hold below, computed from the table at cw_init()), which makes
-// the transmitted mark equal the key-down time at the 50% points: 1:1
-// weighting. docs/dsp_design_notes/cw_keyer_design_study.md §4 and §17.
+// Weighting: the ramp crosses 50% at its midpoint whichever way it is read,
+// so a mark between the 50% points is as long as the key was down - if it
+// is at least CW_RAMP_SAMPLES; a shorter one never reaches full output and
+// comes out shorter. weighting_hold holds each fall off by however late a
+// table crosses 50%, 0 for this one (cw_keyer_design_study.md §4, §17).
 
 #include "cw.h"
 #include "key_input.h"
@@ -33,7 +32,8 @@
 #include <stdatomic.h>
 #include <stdio.h>
 
-#define CW_ENVELOPE_LEN 480
+#define CW_RAMP_SAMPLES 864 // 9 ms at 96 kHz
+#define CW_ENVELOPE_LEN (CW_RAMP_SAMPLES + 1)
 #define CW_SAMPLE_RATE 96000 // sound.c's rate, for block times
 #define CW_MAX_EVENTS 64     // edges taken per block; any beyond wait a block
 #define CW_MAX_BLOCK 4096    // sound.c's MAX_FRAMES
@@ -52,62 +52,14 @@
 // below ~28 WPM (hang_polls()).
 #define CW_HANG_POLLS 28
 
-static const double cw_envelope[CW_ENVELOPE_LEN] = {
-    0.000060, 0.000061, 0.000062, 0.000065, 0.000070, 0.000075, 0.000082, 0.000090, 0.000099,
-    0.000110, 0.000121, 0.000135, 0.000149, 0.000165, 0.000182, 0.000200, 0.000220, 0.000241,
-    0.000264, 0.000288, 0.000314, 0.000341, 0.000369, 0.000400, 0.000432, 0.000465, 0.000500,
-    0.000537, 0.000576, 0.000617, 0.000659, 0.000704, 0.000750, 0.000798, 0.000848, 0.000901,
-    0.000956, 0.001012, 0.001071, 0.001133, 0.001197, 0.001263, 0.001331, 0.001403, 0.001477,
-    0.001553, 0.001633, 0.001715, 0.001800, 0.001888, 0.001979, 0.002073, 0.002171, 0.002271,
-    0.002375, 0.002483, 0.002594, 0.002709, 0.002827, 0.002949, 0.003075, 0.003205, 0.003339,
-    0.003477, 0.003620, 0.003766, 0.003917, 0.004073, 0.004233, 0.004398, 0.004568, 0.004743,
-    0.004923, 0.005108, 0.005298, 0.005494, 0.005695, 0.005901, 0.006114, 0.006332, 0.006556,
-    0.006786, 0.007023, 0.007265, 0.007515, 0.007770, 0.008032, 0.008302, 0.008578, 0.008861,
-    0.009151, 0.009448, 0.009753, 0.010066, 0.010386, 0.010714, 0.011050, 0.011394, 0.011747,
-    0.012108, 0.012477, 0.012855, 0.013242, 0.013637, 0.014042, 0.014456, 0.014880, 0.015313,
-    0.015756, 0.016208, 0.016671, 0.017144, 0.017627, 0.018120, 0.018624, 0.019139, 0.019665,
-    0.020201, 0.020749, 0.021309, 0.021880, 0.022462, 0.023057, 0.023663, 0.024282, 0.024913,
-    0.025556, 0.026212, 0.026881, 0.027563, 0.028258, 0.028967, 0.029689, 0.030424, 0.031173,
-    0.031937, 0.032714, 0.033506, 0.034312, 0.035133, 0.035968, 0.036819, 0.037684, 0.038565,
-    0.039461, 0.040373, 0.041301, 0.042244, 0.043204, 0.044180, 0.045173, 0.046182, 0.047207,
-    0.048250, 0.049310, 0.050387, 0.051481, 0.052593, 0.053723, 0.054870, 0.056036, 0.057219,
-    0.058421, 0.059642, 0.060881, 0.062139, 0.063416, 0.064712, 0.066027, 0.067362, 0.068717,
-    0.070091, 0.071484, 0.072898, 0.074332, 0.075787, 0.077261, 0.078756, 0.080272, 0.081809,
-    0.083367, 0.084946, 0.086546, 0.088167, 0.089810, 0.091475, 0.093161, 0.094869, 0.096599,
-    0.098352, 0.100126, 0.101923, 0.103742, 0.105584, 0.107448, 0.109335, 0.111245, 0.113178,
-    0.115134, 0.117113, 0.119115, 0.121141, 0.123190, 0.125263, 0.127359, 0.129479, 0.131622,
-    0.133790, 0.135981, 0.138196, 0.140435, 0.142699, 0.144986, 0.147298, 0.149633, 0.151994,
-    0.154378, 0.156787, 0.159220, 0.161678, 0.164160, 0.166666, 0.169198, 0.171753, 0.174334,
-    0.176938, 0.179568, 0.182222, 0.184901, 0.187604, 0.190332, 0.193084, 0.195861, 0.198663,
-    0.201489, 0.204340, 0.207215, 0.210114, 0.213038, 0.215987, 0.218959, 0.221956, 0.224978,
-    0.228023, 0.231093, 0.234186, 0.237304, 0.240445, 0.243610, 0.246799, 0.250012, 0.253248,
-    0.256508, 0.259791, 0.263097, 0.266427, 0.269779, 0.273154, 0.276553, 0.279973, 0.283417,
-    0.286883, 0.290371, 0.293881, 0.297413, 0.300967, 0.304542, 0.308139, 0.311758, 0.315397,
-    0.319057, 0.322739, 0.326440, 0.330162, 0.333905, 0.337667, 0.341449, 0.345251, 0.349072,
-    0.352912, 0.356771, 0.360649, 0.364545, 0.368459, 0.372392, 0.376342, 0.380309, 0.384294,
-    0.388296, 0.392314, 0.396349, 0.400400, 0.404466, 0.408549, 0.412646, 0.416759, 0.420886,
-    0.425027, 0.429183, 0.433353, 0.437535, 0.441731, 0.445940, 0.450161, 0.454395, 0.458640,
-    0.462897, 0.467165, 0.471443, 0.475732, 0.480031, 0.484340, 0.488658, 0.492986, 0.497321,
-    0.501665, 0.506017, 0.510376, 0.514743, 0.519116, 0.523495, 0.527881, 0.532271, 0.536667,
-    0.541068, 0.545473, 0.549882, 0.554294, 0.558709, 0.563127, 0.567547, 0.571969, 0.576393,
-    0.580817, 0.585241, 0.589666, 0.594090, 0.598514, 0.602936, 0.607356, 0.611775, 0.616190,
-    0.620603, 0.625012, 0.629417, 0.633817, 0.638213, 0.642603, 0.646987, 0.651365, 0.655736,
-    0.660100, 0.664456, 0.668804, 0.673144, 0.677474, 0.681795, 0.686105, 0.690405, 0.694694,
-    0.698971, 0.703236, 0.707489, 0.711729, 0.715955, 0.720168, 0.724366, 0.728549, 0.732716,
-    0.736868, 0.741004, 0.745123, 0.749224, 0.753308, 0.757373, 0.761420, 0.765447, 0.769455,
-    0.773442, 0.777409, 0.781355, 0.785279, 0.789181, 0.793060, 0.796917, 0.800750, 0.804559,
-    0.808344, 0.812103, 0.815838, 0.819546, 0.823229, 0.826885, 0.830513, 0.834114, 0.837687,
-    0.841231, 0.844746, 0.848232, 0.851688, 0.855114, 0.858509, 0.861873, 0.865206, 0.868506,
-    0.871774, 0.875010, 0.878212, 0.881380, 0.884514, 0.887614, 0.890679, 0.893709, 0.896703,
-    0.899661, 0.902582, 0.905467, 0.908315, 0.911125, 0.913897, 0.916631, 0.919326, 0.921982,
-    0.924599, 0.927177, 0.929714, 0.932211, 0.934667, 0.937082, 0.939456, 0.941788, 0.944078,
-    0.946326, 0.948531, 0.950694, 0.952813, 0.954889, 0.956921, 0.958909, 0.960853, 0.962752,
-    0.964607, 0.966417, 0.968181, 0.969900, 0.971573, 0.973200, 0.974781, 0.976316, 0.977803,
-    0.979245, 0.980639, 0.981986, 0.983285, 0.984537, 0.985742, 0.986898, 0.988006, 0.989067,
-    0.990078, 0.991042, 0.991957, 0.992823, 0.993640, 0.994408, 0.995127, 0.995797, 0.996418,
-    0.996989, 0.997511, 0.997984, 0.998406, 0.998780, 0.999103, 0.999377, 0.999601, 0.999776,
-    0.999900, 0.999975, 1.000000,
+// DL1YCF's coefficients, for sin(2 pi k y), k = 1 to 5, y running 0 to 1
+// along the ramp.
+static const double cw_ramp_coeff[] = {
+    -0.12182865361171612, -0.018557469249199286, -0.0009378783245428506,
+    0.0008567571519403228, 0.00018706912431472442,
 };
+
+static double cw_envelope[CW_ENVELOPE_LEN];
 static struct vfo cw_tone;     // keyed-tone oscillator, running at cw_pitch_hz
 static int cw_pitch_hz = CW_PITCH_HZ; // live pitch - see cw_set_pitch()
 static int envelope_pos = 0;   // 0 = silent, CW_ENVELOPE_LEN-1 = full output
@@ -134,6 +86,18 @@ static int64_t last_capture_ns = 0;
 static int weighting_hold = 0;
 static int hold_remaining = 0; // samples of the current hold still to run
 
+static void make_envelope(void) {
+    for (int i = 0; i < CW_ENVELOPE_LEN; i++) {
+        double y = (double)i / CW_RAMP_SAMPLES;
+        double v = y;
+        for (int k = 0; k < (int)(sizeof cw_ramp_coeff / sizeof cw_ramp_coeff[0]); k++)
+            v += cw_ramp_coeff[k] * sin(2.0 * M_PI * (k + 1) * y);
+        cw_envelope[i] = v;
+    }
+    cw_envelope[0] = 0.0;
+    cw_envelope[CW_RAMP_SAMPLES] = 1.0;
+}
+
 // Where the table crosses 0.5, as a fractional index.
 static double envelope_half_index(void) {
     for (int i = 0; i < CW_ENVELOPE_LEN - 1; i++)
@@ -143,6 +107,7 @@ static double envelope_half_index(void) {
 }
 
 void cw_init(void) {
+    make_envelope();
     cw_pitch_hz = CW_PITCH_HZ;
     vfo_start(&cw_tone, cw_pitch_hz, 0);
     envelope_pos = 0;
@@ -166,9 +131,10 @@ void cw_init(void) {
     if (weighting_hold < 0)
         weighting_hold = 0; // a table that falls early would need a shorter mark instead
     hold_remaining = 0;
-    printf("cw: weighting correction %d samples (%.2f ms) - each fall starts that long "
-           "after key-up, for 1:1 at the envelope's 50%% points\n",
-           weighting_hold, weighting_hold * 1000.0 / 96000.0);
+    if (weighting_hold)
+        printf("cw: weighting correction %d samples (%.2f ms) - each fall starts that long "
+               "after key-up, for 1:1 at the envelope's 50%% points\n",
+               weighting_hold, weighting_hold * 1000.0 / 96000.0);
 }
 
 int cw_weighting_hold_samples(void) {
