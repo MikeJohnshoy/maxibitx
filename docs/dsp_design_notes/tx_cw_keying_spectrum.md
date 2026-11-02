@@ -185,14 +185,31 @@ python3 tools/cw_shape.py --host sbitx.local               # strongest signal ne
 python3 tools/cw_shape.py --host sbitx.local --offset 420 --plot sig.png
 ```
 
-It reports the keying sidebands beyond each mask point on each side, with
-PASS, FAIL or "can't tell" when what rises above the limit is only the
-noise; rise and fall times, 10–90%; speed and weighting; and chirp. Its
-spectrum is held at its peak over frames of 5.9 Hz bins, so its numbers
-are close to the bench test's but not the same measurement, and not
-ARRL's. Fading and noise limit what an off-air signal can show. In the
-simulation, the 338 Hz point needed the carrier about 55 dB above the
-noise in 2.5 kHz: at 55 dB it read −62 dBc, at 50 dB "can't tell".
+It reports, for each mask point on each side, the strongest level and
+where it is, with a verdict:
+
+- PASS when it is below the limit;
+- "can't tell" when it is within 6 dB of the noise, since a sideband and
+  the noise in the same bin add;
+- "another signal?" when something stronger than −20 dBc lies past
+  338 Hz, which is most likely a neighbouring station;
+- FAIL otherwise.
+
+It also reports:
+
+- the carrier's signal-to-noise and how far down the noise lets it see;
+- speed and weighting, from an envelope within 100 Hz of the carrier;
+- rise and fall times, 10–90%, and chirp, from the widest envelope (up to
+  1200 Hz) that is 26 dB above the noise and clear of other stations,
+  with that filter's own rise time beside them, or left out when the
+  signal is too weak.
+
+Its spectrum is held at its peak over frames of 5.9 Hz bins, so its
+numbers are close to the bench test's but not the same measurement, and
+not ARRL's. Fading and noise limit what an off-air signal can show. In
+the simulation, the 338 Hz point needed the carrier about 65 dB above
+the noise in 2.5 kHz to read PASS (−60 to −61 dBc); at 55 and 60 dB it
+said "can't tell".
 
 `--simulate` measures a synthetic signal instead, to check the tool and to
 show the difference this change makes:
