@@ -34,6 +34,34 @@ each source file's header names the file itself. Run it with
 `make check-comments` (files changed vs `origin/main`) or
 `make check-comments-all` (all of `src/`). Python 3, no extra modules.
 
+## `cw_shape.py`
+
+Measures the keying of a CW signal maxibitx hears, from the I/Q stream:
+its keying sidebands against ARRL's Clean Signal Initiative mask (as
+DL1YCF reads it: −20, −40 and −60 dBc beyond 90, 150 and 338 Hz), with
+DL1YCF's own −80, −100 and −120 dBc beyond 600, 900 and 1200 Hz for
+comparison; its speed and weighting; and, when it is strong enough, its
+rise and fall times and chirp. It records 30 s, takes the strongest
+keyed signal near the dial (or `--offset`), and prints each mask point,
+each side, as PASS, FAIL, "can't tell" (within 6 dB of the noise) or
+"another signal?" (something stronger than −20 dBc past 338 Hz). The
+carrier's signal-to-noise and how far down the noise lets it see come
+first: the −60 dBc point needs a signal about 65 dB above the noise in
+2.5 kHz. `--plot` draws the spectrum with the masks and the noise level
+(needs matplotlib), `--csv` writes it, `--save`/`--replay` keep a
+recording to measure again, and `--simulate dl1ycf|bh5|hard` measures a
+synthetic signal (`--snr`, `--wpm`, `--neighbour`) to check the tool.
+To measure your own transmitter, key it into a dummy load and listen
+with a second radio running maxibitx, its stream peak below −6 dBFS.
+[`../docs/dsp_design_notes/tx_cw_keying_spectrum.md`](../docs/dsp_design_notes/tx_cw_keying_spectrum.md)
+has the background. Needs `xtal_sweep.py` beside it, and numpy.
+
+```
+python3 tools/cw_shape.py --host sbitx.local --plot sig.png
+python3 tools/cw_shape.py --host sbitx.local --offset 420 --save sig.npy
+python3 tools/cw_shape.py --simulate dl1ycf --snr 30 --neighbour 1200
+```
+
 ## `lpf_sweep.py`
 
 Measures the sBitx's four low-pass filters through its own receiver. On
@@ -135,6 +163,15 @@ digit, a drag up or down on it, or the Up and Down keys change it; Left
 and Right move the step. Double-click the frequency to type one in:
 `14058.2` (kHz), `14.0582` (MHz) or `14058200` (Hz).
 
+**Click to tune.** A click (or tap) on the trace, the scale or the
+waterfall moves the dial to the frequency under it, to the nearest 10 Hz
+in CW and CWR and 100 Hz in USB and LSB: in CW click the signal, in SSB
+the voice's edge nearest the dial, where its carrier would be. It does
+nothing in DIGI, where WSJT-X chooses the audio offset, or while
+transmitting; like any retune it clears RIT and XIT. With **SPOT after a
+click** on in Settings, SPOT follows 2 s later in CW and CWR, once
+maxibitx has heard 1.5 s at the new frequency.
+
 **The sBitx's knobs.** The step tapped is also the radio's tuning step
 (rigctld `N`), so the sBitx's tuning knob moves the dial by that digit,
 and a push of the knob, which moves the step on, moves the underline
@@ -146,8 +183,8 @@ does. A maxibitx without knob support simply doesn't answer `n` or
 `u MUTE`, and the panel carries on without them.
 
 **Settings** open from the gear at the top right (or the RX/TX button):
-the connection, the peak line, auto floor and the waterfall's top, paddle reversal, the CW filter type (FFT
-or elliptic), the TX test tones with their Transmit switch, the ten
+the connection, the peak line, auto floor and the waterfall's top, paddle reversal, SPOT after a
+click, the CW filter type (FFT or elliptic), the TX test tones with their Transmit switch, the ten
 macros (a button label and the text sent), and the macro fields. A field
 is a name and a value: MYCALL and PARK to start with, and up to eight of
 your own (NAME, QTH, RIG...). A macro's `{NAME}` is replaced by that
