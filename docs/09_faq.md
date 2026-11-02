@@ -465,9 +465,9 @@ Release is 250 ms. And the gain only ever reduces: quiet audio transmits
 quietly, because raising the average to meet the ceiling is a speech
 compressor, a different thing that belongs upstream and isn't built.
 
-CW never moves the gain at all — its envelope is constant at exactly
-full scale — so `cw.c`'s 5 ms Blackman-Harris rise and fall come through
-untouched.
+CW never moves the gain at all — the pipeline drives it at the ceiling,
+so a key-down carrier sits exactly there at any POWER — and `cw.c`'s
+9 ms rise and fall come through untouched.
 
 ### Does the limiter need headroom between full_scale_power and max_power?
 
