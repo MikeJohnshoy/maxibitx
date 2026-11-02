@@ -260,8 +260,9 @@ not by polling. Each edge is placed at its own sample within the audio
 block, so keying is timed to the sample (about 10 µs), not to a polling
 interval. The integrated keyer offers straight key, bug, ultimatic, and
 iambic A and B, at 1 to 60 WPM, and sends text from rigctld, CAT and
-TCI. Keying uses a shaped Blackman-Harris envelope with a weighting
-correction, so each transmitted mark is as long as the key was down.
+TCI. Keying uses DL1YCF's 9 ms ramp, which keeps the keying sidebands
+inside ARRL's Clean Signal Initiative mask at every power setting, and
+each transmitted mark is as long as the key was down.
 The microphone is supported for voice, with the jack's ring contact as
 its push-to-talk in USB and LSB.
 
@@ -444,6 +445,9 @@ external interfaces are in `src/interfaces/`.
   and I/Q capture, and a transmit tone.
 - **`tools/gen_narrow_filters.py`**: designs and verifies the elliptic
   filter bank.
+- **`tools/cw_shape.py`**: measures a CW signal's keying from the I/Q
+  stream: its keying sidebands against ARRL's Clean Signal Initiative
+  mask, rise and fall times, speed, weighting and chirp.
 - **`tools/check_comments.py`**: the comment-policy checker run by
   `make check-comments`.
 
@@ -919,7 +923,7 @@ test tones.
 
 ```mermaid
 flowchart TD
-    CW["CW: keyed tone at the pitch<br/>Blackman-Harris envelope, amplitude 1"] --> SRC{"Source for this block"}
+    CW["CW: keyed tone at the pitch<br/>DL1YCF 9 ms ramp, amplitude 1"] --> SRC{"Source for this block"}
     MIC["USB, LSB: mic, codec right input<br/>x 2^-31 x mic gain 0 to 64"] --> SRC
     DIG["DIGITAL: USB sound card, 48 kHz<br/>or TCI audio in DIGITAL, USB, LSB"] --> UP["upsample48k.c<br/>zero-stuff, 25-tap FIR, x2"] --> SRC
     TONE["Test tones: 1 kHz, or 700 + 1900 Hz"] --> SRC
@@ -1102,7 +1106,9 @@ sample is delayed by that look-ahead, so the gain has always arrived
 before the sample that needs it. It rises back at 1/24,000 per sample,
 a 250 ms release, so it does not pump within a syllable. It only ever
 reduces: quiet audio stays quiet, and a constant envelope at or below
-the ceiling (a CW key-down, a steady tone) never moves the gain. The
+the ceiling (a steady tone) never moves the gain. CW is scaled to the
+ceiling before the limiter, so it never moves the gain either, and a
+keyed element keeps its shape at any power. The
 deepest reduction in each block is reported as ALC (rigctld `l ALC`),
 held and then decaying at 20 dB per second.
 
@@ -1197,22 +1203,25 @@ between characters and seven between words. Using a paddle interrupts
 text.
 
 **The tone.** For each sample, `cw_get_sample()` multiplies a sine at
-the CW pitch by an envelope. The envelope is the rising half of a
-Blackman-Harris window, 480 samples (5 ms), read forward to rise and
-backward to fall, between almost 0 (6 × 10⁻⁵, about −84 dB) and an
-amplitude of exactly 1.0. Because
-that shape crosses 50% late when rising and early when falling, a mark
-measured between its 50% points would come out 150 samples (1.56 ms)
-shorter than the key was down. So every fall is held off by those 150
-samples, and the transmitted mark matches the key-down time.
+the CW pitch by an envelope. The envelope is DL1YCF's ramp: 864 samples
+(9 ms) from exactly 0 to exactly 1.0, a straight line plus five sine
+terms, read forward to rise and backward to fall. DL1YCF optimised it so
+that a string of dots at 40 WPM meets ARRL's Clean Signal Initiative
+mask, the speed ARRL tests at; it is 9 ms at every speed. The ramp
+crosses 50% halfway up, so a mark measured between its 50% points is
+as long as the key was down. A mark shorter than 9 ms never reaches
+full output and comes out shorter.
 
 **Through the pipeline.** The tone, at 500 to 1000 Hz, is inside the
 300 to 3000 Hz bandpass. The pipeline keeps the positive side and
 applies the CW shift, so at the default pitch the tone becomes a
-22,589.4 Hz IF. A unit-amplitude tone has an envelope of exactly 1.0,
-the ceiling at full power, so the limiter does nothing to CW at full
-power; at reduced POWER it holds the carrier at the ceiling. The 5 ms
-ramps keep the keying sidebands narrow.
+22,589.4 Hz IF. CW is scaled to the limiter's ceiling on the way in, so
+a key-down carrier sits exactly at the ceiling and the limiter never
+acts on it. At reduced POWER that keeps each element's shape: limited
+instead, the gain moved on every rise and widened the sidebands past
+the mask. `make test-cw-shape` checks the mask at full and reduced
+power; `docs/dsp_design_notes/tx_cw_keying_spectrum.md` has the
+measurements.
 
 **Semi break-in.** The transmitter is keyed at the first closure and
 held after each key-up for a hang time, so the relay does not chatter
@@ -1342,6 +1351,7 @@ real time. Run it before uploading a change.
 | `make test-tci` | the TCI server over loopback, with the radio stubbed: a JTDX-style start-up, state echoes, PTT rules, receive audio in every format and rate, I/Q at both rates, transmit audio paced by `TX_CHRONO`, and CW text read back from what the real keyer keys |
 | `make test-radio-hw` | `hw_settings.c`'s `sbitx_version` and `i2c_bus` keys and `radio_hw.c`'s board profiles, with GPIO and I2C stubbed: the pins each board claims and their levels, LPF selection, the order of the T/R relay sequence, the zBitx's LPF chosen at the transmit frequency and no transmit where there is no LPF, and each board's knob pins, clear of every other pin in use |
 | `make test-i2c` | `i2c.c`'s search for the si5351's bus, with the device nodes faked: the usual bus first, then the others in number order, and none found |
+| `make test-cw-shape` | the transmitted CW's keying sidebands: a held dot paddle keyed through `cw.c` into `tx_pipeline.c`, checked against ARRL's Clean Signal Initiative mask at 40 WPM, at full power and 10 and 20 dB below |
 
 `make check-comments` runs `tools/check_comments.py` over the sources,
 enforcing the comment policy: comments state what the code does now,
