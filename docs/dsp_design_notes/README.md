@@ -10,6 +10,13 @@ already used in `antialias_filter_design.md`.
 
 ## Contents
 
+- [`tx_cw_keying_spectrum.md`](tx_cw_keying_spectrum.md) — CW keying
+  sidebands against ARRL's Clean Signal Initiative mask: the mask and
+  how it is read, DL1YCF's 9 ms ramp, the old and new ramps compared,
+  what the transmit path did to the keying at reduced power, and how to
+  check a signal on the bench (`test-cw-shape`) and off the air
+  (`tools/cw_shape.py`). Status: implemented; the sBitx's own RF still
+  to be measured.
 - [`rx_artifacts_and_spur_survey_study.md`](rx_artifacts_and_spur_survey_study.md)
   — the kinds of receiver artifact (spurs, birdies, images, IMD,
   aliasing, combs, ripple) and how each moves when you tune; those met
@@ -250,7 +257,8 @@ already used in `antialias_filter_design.md`.
   runnable in `keyer_spec_model.c`; paddle edges read by a thread woken on
   each edge, which also requests TX early; mono-plug detection; paddle
   reversal; and 1:1 weighting from the unchanged table by starting every
-  fall 150 samples after key-up. Status: **study and specification; the
+  fall 150 samples after key-up (that table has since been replaced by
+  DL1YCF's ramp, which needs no hold: `tx_cw_keying_spectrum.md`). Status: **study and specification; the
   weighting correction is implemented in `cw.c`** and checked by
   `test-cw` (every mark and space within 0.23 samples of the key times),
   and so is **the input path, `key_input.c`**: kernel-timestamped edges
