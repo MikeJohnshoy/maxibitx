@@ -200,8 +200,9 @@ and 40,012,400 Hz).
 period:
 
 - CW: `cw_get_sample()`, a keyed tone at the current CW pitch (700 Hz by
-  default, `CW_PITCH_HZ`) times a 5 ms Blackman-Harris attack/decay
-  envelope, so key transitions don't click. The same tone is the local
+  default, `CW_PITCH_HZ`) times DL1YCF's 9 ms attack/decay ramp, which
+  keeps the keying sidebands inside ARRL's Clean Signal Initiative mask
+  (`docs/dsp_design_notes/tx_cw_keying_spectrum.md`). The same tone is the local
   sidetone, so what you hear is exactly what's being sent. The pitch is
   runtime-settable — `L CWPITCH`, through `radio_set_cw_pitch()` — and
   moving it moves the sidetone, the receive pitch, the narrow filter and
@@ -378,8 +379,9 @@ signal arriving at the limiter can exceed full scale by a long way. That
 is what the limiter is for, and it's what a real rig's ALC does: the
 radio is rated at the same power on CW and on SSB, and the ALC exists to
 stop the drive from pushing past it, not to reserve half the PA. CW
-never moves the gain at all, because its envelope is constant at exactly
-full scale.
+never moves the gain at all: the pipeline scales its input to the
+ceiling, on the drive side, so a key-down carrier sits exactly at the
+ceiling at any POWER.
 
 ### The limiter
 
@@ -409,9 +411,16 @@ arrived before the peak that needs it. Release is slow
 The 2 ms shifts the whole transmitted envelope, CW element timing
 included, without changing its shape.
 
-A constant-envelope signal at or below the ceiling — CW key-down, a
-steady test tone — never moves the gain at all, so `cw.c`'s 5 ms
-Blackman-Harris rise and fall come through untouched.
+A constant-envelope signal at or below the ceiling — a steady test
+tone, or CW, which the pipeline drives at the ceiling — never moves the
+gain at all, so `cw.c`'s rise and fall come through untouched at every
+power. Before CW was driven at the ceiling, reduced POWER left the
+limiter to pull every element down to it, the gain moved on each rise,
+and at 20 dB below full power the keying sidebands missed the CSI mask
+by up to 5 dB (`docs/dsp_design_notes/tx_cw_keying_spectrum.md`). The
+drive follows a POWER change over 20 ms (`TX_CW_DRIVE_SLEW_S`), so
+moving the slider mid-element doesn't click; while it falls the limiter
+still holds the ceiling.
 
 ### The controls
 
