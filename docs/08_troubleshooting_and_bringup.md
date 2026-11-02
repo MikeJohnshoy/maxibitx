@@ -329,25 +329,35 @@ the codec's band fold back and tune backwards. The spectrum looks wavy,
 with real signals among many ghosts. A transmission doesn't clear it;
 restarting maxibitx usually does.
 
+The pattern comes in more than one shape. In the first one found, its
+5th harmonic is strongest and the copies are strongest 3750 Hz away. In
+a second, seen on 2 November 2026, its 1st harmonic is strongest, with
+an alternate-sample part too: every signal is then also imaged about the
+24 kHz IF, a few dB down, so each station has a twin on the other side
+of the dial that tunes the other way.
+
 The codec's registers are the same in this state as in a good start.
 What clears it is restarting the codec's digital interface (register 9,
 ACTIVE, off and on), and maxibitx checks for it and does that at
 start-up (`src/codec_check.h`). A second after the audio starts it
 measures the pattern on the right channel, the mic line, which is quiet
 in receive: the power of its sample-to-sample differences, folded over
-the 128-sample cycle, has a strong 5th harmonic in this state (about 0.9
-of the mean) and almost none otherwise (under 0.01). One of these comes
+the 128-sample cycle, has a strong harmonic in this state - 0.5 to 0.9
+of the mean, at the 5th or the 1st - and none much above 0.05 otherwise.
+The check scores the strongest of the 1st to the 62nd. (Until
+2 November 2026 it looked at the 5th alone, which the second shape
+passes at about 0.02.) One of these comes
 between `sound: running` and the `ready to serve!` line, which waits up
 to 5 s for it (if the check can't decide by then - transmitting at
 start-up, say - its line follows later):
 
 ```
-codec: sampling clean (0.002)
+codec: sampling clean (0.031)
 ```
 
 ```
-codec: started with a 128-sample timing pattern (0.935) - every signal would have ghosts every 750 Hz; restarting its interface
-codec: sampling clean after 1 interface restart (0.003)
+codec: started with a 128-sample timing pattern (0.935 at its harmonic 5) - every signal would have ghosts; restarting its interface
+codec: sampling clean after 1 interface restart (0.029)
 ```
 
 It tries up to three restarts. If it says `still patterned` or `couldn't
@@ -384,7 +394,7 @@ compare. What each fault looks like:
 
 | `capture_check.py` shows | in a good capture | points to |
 |---|---|---|
-| timing pattern on R about 0.9; mirror on L well above 0, a strong signal's copies 3750 Hz apart | under 0.01 | the codec's timing pattern, above |
+| timing pattern on R 0.5 to 0.9; mirror on L well above 0; a strong signal's copies 3750 Hz apart (harmonic 5), or every signal imaged a few dB down (harmonic 1) | under 0.1 | the codec's timing pattern, above |
 | mirror about 24 kHz | about 0, signals 70 dB or more above their mirrors | - |
 | mirror near 1, every signal the same few dB above its mirror; even RMS several dB from odd | even and odd within 0.1 dB | a gain difference between alternate samples |
 | mirror near 1; a sample repeats the one before it most of the time, on even or on odd samples | about 0% | the codec running at half the rate, each sample sent twice |
