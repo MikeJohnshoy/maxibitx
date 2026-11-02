@@ -4,13 +4,21 @@ docs/dsp_design_notes/cw_keyer_design_study.md §3, §4 and §17.
 
   python3 tools/keyer_study/envelope_study.py [--ref PATH] [--limiter]
 
-Measures src/cw.c's Blackman-Harris table: where its 50% point falls, the
+Measures src/cw.c's keying table: where its 50% point falls, the
 weighting it produces when driven the way cw_get_sample() drives it, the
 compensation that restores 1:1, and the occupied bandwidth of the
 alternatives. --ref adds the reference keyer's table (sbitx
 dev-54bugfixes src/modem_cw.c). --limiter builds limiter_harness.c against
 src/ (needs gcc and fftw3f) and checks what tx_pipeline.c's limiter does to
 the keyed envelope. Needs numpy and scipy.
+
+The study's numbers are for the table cw.c had then, the rising half of
+a Blackman-Harris window; cw.c now computes DL1YCF's ramp instead
+(tx_cw_keying_spectrum.md), which this reads from its coefficients. To
+reproduce the study, point --cw at the earlier file:
+
+  git show acd67bf:src/cw.c > /tmp/cw_bh.c
+  python3 tools/keyer_study/envelope_study.py --cw /tmp/cw_bh.c
 """
 import argparse
 import math
@@ -47,6 +55,20 @@ def load_table(path, pattern, declared=None):
     if declared is not None and len(vals) < declared:
         vals += [0.0] * (declared - len(vals))  # C zero-fills the remainder
     return np.array(vals)
+
+
+def load_cw(path):
+    """cw.c's envelope: the table it once listed, or the ramp it computes
+    from CW_RAMP_SAMPLES and cw_ramp_coeff[] at cw_init()."""
+    text = open(path).read()
+    if re.search(r"cw_envelope\[CW_ENVELOPE_LEN\]\s*=\s*\{", text):
+        return load_table(path, r"cw_envelope\[CW_ENVELOPE_LEN\]")
+    n = int(re.search(r"#define CW_RAMP_SAMPLES (\d+)", text).group(1))
+    coeff = load_table(path, r"cw_ramp_coeff\[\]")
+    y = np.arange(n + 1) / n
+    r = y + sum(a * np.sin(2 * np.pi * (k + 1) * y) for k, a in enumerate(coeff))
+    r[0], r[-1] = 0.0, 1.0
+    return r
 
 
 def cross(v, level):
@@ -212,7 +234,7 @@ def main():
     ap.add_argument("--ref", help="sbitx dev-54bugfixes src/modem_cw.c")
     ap.add_argument("--limiter", action="store_true")
     a = ap.parse_args()
-    cur = load_table(a.cw, r"cw_envelope\[CW_ENVELOPE_LEN\]")
+    cur = load_cw(a.cw)
     ref = load_table(a.ref, r"cw_envelope_data\[480\]", declared=480) if a.ref else None
     study(cur, ref)
     if a.limiter:
