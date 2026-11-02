@@ -45,6 +45,7 @@ struct tx_pipeline *tx_pipeline_new(void)
 	memset(p->delay, 0, sizeof(p->delay));
 	p->delay_pos = 0;
 	p->meter_db = 0.0f;
+	p->cw_drive = -1.0f;
 	return p;
 }
 
@@ -150,9 +151,24 @@ void tx_pipeline_process_block(struct tx_pipeline *p, enum tx_pipeline_signal si
 	complex float in_c[TX_PIPELINE_BLOCK_LEN];
 	complex float out_c[TX_PIPELINE_BLOCK_LEN];
 
-	// Real audio in, imaginary part 0 (as sbitx's tx_process()).
-	for (int i = 0; i < TX_PIPELINE_BLOCK_LEN; i++)
-		in_c[i] = in[i];
+	// Real audio in, imaginary part 0 (as sbitx's tx_process()). CW is
+	// scaled to the ceiling here, ahead of the limiter (tx_pipeline.h).
+	if (signal == TX_PIPELINE_CW) {
+		const float ceiling = p->ceiling;
+		const float slew = 1.0f / (TX_CW_DRIVE_SLEW_S * TX_PIPELINE_FS_HZ);
+		float drive = p->cw_drive < 0.0f ? ceiling : p->cw_drive;
+		for (int i = 0; i < TX_PIPELINE_BLOCK_LEN; i++) {
+			if (drive < ceiling)
+				drive = fminf(drive + slew, ceiling);
+			else if (drive > ceiling)
+				drive = fmaxf(drive - slew, ceiling);
+			in_c[i] = in[i] * drive;
+		}
+		p->cw_drive = drive;
+	} else {
+		for (int i = 0; i < TX_PIPELINE_BLOCK_LEN; i++)
+			in_c[i] = in[i];
+	}
 
 	// CW anchors its tone on the dial, SSB its suppressed carrier - see
 	// the IF placement comment in tx_pipeline.h.
@@ -195,6 +211,7 @@ void tx_pipeline_reset(struct tx_pipeline *p)
 	memset(p->delay, 0, sizeof(p->delay));
 	p->delay_pos = 0;
 	p->meter_db = 0.0f;
+	p->cw_drive = -1.0f;
 }
 
 int tx_pipeline_set_if_placement(struct tx_pipeline *p, int bfo_hz, int xtal_center_hz,
