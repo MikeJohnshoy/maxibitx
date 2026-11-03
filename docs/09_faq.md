@@ -618,7 +618,7 @@ mode, RIT, volume, the CW filter and its width and centre, keyer type and
 speed, CW text and ten macros, mic gain and ALC in USB/LSB, TX power, a
 Tune button, an S-meter, and a live spectrum, frequency scale and
 waterfall with a 5, 10 or 25 kHz span, with a marker where RIT is
-listening. Settings (the connection, the filter type, paddle reversal,
+listening. Settings (the connection, paddle reversal,
 the TX test tones, the macros and the fields they fill in) open from its
 gear button. [`../tools/README.md`](../tools/README.md) describes it.
 
@@ -627,10 +627,10 @@ Two things make it more interesting than a utility. First, it is a
 protocol for control and subscribes to `iq_stream` for the spectrum, so
 everything it does, any other application can do. It is the working
 proof that [`06_api.md`](06_api.md) is sufficient. Second, it is a
-development instrument: the `u FFTFILT` switch exists so an operator can
-A/B the elliptic and FFT narrow filters on real signals, and the pitch and
-width selectors let that comparison be made at any of the bank's 24
-settings. That comparison is also where the panel taught its own lesson —
+development instrument: its Settings offered a switch to A/B the
+elliptic and FFT narrow filters on real signals, at any of the bank's 24
+pitch and width settings, until the FFT filter was settled as the choice
+(the switch remains in rigctld as `u FFTFILT`). That comparison is also where the panel taught its own lesson —
 an earlier layout implied the pitch and width controls belonged to the FFT
 filter alone, so a long stretch of listening compared something other than
 what the operator believed, and the FFT filter was thought to sound worse
