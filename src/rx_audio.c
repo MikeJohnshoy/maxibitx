@@ -14,8 +14,8 @@
 //      the real part directly, so audio Hz == |RF - dial|.
 //   3. Optional narrow selectivity, centered on that same pitch:
 //      rx_filter.c's FFT filter (default) or an elliptic IIR from a
-//      pre-designed bank. Both always run, so switching or un-bypassing
-//      never clicks.
+//      pre-designed bank. Only the selected one runs, and only while stage
+//      3 is in circuit; it starts from silence each time it comes back.
 //
 // Pitch and width are both selectable at runtime - 500-1000Hz in 100Hz
 // steps, by 150/300/450/600Hz - see rx_audio_set_narrow_pitch()/_width() in
@@ -341,6 +341,11 @@ static double biquad_apply(struct biquad_state *f, double x) {
     return y;
 }
 
+static void narrow_filter_clear(struct narrow_filter_state *f) {
+    for (int i = 0; i < NARROW_FILTER_SECTIONS; i++)
+        f->stage[i].x1 = f->stage[i].x2 = f->stage[i].y1 = f->stage[i].y2 = 0.0;
+}
+
 static double narrow_filter_apply(struct narrow_filter_state *f, double x) {
     double y = x;
     for (int i = 0; i < NARROW_FILTER_SECTIONS; i++)
@@ -427,12 +432,17 @@ static int narrow_filter_active(void) {
 // deprecated: it is still the faster of the two on attack, and it is what
 // the odd-block-size path below falls back to.
 //
-// Note what selecting it does NOT do: both filters run every block whatever
-// is selected, so switching saves no CPU. See
-// docs/dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md §17 for the
-// measured per-block costs and why the always-run design makes the cheaper
-// filter's cheapness unrealised today.
+// Only the implementation feeding stage 4 runs (stage3_running), so
+// neither costs anything while stage 3 is out of circuit - in USB, LSB and
+// DIGITAL, or with the filter off - and the elliptic nothing while the FFT
+// filter is selected. Per-block costs:
+// docs/dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md §17.
 static enum rx_narrow_filter_impl narrow_filter_impl = RX_NARROW_FILTER_FFT;
+
+// Which implementation ran last block, so one coming back into circuit can
+// be started from silence rather than from a stale tail of audio.
+enum stage3_run { STAGE3_IDLE, STAGE3_FFT, STAGE3_ELLIPTIC };
+static enum stage3_run stage3_running = STAGE3_IDLE;
 
 // The FFT implementation always runs minimum phase now; linear phase has no
 // operator-facing control. See rx_audio_set_narrow_filter_min_phase() in
@@ -790,16 +800,45 @@ enum rx_spot_result rx_audio_spot(double *offset_hz) {
 
 void rx_audio_process(const double *i_samples, const double *q_samples,
                        int n, int32_t *out, double *uac_out) {
-    // Two passes. Stages 1-2 and the elliptic filter run per sample into
-    // these buffers; the block-based FFT filter then runs once over
-    // audio_buf; then stage 3 selection and stage 4 run per sample.
+    // Two passes. Stages 1-2, and the elliptic filter when it is the one
+    // in circuit, run per sample into these buffers; the block-based FFT
+    // filter, when it is the one, then runs once over audio_buf; then stage
+    // 4 runs per sample on whichever feeds it.
     static float audio_buf[RX_AUDIO_MAX_BLOCK];
     static float elliptic_buf[RX_AUDIO_MAX_BLOCK];
     static float fft_buf[RX_AUDIO_MAX_BLOCK];
-    int have_fft = 0;
 
     if (n > RX_AUDIO_MAX_BLOCK)
         n = RX_AUDIO_MAX_BLOCK;
+
+    // Stage 3 this block. rx_filter needs exactly RX_FILTER_BLOCK_LEN
+    // samples (sound.c's PERIOD_FRAMES); any other size would misalign its
+    // overlap-save history, so such a block uses the elliptic instead.
+    enum stage3_run run = STAGE3_IDLE;
+    if (narrow_filter_active()) {
+        if (narrow_filter_impl == RX_NARROW_FILTER_FFT && n == RX_FILTER_BLOCK_LEN) {
+            run = STAGE3_FFT;
+        } else {
+            run = STAGE3_ELLIPTIC;
+            static int warned = 0;
+            if (narrow_filter_impl == RX_NARROW_FILTER_FFT && !warned) {
+                fprintf(stderr,
+                        "rx_audio: block size %d != %d (rx_filter's fixed "
+                        "block length) - falling back to the elliptic filter "
+                        "for this block only (further occurrences not "
+                        "logged)\n",
+                        n, RX_FILTER_BLOCK_LEN);
+                warned = 1;
+            }
+        }
+    }
+    if (run != stage3_running) {
+        if (run == STAGE3_FFT)
+            rx_filter_reset(rx_fft_filter);
+        else if (run == STAGE3_ELLIPTIC)
+            narrow_filter_clear(&narrow_filter);
+        stage3_running = run;
+    }
 
     // Sideband selection. Stage 1 keeps positive baseband, so choosing a
     // sideband means choosing whether to conjugate the input first. With the
@@ -832,8 +871,8 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
         }
         audio_buf[k] = (float)audio;
 
-        // Stage 3, elliptic - always run, so its state is warm if selected.
-        elliptic_buf[k] = (float)narrow_filter_apply(&narrow_filter, audio);
+        if (run == STAGE3_ELLIPTIC)
+            elliptic_buf[k] = (float)narrow_filter_apply(&narrow_filter, audio);
     }
 
     // The CW decoder and SPOT take stage 2's output (see the file header).
@@ -842,35 +881,19 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
         spot_collect(audio_buf, n);
     }
 
-    // Stage 3, FFT - block-based, and also always run. rx_filter needs
-    // exactly RX_FILTER_BLOCK_LEN samples (sound.c's PERIOD_FRAMES); any
-    // other size would misalign its overlap-save history, so that block is
-    // skipped and the elliptic output used instead.
-    if (n == RX_FILTER_BLOCK_LEN) {
+    // Stage 3, FFT - block-based.
+    if (run == STAGE3_FFT)
         rx_filter_process_block(rx_fft_filter, audio_buf, fft_buf);
-        have_fft = 1;
-    } else if (narrow_filter_impl == RX_NARROW_FILTER_FFT) {
-        static int warned = 0;
-        if (!warned) {
-            fprintf(stderr,
-                    "rx_audio: block size %d != %d (rx_filter's fixed "
-                    "block length) - falling back to the elliptic filter "
-                    "for this block only (further occurrences not "
-                    "logged)\n",
-                    n, RX_FILTER_BLOCK_LEN);
-            warned = 1;
-        }
-    }
 
     for (int k = 0; k < n; k++) {
         double audio = audio_buf[k];
         double narrowed;
-        if (!narrow_filter_active())
-            narrowed = audio;
-        else if (narrow_filter_impl == RX_NARROW_FILTER_FFT && have_fft)
+        if (run == STAGE3_FFT)
             narrowed = fft_buf[k];
-        else
+        else if (run == STAGE3_ELLIPTIC)
             narrowed = elliptic_buf[k];
+        else
+            narrowed = audio;
 
         // Stage 4: AGC on the raw input magnitude (see file header) - fast
         // attack, slow release - applied to stage 3's output.
