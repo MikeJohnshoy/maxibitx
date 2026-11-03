@@ -111,6 +111,12 @@ int rx_filter_set_min_phase(struct rx_filter *r, int on);
 // `in`/`out` are both RX_FILTER_BLOCK_LEN real samples.
 void rx_filter_process_block(struct rx_filter *r, const float *in, float *out);
 
+// Clears the overlap-save history, so the next block starts from silence
+// rather than from the tail of the last time the filter ran. For a filter
+// that stops and starts: rx_audio.c calls it when stage 3 comes back into
+// circuit.
+void rx_filter_reset(struct rx_filter *r);
+
 void rx_filter_free(struct rx_filter *r);
 
 #endif /* RX_FILTER_H */
