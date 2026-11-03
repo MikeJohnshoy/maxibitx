@@ -970,3 +970,24 @@ xrun investigation (`ARCHITECTURE.md` §10 step 7) recorded a steady
 uses under a third of the budget and stage 3's ~20 µs is well under 1% of
 what the process phase spends. The open question is only the Pi Zero 2W, which
 nobody has run this on.
+
+## 18. Only the selected filter runs (3 November 2026)
+
+With the FFT filter settled as the choice, the control panel no longer
+offers the switch, and `rx_audio_process()` runs only the implementation
+that is in circuit: the FFT filter normally, the elliptic only when
+rigctld's `U FFTFILT 0` selects it or for a block that isn't
+`RX_FILTER_BLOCK_LEN` long. Neither runs while stage 3 is out of circuit,
+in USB, LSB and DIGITAL or with the filter off.
+
+The warm-up §17 worried about is handled by starting from silence, not by
+keeping history warm. When an implementation comes back into circuit, its
+state is cleared first (`rx_filter_reset()`, or the biquads' history), so
+the first block is the filter's response to a signal that begins there: a
+fade-in through the filter, like a keyed element's attack, rather than
+32 ms of a stale tail.
+
+The saving is small on the Pi 4, about 20 µs a block by §17's
+measurements, and unmeasured on the Pi Zero 2W. The reason for the change
+is the other one: the two filters no longer have to share a passband,
+which is what held the pitch and width to the bank's rungs.
