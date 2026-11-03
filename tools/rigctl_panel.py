@@ -32,9 +32,9 @@ With "SPOT after a click" on in Settings, a click in CW or CWR is
 followed by SPOT 2 s later, once maxibitx has heard 1.5 s of audio at
 the new frequency, putting the station exactly on the pitch.
 
-The gear (and the RX/TX button) opens Settings: the connection, the CW
-filter type, paddle reversal, SPOT after a click, the TX test tones, the
-macro texts, and the macro fields. A field is a name and a value, MYCALL and PARK to
+The gear (and the RX/TX button) opens Settings: the connection, paddle
+reversal, SPOT after a click, the TX test tones, the spectrum's peak
+line, auto floor and range, the macro texts, and the macro fields. A field is a name and a value, MYCALL and PARK to
 start with, up to eight; a macro's {NAME} is replaced by the value, and
 a macro naming a field with no value isn't sent.
 
@@ -47,6 +47,13 @@ two stations close together, FT8's tones in the waterfall. Each pixel
 shows the strongest bin under it. Finer bins hold less noise, so the
 noise floor reads lower at a narrower span and a narrow signal stands
 higher above it.
+
+Range (Settings) sets how many dB above the floor reach the top of the
+trace and the brightest colour of the waterfall, 20 to 80 dB, 50 to
+start with, so a signal's height and its colour always agree, and on
+every band. Lower makes weak signals tall and bright; higher keeps strong
+ones apart. The floor is just under the band noise with auto floor, or
+fixed at -100 dB without it.
 
 RIT and XIT: the two buttons pick which offset the steps and the value
 set (tap the value to clear it), and the group's title says where it
@@ -80,7 +87,6 @@ rigctld commands used:
     l ALC                   limiter gain reduction, dB
     l MICGAIN / L MICGAIN   mic gain multiplier, USB/LSB
     u NARROW / U NARROW     the CW filter in or out (DIGITAL holds it out)
-    u FFTFILT / U FFTFILT   which CW filter: 1 FFT, 0 elliptic bank
     l CWPITCH / L CWPITCH   the filter's centre and the CW pitch, Hz
     l CWWIDTH / L CWWIDTH   the filter's width, Hz
     u KEYER / U KEYER       0 straight, 1 bug, 2 ultimatic, 3 iambic A, 4 B
@@ -226,21 +232,12 @@ AUTO_FLOOR_WITHIN_HZ = 10000   # only bins this close to the centre, inside the 
 AUTO_FLOOR_BELOW_NOISE_DB = 6.0
 AUTO_FLOOR_SMOOTHING_S = 2.0
 AUTO_FLOOR_SNAP_DB = 15.0      # a jump this big (a new band) is taken at once
-AUTO_FLOOR_MIN_RANGE_DB = 30.0 # never closer than this to the ceiling
-# Not 0 dBFS: nothing on this receiver's raw I/Q comes near full scale.
-# -37.5 was set from the strongest signal first measured on an sBitx
-# (-50 dBFS); strong FT8 went past it, so -30. A signal above the
-# ceiling flat-tops and the trace says "over scale": the display's
-# limit, not the radio's - the codec's is 0 dBFS, 30 dB higher.
-SPECTRUM_DB_CEILING = -30.0
-# The waterfall's brightest colour, in dB above the display floor (a
-# setting). Its own top, not the trace's ceiling, so that everyday
-# signals reach the warm colours: at 40 dB, an S9 signal on a quiet band
-# is near white, a weak CW signal blue to yellow.
-WATERFALL_TOP_DEFAULT_DB = 40
-WATERFALL_TOP_MIN_DB = 20
-WATERFALL_TOP_MAX_DB = 80
-WATERFALL_TOP_STEP_DB = 5
+# Range: dB above the display floor at the top of the trace and at the
+# waterfall's brightest colour (a setting), so height and colour agree.
+RANGE_DEFAULT_DB = 50
+RANGE_MIN_DB = 20
+RANGE_MAX_DB = 80
+RANGE_STEP_DB = 5
 # Displayed half-spans, cropped from the FFT's full +-48 kHz at
 # SPECTRUM_FFT_SIZES' resolution. The widest stays inside the crystal
 # filter: the sBitx's is about 27 kHz wide at -6 dB, so a 30 kHz span
@@ -847,9 +844,10 @@ class GearButton(tk.Canvas):
 
 
 class SettingsDialog(tk.Toplevel):
-    """Everything set once and rarely changed: the connection, the CW
-    filter type, paddle reversal, the TX test tones, the station details
-    the macros use, and the macros themselves."""
+    """Everything set once and rarely changed: the connection, paddle
+    reversal, SPOT after a click, the TX test tones, the spectrum's
+    settings, the station details the macros use, and the macros
+    themselves."""
 
     def __init__(self, panel):
         super().__init__(panel)
@@ -897,13 +895,6 @@ class SettingsDialog(tk.Toplevel):
         ttk.Checkbutton(cw, text="SPOT after a click", variable=p.click_spot_var,
                         style="Toolbutton", command=p.save_settings).grid(row=0, column=1,
                                                                           sticky="w", padx=(4, 0))
-        ttk.Label(cw, text="Filter type", style="PanelMuted.TLabel").grid(row=1, column=0, sticky="w",
-                                                                          pady=(10, 2))
-        ttk.Radiobutton(cw, text="FFT", variable=p.fftfilt_var, value=True, style="Toolbutton",
-                        command=p.on_fftfilt_toggled, width=8).grid(row=2, column=0, padx=(0, 2))
-        ttk.Radiobutton(cw, text="Elliptic", variable=p.fftfilt_var, value=False,
-                        style="Toolbutton", command=p.on_fftfilt_toggled,
-                        width=8).grid(row=2, column=1)
 
         tx = ttk.LabelFrame(f, text="TX test - dummy load or low power", padding=8)
         tx.grid(row=1, column=1, sticky="nsew", pady=(8, 0), padx=(8, 0))
@@ -923,23 +914,23 @@ class SettingsDialog(tk.Toplevel):
                         command=p.save_settings).grid(row=0, column=0, sticky="w")
         ttk.Checkbutton(disp, text="Auto floor", variable=p.auto_floor_var, style="Toolbutton",
                         command=p.save_settings).grid(row=0, column=1, sticky="w", padx=(4, 0))
-        # The waterfall's top on the same line: the dialog fills an
-        # 800x480 screen with no room for another row.
-        ttk.Label(disp, text="Waterfall top", style="PanelMuted.TLabel").grid(row=0, column=2,
-                                                                           padx=(16, 0))
+        # The range on the same line: the dialog fills an 800x480 screen
+        # with no room for another row.
+        ttk.Label(disp, text="Range", style="PanelMuted.TLabel").grid(row=0, column=2,
+                                                                   padx=(16, 0))
 
-        def top_moved(v):
-            step = WATERFALL_TOP_STEP_DB
-            p.wf_top_var.set(int(round(float(v) / step) * step))
-            top_label.configure(text=f"{p.wf_top_var.get()} dB above floor")
+        def range_moved(v):
+            step = RANGE_STEP_DB
+            p.range_var.set(int(round(float(v) / step) * step))
+            range_label.configure(text=f"{p.range_var.get()} dB above floor")
 
-        top_scale = ttk.Scale(disp, from_=WATERFALL_TOP_MIN_DB, to=WATERFALL_TOP_MAX_DB,
-                              variable=p.wf_top_var, length=150, command=top_moved)
-        top_scale.grid(row=0, column=3, padx=8)
-        top_scale.bind("<ButtonRelease-1>", lambda e: p.save_settings())
-        top_label = ttk.Label(disp, text=f"{p.wf_top_var.get()} dB above floor",
-                              style="PanelMuted.TLabel", width=16)
-        top_label.grid(row=0, column=4, sticky="w")
+        range_scale = ttk.Scale(disp, from_=RANGE_MIN_DB, to=RANGE_MAX_DB,
+                                variable=p.range_var, length=150, command=range_moved)
+        range_scale.grid(row=0, column=3, padx=8)
+        range_scale.bind("<ButtonRelease-1>", lambda e: p.save_settings())
+        range_label = ttk.Label(disp, text=f"{p.range_var.get()} dB above floor",
+                                style="PanelMuted.TLabel", width=16)
+        range_label.grid(row=0, column=4, sticky="w")
 
         f.columnconfigure(0, weight=1)
         f.columnconfigure(1, weight=1)
@@ -1072,11 +1063,10 @@ class Panel(tk.Tk):
         self.auto_floor_var = tk.BooleanVar(value=cfg.get("auto_floor", True))
         self.click_spot_var = tk.BooleanVar(value=cfg.get("click_spot", False))
         self.click_spot_job = None   # the after() that runs SPOT after a click
-        top = cfg.get("waterfall_top_db", WATERFALL_TOP_DEFAULT_DB)
-        if not isinstance(top, (int, float)):
-            top = WATERFALL_TOP_DEFAULT_DB
-        self.wf_top_var = tk.IntVar(
-            value=int(min(max(top, WATERFALL_TOP_MIN_DB), WATERFALL_TOP_MAX_DB)))
+        rng = cfg.get("range_db", RANGE_DEFAULT_DB)
+        if not isinstance(rng, (int, float)):
+            rng = RANGE_DEFAULT_DB
+        self.range_var = tk.IntVar(value=int(min(max(rng, RANGE_MIN_DB), RANGE_MAX_DB)))
         self.noise_db = None       # the auto floor's smoothed noise estimate
         self.noise_time = 0.0
         self.peak_db = None        # the peak line's levels, display bins
@@ -1087,7 +1077,6 @@ class Panel(tk.Tk):
         self.ritmode_var = tk.StringVar(value="RIT")
         self.vol_var = tk.DoubleVar(value=50)
         self.narrow_var = tk.BooleanVar(value=True)
-        self.fftfilt_var = tk.BooleanVar(value=True)
         self.pitch_var = tk.StringVar(value="700")
         self.width_var = tk.StringVar(value="300")
         self.span_var = tk.StringVar(value=self.span_label(SPECTRUM_DEFAULT_HALF_SPAN_HZ))
@@ -1517,7 +1506,7 @@ class Panel(tk.Tk):
             "peak_line": self.peak_var.get(),
             "auto_floor": self.auto_floor_var.get(),
             "click_spot": self.click_spot_var.get(),
-            "waterfall_top_db": self.wf_top_var.get(),
+            "range_db": self.range_var.get(),
         })
         save_config(self.cfg)
 
@@ -1527,7 +1516,7 @@ class Panel(tk.Tk):
     # the screen; every control update it makes is handed to the Tk thread
     # with self.after().
 
-    POLL_COMMANDS = ("f", "j", "z", "l AF", "l MICGAIN", "m", "u NARROW", "u FFTFILT", "l CWPITCH",
+    POLL_COMMANDS = ("f", "j", "z", "l AF", "l MICGAIN", "m", "u NARROW", "l CWPITCH",
                      "l CWWIDTH", "l STRENGTH", "u TONE", "t", "l RFPOWER", "l ALC", "u KEYER",
                      "l KEYSPD", "u PADREV", "u MORSE", "n", "u MUTE")
 
@@ -1575,7 +1564,6 @@ class Panel(tk.Tk):
                                                             text=f"{v:.1f}×")))
             self.apply_mode(r["m"])
             self.apply_int(r["u NARROW"], lambda v: self.narrow_var.set(v != 0))
-            self.apply_int(r["u FFTFILT"], lambda v: self.fftfilt_var.set(v != 0))
             self.apply_choice(r["l CWPITCH"], self.pitch_combo, self.pitch_var)
             self.apply_choice(r["l CWWIDTH"], self.width_combo, self.width_var)
             self.apply_int(r["l STRENGTH"], self.draw_smeter)
@@ -1921,10 +1909,6 @@ class Panel(tk.Tk):
         if not self.syncing:
             self.query_async(f"U NARROW {1 if self.narrow_var.get() else 0}")
 
-    def on_fftfilt_toggled(self):
-        if not self.syncing:
-            self.query_async(f"U FFTFILT {1 if self.fftfilt_var.get() else 0}")
-
     def on_pitch_selected(self, _event=None):
         self.query_async(f"L CWPITCH {self.pitch_var.get()}")
 
@@ -2138,8 +2122,7 @@ class Panel(tk.Tk):
             dt = min(now - self.noise_time, 1.0)
             self.noise_db += (noise - self.noise_db) * (1.0 - np.exp(-dt / AUTO_FLOOR_SMOOTHING_S))
         self.noise_time = now
-        return min(self.noise_db - AUTO_FLOOR_BELOW_NOISE_DB,
-                   SPECTRUM_DB_CEILING - AUTO_FLOOR_MIN_RANGE_DB)
+        return self.noise_db - AUTO_FLOOR_BELOW_NOISE_DB
 
     def update_peak(self, db):
         """The peak line: each bin's highest level, falling back at
@@ -2195,10 +2178,11 @@ class Panel(tk.Tk):
             n = len(db)
             peak_db = float(np.max(db))
             floor_db = self.display_floor(db, bin_hz)
+            range_db = float(self.range_var.get())
 
             def to_frac(levels):
-                return (np.clip(levels, floor_db, SPECTRUM_DB_CEILING)
-                        - floor_db) / (SPECTRUM_DB_CEILING - floor_db)
+                # floor to floor + range: the same scale as the waterfall
+                return np.clip((levels - floor_db) / range_db, 0.0, 1.0)
 
             def trace(levels, color, width):
                 # Bin k at x = k * w / n (the dial's bin, n/2, mid-screen);
@@ -2214,15 +2198,11 @@ class Panel(tk.Tk):
                 coords[1::2] = TRACE_H - 2 - to_frac(levels) * (TRACE_H - 6)
                 c.create_line(*coords.tolist(), fill=color, width=width, tags="trace")
 
-            # the waterfall's colours: the same floor, its own top
-            self.add_waterfall_row(np.clip((db - floor_db) / self.wf_top_var.get(), 0.0, 1.0))
+            self.add_waterfall_row(to_frac(db))
             if self.peak_var.get():
                 trace(self.update_peak(db), PEAK_COLOR, 1)
             trace(db, TRACE, 1.5)
             c.create_line(w / 2, 0, w / 2, TRACE_H, fill=AMBER, width=1.5, tags="trace")
-            if peak_db >= SPECTRUM_DB_CEILING:
-                c.create_text(w - 4, 8, text="over scale", anchor="e", fill=AMBER,
-                              font=(self.ui, usz(8)), tags="trace")
             self.draw_scale(w, half_bins * bin_hz)
             span = half_bins * bin_hz
             self.draw_offset_marker(w, span, self.rit_hz, "rit", "RIT", RIT_GREEN, 2)
