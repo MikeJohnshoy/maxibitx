@@ -12,7 +12,9 @@ mask, its rise and fall times, its speed and weighting, and its chirp.
 
 It records --seconds of I/Q (30 by default), finds the signal (the
 strongest at its peak, so a keyed signal rather than a steady carrier),
-brings it to zero and decimates it to 6 kHz, then measures:
+brings it to zero and decimates it to 6 kHz - centring on the strongest
+peak within 150 Hz, if that is not where it was first found - then
+measures:
 
   - Keying sidebands: the strongest level, over the recording, beyond each
     offset from the carrier, each side, within 1500 Hz, relative to the
@@ -84,6 +86,7 @@ DC_GUARD_HZ = 30                   # the dial's own zero is skipped when searchi
 CSI_MASK = ((90, -20), (150, -40), (338, -60))
 DL1YCF_EXTRA = ((600, -80), (900, -100), (1200, -120))
 SEARCH_HZ = 1500                   # the mask is checked within this of the carrier
+RECENTRE_HZ = 150                  # the analysis centres on the strongest peak within this
 NOISE_HZ = (1600, 2300)            # the noise is measured here, the quieter side
 NOISE_PEAK_DB = 6                  # peak-held noise's peaks above its median
 CLEAR_DB = 6                       # a FAIL must stand this far above the noise
@@ -394,9 +397,21 @@ def judge(worst, at_hz, limit, noise_peak):
 def report(x, f0, dial, label):
     peak_dbfs = 20 * math.log10(max(np.abs(x.real).max(), np.abs(x.imag).max(), 1e-12))
     b = baseband(x, f0)
+    f, held, avg, ref, wsum2 = spectra(b)
+    # Every offset is measured from the carrier, so centre on the peak the
+    # mask is drawn around: within RECENTRE_HZ, where it can differ from the
+    # first find when two signals are close or the signal moved.
+    near = np.flatnonzero(np.abs(f) <= RECENTRE_HZ)
+    shift = float(f[near[np.argmax(held[near])]])
+    moved = None
+    if abs(shift) > f[1] - f[0]:
+        moved = (f"  re-centred {shift:+.0f} Hz, on the strongest peak - another signal that "
+                 f"close, or a drifting one, can move it")
+        f0 += shift
+        b = baseband(x, f0)
+        f, held, avg, ref, wsum2 = spectra(b)
     narrow = np.abs(lowpass(b, MARK_HZ))
     level = key_down_level(narrow)
-    f, held, avg, ref, wsum2 = spectra(b)
     held_med, avg_med = noise_estimate(f, held, avg)
     noise_peak = held_med + NOISE_PEAK_DB
     psd = avg_med / (wsum2 * RATE)                     # noise power per Hz
@@ -405,6 +420,8 @@ def report(x, f0, dial, label):
     print(f"\n{label}: signal at {where}")
     print(f"  stream peak {peak_dbfs:.1f} dBFS" +
           ("  - above -6 dBFS: the receiver may be overloaded" if peak_dbfs > -6 else ""))
+    if moved:
+        print(moved)
     print(f"  carrier {snr(2500):.1f} dB above the noise in 2500 Hz; the noise, held at its "
           f"peak, reaches about {noise_peak:.1f} dBc, so nothing below that can be seen")
 
