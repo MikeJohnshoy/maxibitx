@@ -82,6 +82,11 @@ void rx_filter_process_block(struct rx_filter *r, const float *in, float *out)
 		out[i] = crealf(out_c[i]);
 }
 
+void rx_filter_reset(struct rx_filter *r)
+{
+	filter_reset(r->filt);
+}
+
 void rx_filter_free(struct rx_filter *r)
 {
 	filter_free(r->filt);
