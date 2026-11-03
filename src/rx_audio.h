@@ -45,8 +45,8 @@ int rx_audio_get_mute(void);
 // filter, centred on the selected CW pitch - a separate stage from the wide
 // image-reject filter upstream of it, deliberately independent of it
 // (docs/dsp_design_notes/rx_audio_demod_design.md §7.6, §8). Two
-// implementations, both always running so switching between them never
-// thumps:
+// implementations, of which only the selected one runs, and only while
+// stage 3 is in circuit, starting from silence each time it comes back:
 //   - the FFT filter (src/rx_filter.c, the shared overlap-save engine
 //     tx_pipeline.c uses) - the default. Tunes pitch and width
 //     continuously, and its stopband keeps falling where an elliptic
@@ -60,9 +60,9 @@ int rx_audio_get_mute(void);
 // compares the two, §16 on the default.
 
 // Enable (1, the default) or bypass (0) stage 3, the narrow filter
-// above. The filter itself keeps running either way (its history stays
-// warm) - only which signal reaches stage 4's AGC/output changes - so
-// there's no settling-time thump when toggling back on. rigctld's
+// above. Bypassed, the filter doesn't run; enabled again, it starts from
+// silence, so the first few milliseconds fade in through the filter rather
+// than replaying audio from the last time it ran. rigctld's
 // "u"/"U NARROW" (hamlib.c).
 //
 // This is the operator's REQUEST. It is always remembered, but it only
@@ -110,12 +110,12 @@ int rx_audio_narrow_filter_inhibited(void);
 // rx_audio_process() falls back to for a block that isn't
 // RX_FILTER_BLOCK_LEN long.
 //
-// Both run every block regardless of which is selected, so switching never
-// thumps - and so selecting the cheaper filter saves no CPU, which is worth
-// knowing before reaching for it on a slow board.
+// Only the selected one runs, so on a slow board selecting the cheaper
+// filter does save CPU; the one switched to starts from silence.
 // rx_narrow_filter_fft_vs_elliptic.md §17 has the measured costs.
 //
-// Wired to rigctld's "u"/"U FFTFILT" (hamlib.c) and the control panel.
+// Wired to rigctld's "u"/"U FFTFILT" (hamlib.c); the control panel no
+// longer offers it.
 void rx_audio_set_narrow_filter_impl(int use_fft);
 
 // Current implementation selection, 0 or 1 (same meaning as
