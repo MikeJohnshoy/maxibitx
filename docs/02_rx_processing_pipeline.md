@@ -134,7 +134,9 @@ Where the filter actually sits differs from board to board;
 crystal-filter output (centered at `xtal_filter_center`) down to a low
 IF of `RX_IF_FREQ_HZ` (24000 Hz) that the audio codec can actually
 sample. Its LO is si5351 `clk1`, set to
-`xtal_filter_center + RX_IF_FREQ_HZ` (40,036,400 Hz by default) in
+`xtal_filter_center + RX_IF_FREQ_HZ` (40,036,400 Hz by default), with
+the IF scaled to the codec's actual rate (`radio_rx_clk1_hz()`; 7 Hz
+higher on a codec 280 ppm fast, so the dial reads true), in
 `maxibitx.c` at startup, and restored to that same value every time RX
 resumes after a TX burst (`radio_tx_apply()`, `radio.c`). It does not
 sweep with tuning for the same reason Mixer 1's output doesn't need to:
@@ -344,7 +346,7 @@ no notion of TX; the one place `clk1` *does* move is
 [`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md) - which
 also sets `clk2` without the RIT offset during TX and restores it with
 RIT afterwards. As long as no TX burst is in progress, `clk1` sits at
-its RX value (`xtal_filter_center + RX_IF_FREQ_HZ`) and `radio_tune_to()`
+its RX value (`radio_rx_clk1_hz()`) and `radio_tune_to()`
 alone is enough to retune the receiver. Both `radio_tune_to()` and the
 RIT setters tell the CW decoder to start afresh when the frequency it
 listens on has moved more than 300 Hz since it last did; a smaller move
