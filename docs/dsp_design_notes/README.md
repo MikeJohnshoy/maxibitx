@@ -17,6 +17,13 @@ already used in `antialias_filter_design.md`.
   check a signal on the bench (`test-cw-shape`) and off the air
   (`tools/cw_shape.py`). Status: implemented; the sBitx's own RF still
   to be measured.
+- [`sbitx_filter_measurements.md`](sbitx_filter_measurements.md) — the
+  sBitx's 40 MHz crystal filter and its four low-pass filters, measured
+  with a noise source (`tools/xtal_sweep.py`, `tools/lpf_sweep.py`):
+  widths, ripple, skirts, the second mixer's image, each band's filter
+  and its harmonic attenuation, and the recommended `xtal_filter_center`.
+  Status: measured 22 November 2026; transmitted harmonics still to be
+  measured.
 - [`rx_artifacts_and_spur_survey_study.md`](rx_artifacts_and_spur_survey_study.md)
   — the kinds of receiver artifact (spurs, birdies, images, IMD,
   aliasing, combs, ripple) and how each moves when you tune; those met
