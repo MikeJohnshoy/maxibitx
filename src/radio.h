@@ -17,8 +17,23 @@ extern int xtal_filter_center; // measured center of the crystal
 extern int bfo_freq;    // clk1 frequency while transmitting - not
                          // xtal_filter_center; see radio.c
 extern struct vfo lo;   // software LO for RX quadrature mixing
+extern int codec_rate;  // the codec's actual sample rate, Hz - see radio.c
 
 #define RX_IF_FREQ_HZ 24000
+
+// The codec's nominal sample rate, which every frequency in the software
+// is reckoned in, and the range hw_settings.ini's codec_rate may set
+// (+-1000 ppm: a guard against a typo, far wider than any crystal's error).
+#define RADIO_CODEC_RATE_NOMINAL_HZ 96000
+#define RADIO_CODEC_RATE_MIN_HZ 95904
+#define RADIO_CODEC_RATE_MAX_HZ 96096
+
+// clk1 in receive, Hz: xtal_filter_center + RX_IF_FREQ_HZ, with the IF
+// scaled from nominal to the codec's actual rate. The software mixes the
+// dial down from RX_IF_FREQ_HZ reckoned at the nominal rate; a codec
+// running fast by e makes that mix sit at RX_IF_FREQ_HZ x (1 + e), so
+// clk1 puts the dial there and every frequency reads true.
+int radio_rx_clk1_hz(void);
 
 // RIT and XIT range, +/-9.999kHz as on common Icom/Kenwood rigs - a
 // protocol bound, not a hardware limit. Callers range-check against it;
@@ -209,8 +224,8 @@ int radio_get_cw_pitch(void);
 // (tools/xtal_sweep.py) - the ini's value is what a restart uses. Reached
 // via rigctld's L XTALCENTER (docs/06_api.md).
 //
-// In receive, retunes both clocks that depend on it: clk1 to the new
-// center + RX_IF_FREQ_HZ and clk2 to the dial (+ RIT) + the new center, so
+// In receive, retunes both clocks that depend on it: clk1 to
+// radio_rx_clk1_hz() from the new center and clk2 to the dial (+ RIT) + the new center, so
 // the dial stays at IF RX_IF_FREQ_HZ. Then re-derives the TX IF placement
 // (sound_update_cw_if_placement()), because the TX shifts are
 // bfo_freq - xtal_filter_center. A center that leaves no usable TX IF is
