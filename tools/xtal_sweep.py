@@ -272,6 +272,23 @@ def offset_cells(spec, step, k_max):
     return out
 
 
+def robust_line(t, y):
+    """(slope, intercept) of a line through the points that agree with it:
+    fitted, then refitted without the points more than 3 robust standard
+    deviations (from the median absolute deviation) off it, until that set
+    stops changing."""
+    keep = np.ones(len(t), bool)
+    for _ in range(10):
+        slope, icpt = np.polyfit(t[keep], y[keep], 1)
+        resid = y - (slope * t + icpt)
+        spread = 1.4826 * float(np.median(np.abs(resid[keep] - np.median(resid[keep])))) + 1e-9
+        agree = np.abs(resid) <= 3 * spread
+        if np.count_nonzero(agree) < 3 or (agree == keep).all():
+            break
+        keep = agree
+    return slope, icpt
+
+
 def fit(levels, k_max):
     """Separates levels[iS, iD] (dB, NaN where missing) into
     X(S - d) + C(d) + G(S) by alternating medians. X is indexed by crystal
@@ -284,7 +301,10 @@ def fit(levels, k_max):
     together. Without it, a sweep made while the band breathed draws the
     breathing into the filter. A straight-line trend in G can't be told
     apart from a tilt of X against C, so G is held to zero mean and no
-    slope, and a steady drift stays in X and C.
+    slope, and a steady drift stays in X and C. The line is fitted to the
+    steps that agree with it (robust_line()), so a few steps far off it -
+    a noise source still warming up at the start - don't set the slope and
+    tilt the filter.
 
     C is pinned to 0 at the dial, so X reads as the level a signal at the
     dial would have. Returns (X, n, C, G): n is how many offsets each
@@ -314,7 +334,7 @@ def fit(levels, k_max):
         c_new -= c_new[k_max]
         g_new = medians(levels - x[ix] - c_new[None, :], 1)
         if np.count_nonzero(rows) >= 3:
-            slope, icpt = np.polyfit(t[rows], g_new[rows], 1)
+            slope, icpt = robust_line(t[rows], g_new[rows])
             g_new = np.where(rows, g_new - (slope * t + icpt), 0.0)
         else:
             g_new[:] = 0.0
