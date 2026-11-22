@@ -507,8 +507,12 @@ signal above the dial comes out of Mixer 2 at a higher audio IF; on
 transmit, a higher audio IF goes out at a higher RF.
 
 The si5351 runs from a TCXO whose actual frequency, measured on the
-bench, is the `cal` value in `hw_settings.ini` (nominally 25 MHz). It
-sits at address 0x60 on the board's I2C bus: bus 22 on the sBitx, 3 on
+bench, is the `cal` value in `hw_settings.ini` (nominally 25 MHz). The
+codec's own clock is separate: its actual sample rate is `codec_rate`
+(nominally 96,000 Hz), and clk1 is trimmed by the difference so that
+frequencies read and transmit true
+([`tx_test_tones_and_alc.md`](dsp_design_notes/tx_test_tones_and_alc.md),
+"Frequency calibration", measures both). The si5351 sits at address 0x60 on the board's I2C bus: bus 22 on the sBitx, 3 on
 the zBitx, or whichever bus it answers on if Linux has numbered them
 differently. Every clock change is an
 I2C transaction, which is one reason clock changes stay off the audio
@@ -1065,21 +1069,26 @@ The rotation is chosen so the right thing lands on the filter centre:
 
 Both shifts are calculated from the values loaded from
 `hw_settings.ini` at startup, and the CW shift again whenever the pitch
-changes. Because the rotation moves whole bins, the carrier lands
-within about half a bin of exact: 6.25 Hz low for SSB, and 10.6 Hz low
-for CW at 700 Hz. (The CW tone, like the receive BFO, comes from a
-`vfo.c` oscillator with 1.46 Hz steps, so a 700 Hz pitch is
-698.7 Hz.)
+changes. Because the rotation moves whole bins, the IF it makes is off
+by up to half a bin: 6.25 Hz low for SSB, and 10.6 Hz low for CW at
+700 Hz. (The CW tone, like the receive BFO, comes from a `vfo.c`
+oscillator with 1.46 Hz steps, so a 700 Hz pitch is 698.7 Hz.) A codec
+running off its nominal rate scales the whole IF as well. So at
+key-down clk1 is set not to `bfo_freq` itself but to `bfo_freq` plus
+the IF's error for the mode (`sound_tx_clk1_trim_hz()`), which moves
+the carrier back onto the dial, to within the si5351's own step of a
+few hertz.
 
 Following a CW key-down at the default pitch through the chain, on a
-dial of 7,030,000 Hz:
+dial of 7,030,000 Hz, with the codec at its nominal rate:
 
 ```
-pipeline:   698.7 Hz tone + 21,890.6 Hz shift  =     22,589.4 Hz IF
-Mixer 2:    40,035,000 − 22,589.4              = 40,012,410.6 Hz  (wanted, on the filter centre)
-            40,035,000 + 22,589.4              = 40,057,589.4 Hz  (45 kHz above the centre)
-filter:     keeps 40,012,410.6 Hz; the sum product is in the stopband
-Mixer 1:    47,042,400 − 40,012,410.6          =  7,029,989.4 Hz  (10.6 Hz below the dial)
+pipeline:   698.7 Hz tone + 21,890.6 Hz shift  =     22,589.4 Hz IF (10.6 Hz low)
+clk1:       40,035,000 − 11                    = 40,034,989 Hz    (trimmed by the error, rounded)
+Mixer 2:    40,034,989 − 22,589.4              = 40,012,399.6 Hz  (wanted, on the filter centre)
+            40,034,989 + 22,589.4              = 40,057,578.4 Hz  (45 kHz above the centre)
+filter:     keeps 40,012,399.6 Hz; the sum product is in the stopband
+Mixer 1:    47,042,400 − 40,012,399.6          =  7,030,000.4 Hz  (on the dial)
 ```
 
 The same arithmetic for a 1 kHz tone in USB gives an IF of
