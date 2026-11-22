@@ -172,8 +172,8 @@ TCI `xit_offset`). `radio_set_tx(1)` fixes it for the whole transmission
 before raising `in_tx`, and the `[tx_band]` check and the per-band power
 scale use it too, so XIT can't carry a signal out of a band unnoticed.
 Returning to RX is the reverse: exciter feed to 0,
-`radio_hw_relays_tx(0, ...)`, clk1 back to
-`xtal_filter_center + RX_IF_FREQ_HZ`, clk2 back to its RX value (with
+`radio_hw_relays_tx(0, ...)`, clk1 back to its RX value
+(`radio_rx_clk1_hz()`), clk2 back to its RX value (with
 RIT), and RX capture unmuted last, once the relay has settled.
 
 On the sBitx the relay half raises PTT (`EXT_PTT`), waits
@@ -271,17 +271,15 @@ For the example, the input is a 700 Hz tone.
    placement succeeds: the shift in force would no longer match the
    clocks, and the transmission would be off frequency by the difference.
 
-   One measured consequence of doing the shift in whole bins: 46.875 Hz is
-   the finest placement available, so the carrier lands within half a bin
-   of the dial rather than exactly on it. At the default pitch, 21,900 Hz
-   rounds to 467 bins = 21,890.6 Hz, which puts every CW transmission
-   **about 9 Hz low of its dial reading** — not a regression, this has
-   always been true — and choosing 600 or 800 Hz varies it between −15.6
-   and −3.1 Hz. `tx_pipeline_test.c` Case H measures all three and bounds
-   them at half a bin. Well inside CW practice, and the first hard number
-   for the still-open question of where this radio actually transmits; see
-   [`dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md`](dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md)
-   §13 for the arithmetic and for the fix if it ever matters.
+   Doing the shift in whole bins means 46.875 Hz is the finest placement
+   available, so the IF it makes is off by up to half a bin. At the
+   default pitch, 21,900 Hz rounds to 467 bins = 21,890.6 Hz, 9.4 Hz low;
+   600 and 800 Hz give −15.6 and −3.1 Hz (`tx_pipeline_test.c` Case H
+   bounds them at half a bin). A codec off its nominal rate scales the
+   whole IF too. Neither reaches the air: `tx_pipeline_if_error_hz()`
+   works out the sum for CW and for SSB whenever the placement is set,
+   and clk1 is moved by it at key-down (Mixer 2, below; Case J checks
+   the arithmetic).
 4. **Inverse FFT.** Back to the time domain, still complex.
 5. **Peak limiter (ALC).** The signal is still complex at this point,
    so `2*|out_c[i]|` is the envelope the exciter will radiate - the
@@ -311,11 +309,17 @@ over TCI) at a fixed, low level (`SIDETONE_PEAK_AMPLITUDE`, or
 `DIGITAL_MONITOR_PEAK_AMPLITUDE` for a host's audio) for the local
 speaker only.
 
-**Mixer 2 — clk1 at `bfo_freq`.** While transmitting, clk1 is
-`bfo_freq`, not its RX value. The DAC output drives a single balanced
-modulator, so both products appear: 40,035,000 − 22,590.6 =
-40,012,409.4 Hz, 9.4 Hz from the crystal filter center, and
-40,035,000 + 22,590.6 = 40,057,590.6 Hz, about 45 kHz above it. There's
+**Mixer 2 — clk1 at `bfo_freq`, trimmed.** While transmitting, clk1 is
+`bfo_freq` plus the mode's trim (`sound_tx_clk1_trim_hz()`: the IF's
+error for CW or for SSB, rounded to a hertz), not its RX value. Raising
+clk1 lowers the carrier by the same amount, so the trim cancels the
+IF's error. In the example the keyed tone is really 698.7 Hz (`vfo.c`
+sets it in 1.46 Hz steps), so the IF is 22,589.4 Hz, 10.6 Hz low; with
+the codec at its nominal rate clk1 is 40,035,000 − 11 = 40,034,989 Hz.
+The DAC output drives a single balanced modulator, so both products
+appear: 40,034,989 − 22,589.4 = 40,012,399.6 Hz, on the crystal filter
+center, and 40,034,989 + 22,589.4 = 40,057,578.4 Hz, about 45 kHz above
+it. There's
 no phasing network; placing `bfo_freq` ~22.6 kHz above the filter is
 what lets the filter keep one product and reject the other.
 
@@ -326,10 +330,10 @@ product is deep in its stopband.
 **Mixer 1 — clk2.** clk2 is `freq_hdr + xtal_filter_center` =
 47,042,400 Hz, the same as RX without RIT (XIT, when on, adds its
 offset here). The output is
-47,042,400 − 40,012,409.4 = 7,029,990.6 Hz: the carrier lands 9.4 Hz
-below the dial. That residual comes from the bin rotate moving in
-whole 46.875 Hz steps. The zeroed image, if any of it survives, would
-land 1,400 Hz below that (~7,028,590 Hz); on the air a remote receiver
+47,042,400 − 40,012,399.6 = 7,030,000.4 Hz: on the dial, to within the
+trim's rounding and the si5351's own step (a few hertz; it sets clk1 in
+steps of about 2.7 Hz). The zeroed image, if any of it survives, would
+land 1,400 Hz below that (~7,028,600 Hz); on the air a remote receiver
 tuned there heard nothing.
 
 **PA and LPF.** The PA has fixed gain. The LPF relay was already
@@ -561,16 +565,13 @@ calibrated — that is still an open item — or about whether
 
 ## Known limitations
 
-- **Carrier placement is a few Hz low.** Whole-bin rotation leaves the
-  SSB carrier 6.25 Hz below the dial and CW's tone 9.4 Hz below. It
-  could be removed by nudging clk2 during TX, at the cost of making
-  `radio_tx_apply()` mode-aware again; 6 Hz is well inside an SSB or
-  FT8 channel, so it hasn't been. The further ~11 Hz those same
-  measurements showed turned out not to be this radio at all: WWV on
-  receive puts the si5351 reference at its nominal 25 MHz, and the
-  remote receiver used for the transmit tests is itself about 1.5 ppm
-  low - see
-  [`01_hardware_init_and_control.md`](01_hardware_init_and_control.md).
+- **Transmit frequency not yet measured since clk1's trims.** The trims
+  put the carrier on the dial by arithmetic, to within the si5351's step
+  of about 2.7 Hz; the transmit measurements so far predate them, and
+  `cal` and `codec_rate` with them. A check against a GPS-locked
+  receiver (a KiwiSDR advertising GPS) would close it: see
+  [`dsp_design_notes/tx_test_tones_and_alc.md`](dsp_design_notes/tx_test_tones_and_alc.md),
+  "Frequency calibration".
 - **Remote PTT in CW sends no carrier** (see "Keying and PTT") unless
   the test-tone generator is on. CW from a computer goes as text instead:
   rigctld `b`, CAT `KY`, TCI's `cw_macros`/`cw_msg`, or the control
