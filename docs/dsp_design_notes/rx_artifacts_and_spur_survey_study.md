@@ -112,7 +112,7 @@ From that, the predicted responses, each with what defends against it:
 | 8 | LPF_B possibly rolling off at 17 m (−1.3 dB at 18.25 MHz, −3.8 dB at 18.5 MHz vs LPF_A) | the filter's cutoff close to its top band | some RX sensitivity and TX power on 17 m (the per-band TX scale covers the power) | **measured**: under 1 dB in 17 m; LPF_B is about 3 dB down near 20 MHz |
 | 9 | (zBitx, TX) spur 24 kHz from the transmit frequency in CW | the BFO running through key-up gaps | an out-of-band signal | traced on the zBitx; maxibitx flagged for a bench check (`ARCHITECTURE.md`) |
 | 10 | Clicks and gaps at start-up | the playback queue draining before the audio thread ran (xrun flood) | glitches in audio and I/Q | **fixed**: playback primed before the thread starts |
-| 11 | A comb of narrow spurs, harmonics of 48.0135 kHz, 3.6–29.7 MHz (30 of 10 m's 41 lines) | an unidentified crystal-stable clock, not the si5351's; coupled on the board after the LPFs | a line every 48 kHz, 10–25 dB in an 11.7 Hz bin; on the waterfall, rarely heard | **open**: find the clock (§2.5) |
+| 11 | A comb of narrow spurs, harmonics of 48.0135 kHz, 3.6–29.7 MHz (30 of 10 m's 41 lines) | the codec's clock: half its actual sample rate (96,027 Hz; its 12 MHz crystal is about 280 ppm fast); coupled on the board after the LPFs | a line every 48 kHz, 10–25 dB in an 11.7 Hz bin; heard at S2 on 10 m | **source found** (§2.5); remedies are hardware |
 | 12 | si5351 spurs: 25.000, 10.1456 (30 m), 14.3084 (20 m) MHz and five lines at 28.98–29.71 MHz, 17–39 dB | the si5351's reference and products of its outputs, on the board | 30 m and 20 m lines inside the bands, 36–39 dB | **open**: fall 1.4–16 dB at lower drive; the cost of lower drive unmeasured |
 | 13 | Second-mixer images of those spurs, 11–14 dB weaker | not the crystal filter, which is 48 dB or more down there (measured); they get in after it | only these lines' own images; a real station's image is 48 dB or more down | **open**, low priority: how they get in |
 | 14 | The strongest artifacts: narrow lines up to ~50 dB, each seen at a single dial (3.655, 5.308, 5.318, 5.362, 7.300, 28.62 MHz) | some are images or edge-truncated lines (60 m at 1 kHz steps); 60 m's near 5.362 MHz is PLL A, or clk2's 16th harmonic, beating with clk1's 18th harmonic — at PLL A − PLL B's frequency, but unmoved when PLL B moves (100 Hz-step runs at clk1 dividers 18 and 22); the others likely the same kind (inferred) | strong, but only within a few kilohertz of particular dials, sweeping 15 times as fast as the tuning | **open**: which of the two (clk2's divider, §2.5); moving PLL B doesn't, and 4 mA drive takes off only 3 dB |
@@ -209,8 +209,37 @@ It is there with every relay open, so it couples in on the board after
 the LPFs, not through the antenna jack. No clock on the board is known
 at 48.0135 kHz. Half the codec's frame rate would fit — a pattern on the
 I2S lines repeating every two frames — if its 12 MHz clock ran about
-280 ppm fast; measuring the codec's sample rate against the TCXO would
-settle it.
+280 ppm fast.
+
+It does (22 November 2026, from run A's `_peaks.csv`). The software
+takes the codec's rate to be exactly 96 kHz. If it is faster by ε, every
+reading is low by ε × (24 kHz + d) at offset d: about 4 Hz at −10 kHz
+and 9.5 Hz at +10 kHz if ε is 280 ppm. The si5351's few hertz of
+setting error doesn't vary with the offset that way. Fitting each
+steady fixed-RF line's readings against its offsets (82 lines, each
+seen from three or four dials at least 8 kHz apart) gives ε:
+
+| Lines | ε, ppm |
+|---|---|
+| all 82, median | 260 |
+| the 49 at 10 dB or more, median (95% bootstrap range) | 298 (252–324) |
+| the si5351's own ten (§2.7), median | 285 |
+| the comb's 45, median | 276 |
+| what the comb needs, if it is half the codec's rate | 281 |
+
+The comb's fundamental, fitted to the corrected readings, is
+48,013.50 Hz: half of 96,027 samples a second. So the comb is made in
+the codec's clock domain, with period two frames (12 MHz × (1 + ε) ÷
+250), and the codec's 12 MHz crystal is about 280 ppm fast: several
+times a crystal's usual tolerance. The same ε explains the 6–8 Hz the
+survey read the TCXO and the si5351's lines low (§2.7).
+
+Why two frames is not yet known. In its USB mode the codec makes each
+frame from 125 clocks of 12 MHz, an odd number, so anything it divides
+by two lines up again only every second frame. That would fit, but is a
+reading of the clock arithmetic, not a measurement. A 12.288 MHz clock
+(normal mode, 128 clocks a sample) would test it, and is also what
+would remove the codec's timing pattern (§2.1).
 
 **The si5351's own (12).** These don't move between runs (within
 0.4 Hz): they are locked to the TCXO, as the receiver's oscillators
@@ -611,7 +640,8 @@ passband's edge isn't enough to matter.
 The three loudest heard (29.5268, 10.1456, 14.3084 MHz) are all of one
 family, and so is every other si5351 line the survey found that doesn't
 move: a × clk1 + b × 25 MHz, within the 6–8 Hz by which the survey reads
-the TCXO itself low (25 MHz reads 24.999993 MHz):
+the TCXO itself low (25 MHz reads 24.999993 MHz) — the codec running
+about 280 ppm fast (§2.5):
 
 | MHz | Band | a | b | dB over the floor (survey A) |
 |---|---|---|---|---|
@@ -970,7 +1000,9 @@ Taken (22 November 2026):
 9. The ripple (6), LPF_B (8) and the crystal filter 48 kHz from its
    centre (13) are measured (§2.3, table in §2); the images (13) are
    not the filter's.
-10. Next: the 48 kHz comb's source (11).
+10. The 48 kHz comb's source (11) is the codec's clock (§2.5), found
+    from run A's readings; the run with the Pi's HDMI, Wi-Fi and USB off
+    isn't needed for it.
 
 Still open, the heard ones first (for when it is picked up again):
 
@@ -978,10 +1010,12 @@ Still open, the heard ones first (for when it is picked up again):
   10.1456 MHz, S2 at 14.3084): confirmed by ear; PLL B's setting doesn't
   touch it, and clk1 on the low side isn't being done (§6, 8). Left to
   the hardware: the clock lines' filtering and layout.
-- The 48 kHz comb (11), heard at S2 on 10 m: its source (below).
+- The 48 kHz comb (11), heard at S2 on 10 m: made in the codec's clock
+  domain (§2.5). What removes it is hardware: the I2S lines' and the
+  codec's supply filtering and layout, or a 12.288 MHz codec clock.
+  Worth confirming the crystal with a frequency counter: 280 ppm fast
+  is unusual.
 - From §2: check the block-rate comb on SSB transmit (5).
-- The 48 kHz comb's source (11): measure the codec's sample rate
-  against the TCXO; a run with the Pi's HDMI, Wi-Fi and USB off.
 - The cost of a lower si5351 drive (12): a steady signal's level at 8,
   6 and 4 mA. Keeping a lower drive would then want a setting in
   `hw_settings.ini` and the transmit power scales re-checked.
