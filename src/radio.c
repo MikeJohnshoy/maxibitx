@@ -39,6 +39,19 @@ int xtal_filter_center = 40012400;
 int bfo_freq = 40035000;
 struct vfo lo;
 
+// The codec's actual sample rate, set by its 12 MHz crystal. The software
+// reckons every frequency at the nominal 96 kHz; radio_rx_clk1_hz() and
+// sound.c's TX clk1 trims make up the difference, so receive reads true
+// and transmit lands on the dial. From hw_settings.ini's codec_rate; how
+// to measure it: docs/dsp_design_notes/tx_test_tones_and_alc.md,
+// "Frequency calibration".
+int codec_rate = RADIO_CODEC_RATE_NOMINAL_HZ;
+
+int radio_rx_clk1_hz(void) {
+  return xtal_filter_center +
+         (int)lround((double)RX_IF_FREQ_HZ * codec_rate / RADIO_CODEC_RATE_NOMINAL_HZ);
+}
+
 // RIT: the dialed value and whether it's applied are separate, like a
 // rig's RIT knob and ON/OFF button (radio.h). Only ever affects RX's clk2;
 // clk1's jobs are fixed offsets from the crystal filter center. Both reset
@@ -254,7 +267,7 @@ int radio_set_xtal_filter_center(int hz) {
   xtal_filter_center = hz;
   // clk1 first, then clk2: between the two writes the dial sits off the
   // new IF by the size of the step, for the length of one I2C write.
-  si5351bx_setfreq(1, xtal_filter_center + RX_IF_FREQ_HZ);
+  si5351bx_setfreq(1, radio_rx_clk1_hz());
   si5351bx_setfreq(2, freq_hdr + rit_applied_hz() + xtal_filter_center);
 
   // No log line on success: a sweep makes dozens of these, and
@@ -276,7 +289,7 @@ int radio_set_si5351_drive(int ma) {
     return 0; // already: no clocks rewritten, nothing logged
   if (si5351_set_drive_ma(ma) < 0)
     return -1;
-  si5351bx_setfreq(1, xtal_filter_center + RX_IF_FREQ_HZ);
+  si5351bx_setfreq(1, radio_rx_clk1_hz());
   si5351bx_setfreq(2, freq_hdr + rit_applied_hz() + xtal_filter_center);
   if (ma == 8)
     printf("radio: si5351 drive back to 8 mA\n");
@@ -293,7 +306,7 @@ int radio_set_clk1_divider(int div) {
     return 0; // already: nothing rewritten, nothing logged
   if (si5351_set_clk1_divider(div) < 0)
     return -1;
-  uint32_t f = xtal_filter_center + RX_IF_FREQ_HZ;
+  uint32_t f = radio_rx_clk1_hz();
   si5351bx_setfreq(1, f);
   si5351_reset(); // PLL B moves by up to 240 MHz: relock both PLLs
   int used = si5351_clk1_divider_for(f);
@@ -304,7 +317,7 @@ int radio_set_clk1_divider(int div) {
 }
 
 int radio_get_clk1_divider(void) {
-  return si5351_clk1_divider_for(xtal_filter_center + RX_IF_FREQ_HZ);
+  return si5351_clk1_divider_for(radio_rx_clk1_hz());
 }
 
 // TX transitions run on this dedicated worker thread rather than
@@ -359,12 +372,16 @@ static void radio_tx_apply(int tx_on) {
     // Mute RX capture first - before PTT, the relay or the clocks, i.e.
     // before any TX RF exists (see sound_set_rx_capture()). Then clk1 ->
     // bfo_freq and clk2 -> the TX frequency (the dial, plus XIT) +
-    // xtal_filter_center, with no correction term: tx_pipeline.c already
-    // aims the TX waveform at the filter center (ARCHITECTURE.md §10 step 4). Every TX path - straight key via cw.c,
-    // CAT/network MOX - comes through here.
+    // xtal_filter_center. tx_pipeline.c aims the TX waveform at the filter
+    // center (ARCHITECTURE.md §10 step 4) to within a bin and the codec's
+    // rate; clk1's trim for the mode (sound_tx_clk1_trim_hz()) takes out
+    // what is left, so the carrier lands on the dial. CWR transmits as CW.
+    // Every TX path - straight key via cw.c, CAT/network MOX - comes
+    // through here.
     int tx_freq = radio_tx_freq();
+    int cw_mode = current_mode == RADIO_MODE_CW || current_mode == RADIO_MODE_CWR;
     sound_set_rx_capture(0);
-    si5351bx_setfreq(1, bfo_freq);
+    si5351bx_setfreq(1, bfo_freq + sound_tx_clk1_trim_hz(cw_mode));
     si5351bx_setfreq(2, tx_freq + xtal_filter_center);
     // The board's relays and their settling waits (radio_hw.c). A board
     // that cannot transmit refuses here too, behind radio_set_tx()'s own
@@ -374,7 +391,7 @@ static void radio_tx_apply(int tx_on) {
       printf("radio: TX refused by the %s's T/R sequence - staying in receive\n",
              radio_hw_board_name());
       in_tx = 0;
-      si5351bx_setfreq(1, xtal_filter_center + RX_IF_FREQ_HZ);
+      si5351bx_setfreq(1, radio_rx_clk1_hz());
       si5351bx_setfreq(2, freq_hdr + rit_applied_hz() + xtal_filter_center);
       sound_set_rx_capture(1);
       return;
@@ -390,7 +407,7 @@ static void radio_tx_apply(int tx_on) {
     // Restore the RX clocks - needed for the straight-key path, which has
     // no radio_tune_to() of its own afterwards. RIT survives TX bursts (only
     // radio_tune_to() clears it), so clk2 re-adds it.
-    si5351bx_setfreq(1, xtal_filter_center + RX_IF_FREQ_HZ);
+    si5351bx_setfreq(1, radio_rx_clk1_hz());
     si5351bx_setfreq(2, freq_hdr + rit_applied_hz() + xtal_filter_center);
     // Unmute capture only now that the relay has settled, so relay
     // transients never reach the DSP chain. The local speaker needs no
