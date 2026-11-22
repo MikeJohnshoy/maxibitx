@@ -118,6 +118,10 @@ drive's effect on gain shows on a real signal, not here.
 Needs a maxibitx with the I/Q stream on UDP 4536, numpy, and
 xtal_sweep.py beside this file (its rigctld and I/Q code); --lpf-off
 needs L LPF (sBitx), --drive needs L SIDRIVE, --clk1-div needs L CLK1DIV.
+clk1's frequency, for the suspects, is l XTALCENTER plus the 24 kHz IF
+scaled by l CODECRATE (nominal on a maxibitx without it); the si5351's
+arithmetic is the run's own, saved with it, so an older run's
+--reanalyse works out its products as that maxibitx made them.
 """
 
 import argparse
@@ -359,27 +363,42 @@ def classify(cands, step_hz):
 # ---- the si5351's PLLs ---------------------------------------------------------
 
 SI_XTAL = 25000000
-SI_DENOM = 0x80000
+SI_DENOM = 1048575       # si5351v2.c's PLL fraction denominator, rounded to nearest
+SI_DENOM_BEFORE = 0x80000  # runs before 22 November 2026: 1/2^19, truncated
+SI_ARITH = {"denom": SI_DENOM, "round": True}   # the run's; report() sets it
+
+
+def si_arith_for(meta):
+    """The si5351 arithmetic the run's maxibitx used, from its _steps.npz:
+    runs saved without si_denom predate the rounding."""
+    denom = int(meta.get("si_denom", SI_DENOM_BEFORE))
+    return {"denom": denom, "round": denom == SI_DENOM}
 
 
 def si_pll(freq, div=0):
     """The PLL frequency and output divider si5351v2.c uses for an output
     at freq: div if given, else the smallest even divider above 650 MHz /
-    freq; the PLL a 25 MHz multiple plus a fraction in 1/2^19 steps."""
+    freq; the PLL a 25 MHz multiple plus a fraction in steps of
+    1/SI_ARITH's denominator, rounded or truncated as the run's
+    maxibitx did."""
     if not div:
         div = 650000000 // int(freq) + 1
         if div & 1:
             div += 1
     pll = int(freq) * div
-    num = ((pll % SI_XTAL) * SI_DENOM) // SI_XTAL
-    return SI_XTAL * (pll // SI_XTAL + num / SI_DENOM), div
+    denom = SI_ARITH["denom"]
+    a, rem = divmod(pll, SI_XTAL)
+    num = (rem * denom + (SI_XTAL // 2 if SI_ARITH["round"] else 0)) // SI_XTAL
+    return SI_XTAL * (a + num / denom), div
 
 
 def pll_products(dial0, s_fit, clk1_hz, clk1_div=0):
     """Products of PLL A (clk2's), PLL B (clk1's) and the 25 MHz reference
     that cross the dial within 3 kHz of dial0 at the fitted slope:
     sgn * (m * A - n * B + k * 25 MHz), whose offset moves at
-    sgn * m * (A's divider) - 1 times the dial."""
+    sgn * m * (A's divider) - 1 times the dial. xtal_filter_center is
+    taken as clk1 less 24 kHz; clk1's codec_rate trim (a few hertz) moves
+    a crossing by about as much, well inside the 3 kHz searched."""
     xc = clk1_hz - 24000
     a0, div_a = si_pll(dial0 + xc)
     b, _ = si_pll(clk1_hz, clk1_div)
@@ -480,6 +499,7 @@ def spur_where(sp):
 def report(cands, dials, floors, step_hz, meta, prefix, spectra=None):
     spurs, singles, steep_pairs = classify(cands, step_hz)
     clk1 = meta.get("clk1_hz", 40036400.0)
+    SI_ARITH.update(si_arith_for(meta))
     for sp in spurs:
         sp["suspects"] = suspects(sp, spurs, clk1, meta.get("clk1_div", 0))
         # the bands it was seen in: by RF, or for a fixed offset by the dial
@@ -859,6 +879,8 @@ def main():
         z = np.load(args.reanalyse, allow_pickle=False)
         dials, spectra = z["dials"], z["spectra"]
         meta = {"clk1_hz": float(z["clk1_hz"]), "conditions": str(z["conditions"])}
+        if "si_denom" in z.files:
+            meta["si_denom"] = int(z["si_denom"])
         if "clk1_div" in z.files:
             meta["clk1_div"] = int(z["clk1_div"])
         if "range_lo" in z.files and int(z["range_lo"]):
@@ -881,7 +903,10 @@ def main():
         sys.exit("the radio is transmitting - try again in receive")
     original_dial = rig.get_int("f")
     xtal = rig.get_int("l XTALCENTER")
-    clk1 = (xtal + 24000) if xtal else 40036400
+    # receive clk1 as radio_rx_clk1_hz() sets it: the 24 kHz IF scaled to the
+    # codec's actual rate (l CODECRATE; a maxibitx without it is nominal)
+    rate = rig.get_int("l CODECRATE") or 96000
+    clk1 = (xtal + round(24000 * rate / 96000)) if xtal else 40036400
     original_drive = rig.get_int("l SIDRIVE")
     conditions = []
     if args.drive is not None:
@@ -968,13 +993,13 @@ def main():
         print(f"\n{retried} step(s) measured again; {len(missed)} with no data"
               + (f": {', '.join(str(m) for m in missed[:10])}" if missed else ""))
     meta = {"clk1_hz": float(clk1), "conditions": ", ".join(conditions),
-            "clk1_div": div_now or 0}
+            "clk1_div": div_now or 0, "si_denom": SI_DENOM}
     if args.range:
         meta["range"] = tuple(args.range)
     np.savez_compressed(prefix + "_steps.npz", dials=np.array(done),
                         spectra=np.array(kept) if kept else np.zeros((0, int(np.sum(KEEP)))),
                         clk1_hz=clk1, conditions=meta["conditions"], step=step,
-                        clk1_div=div_now or 0,
+                        clk1_div=div_now or 0, si_denom=SI_DENOM,
                         range_lo=args.range[0] if args.range else 0,
                         range_hi=args.range[1] if args.range else 0)
     written = [prefix + "_steps.npz"] + report(cands, done, floors, step, meta, prefix,
