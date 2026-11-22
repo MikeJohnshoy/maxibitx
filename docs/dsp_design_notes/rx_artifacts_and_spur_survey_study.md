@@ -1,6 +1,7 @@
 # Receiver artifacts, and a spur survey: a design study
 
-Status: **parked** (29 October 2026). The survey is built
+Status: **parked** (29 October 2026), picked up again on 22 November
+2026 for the 48 kHz comb's source (11). The survey is built
 (`tools/spur_survey.py`, with rigctld's `L SIDRIVE`, `L LPF` and
 `L CLK1DIV` for its comparisons) and was run on the sBitx; the
 measurements are in §2.5–§2.7. The loudest spurs heard are the clk1
@@ -9,6 +10,10 @@ fix is left, and the remedies are in hardware, which other sBitx users
 are looking at. §6 lists where to pick it up. §1–§3 review the kinds of
 receiver artifact and the ones met so far on the sBitx; §4 is the
 design of `tools/spur_survey.py`; §6 records the decisions taken.
+The noise-source measurements of 22 November 2026
+([`sbitx_filter_measurements.md`](sbitx_filter_measurements.md)) settle
+three of the open items: the 8 kHz ripple (6), LPF_B (8) and the crystal
+filter 48 kHz from its centre (13).
 
 Written to answer:
 
@@ -87,7 +92,7 @@ From that, the predicted responses, each with what defends against it:
 | First-mixer image | D + 2S ≈ D + 80.025 MHz — FM broadcast (88–108 MHz) lands on dials of 8–28 MHz | backwards | the LPF in use, far into its stopband |
 | First-mixer harmonic responses | n·D + (n ∓ 1)·S for n = 2, 3, … (e.g. 2D + 40 MHz) | n − 1 times as fast | the LPF |
 | IF feedthrough | ≈ S − d, a signal near 40 MHz leaking straight through the mixer | fixed offset | the LPF, and the mixer's isolation |
-| Second-mixer image | D − 48 kHz − d: a station 48 kHz below the dial appears at +d | backwards | the crystal filter, 48 kHz from its centre (not yet measured that far out) |
+| Second-mixer image | D − 48 kHz − d: a station 48 kHz below the dial appears at +d | backwards | the crystal filter, 48 kHz from its centre: 48–49 dB down (measured) |
 | Codec aliasing | codec inputs past about 0.45 fs fold back to the band's edges, i.e. offsets beyond about ±20 kHz | backwards, at the display's edges | the crystal filter's skirts; the codec's decimation filter |
 | Software-mix self-image | 48 kHz + d, folded near Nyquist | — | `antialias.c`, −81 dB from 47.5 kHz (by design) |
 | Opposite sideband in the demodulator | the other side of zero beat | backwards, in the audio | stage 1's complex filter: a few dB at 0 Hz, about 10 dB at −200 Hz, 40–75 dB beyond −400 Hz |
@@ -102,14 +107,14 @@ From that, the predicted responses, each with what defends against it:
 | 3 | Mix self-image near Nyquist | real samples × complex LO at fs/4 | would alias into the band's edges | **fixed by design**: `antialias.c` |
 | 4 | Opposite-sideband leakage near zero beat | stage 1's finite transition band | a signal just the other side of zero beat is heard, weakly | inherent; acceptable |
 | 5 | 93.75 Hz comb on both channels | current pulses at the audio block rate (every 1024 samples) coupling into the analog inputs | RX: none (codec 0–1 kHz is 23–24 kHz below the dial, outside the crystal filter). TX: the mic carries it; 375 Hz and up pass the 300–3000 Hz SSB filter | **open**: check SSB on air |
-| 6 | Noise floor rippling with an 8 kHz period | an echo 12 samples long in the codec's samples, or a filter ripple; unidentified | ±several dB of floor shape; reads into auto floor and noise readings | **open**: measure with the noise generator |
+| 6 | Noise floor rippling with an 8 kHz period | an echo 12 samples long in the codec's samples, or a filter ripple; unidentified | ±several dB of floor shape; reads into auto floor and noise readings | **measured** (§2.3): the crystal filter's own ripple, about 3 dB; not the codec |
 | 7 | Broad raises at 24.0 and 30.75 MHz, slight at 12.5 and 25.0 MHz, in all five LPF states | internal; 24.0 = 2 × the codec's 12 MHz, 12.5 / 25.0 the si5351's 25 MHz TCXO; 30.75 unidentified | small (1–4 dB), none inside a ham band | the survey finds 25.000 MHz as a narrow 35–37 dB line (12); the rest outside its bands |
-| 8 | LPF_B possibly rolling off at 17 m (−1.3 dB at 18.25 MHz, −3.8 dB at 18.5 MHz vs LPF_A) | the filter's cutoff close to its top band | some RX sensitivity and TX power on 17 m (the per-band TX scale covers the power) | **to confirm** with the noise generator |
+| 8 | LPF_B possibly rolling off at 17 m (−1.3 dB at 18.25 MHz, −3.8 dB at 18.5 MHz vs LPF_A) | the filter's cutoff close to its top band | some RX sensitivity and TX power on 17 m (the per-band TX scale covers the power) | **measured**: under 1 dB in 17 m; LPF_B is about 3 dB down near 20 MHz |
 | 9 | (zBitx, TX) spur 24 kHz from the transmit frequency in CW | the BFO running through key-up gaps | an out-of-band signal | traced on the zBitx; maxibitx flagged for a bench check (`ARCHITECTURE.md`) |
 | 10 | Clicks and gaps at start-up | the playback queue draining before the audio thread ran (xrun flood) | glitches in audio and I/Q | **fixed**: playback primed before the thread starts |
 | 11 | A comb of narrow spurs, harmonics of 48.0135 kHz, 3.6–29.7 MHz (30 of 10 m's 41 lines) | an unidentified crystal-stable clock, not the si5351's; coupled on the board after the LPFs | a line every 48 kHz, 10–25 dB in an 11.7 Hz bin; on the waterfall, rarely heard | **open**: find the clock (§2.5) |
 | 12 | si5351 spurs: 25.000, 10.1456 (30 m), 14.3084 (20 m) MHz and five lines at 28.98–29.71 MHz, 17–39 dB | the si5351's reference and products of its outputs, on the board | 30 m and 20 m lines inside the bands, 36–39 dB | **open**: fall 1.4–16 dB at lower drive; the cost of lower drive unmeasured |
-| 13 | Second-mixer images of those spurs, 11–14 dB weaker | the crystal filter only 11–14 dB down 48 kHz from its centre (inferred) | a strong station 48 kHz below the dial would make a backward ghost about that much weaker | **to confirm** with a carrier |
+| 13 | Second-mixer images of those spurs, 11–14 dB weaker | not the crystal filter, which is 48 dB or more down there (measured); they get in after it | only these lines' own images; a real station's image is 48 dB or more down | **open**, low priority: how they get in |
 | 14 | The strongest artifacts: narrow lines up to ~50 dB, each seen at a single dial (3.655, 5.308, 5.318, 5.362, 7.300, 28.62 MHz) | some are images or edge-truncated lines (60 m at 1 kHz steps); 60 m's near 5.362 MHz is PLL A, or clk2's 16th harmonic, beating with clk1's 18th harmonic — at PLL A − PLL B's frequency, but unmoved when PLL B moves (100 Hz-step runs at clk1 dividers 18 and 22); the others likely the same kind (inferred) | strong, but only within a few kilohertz of particular dials, sweeping 15 times as fast as the tuning | **open**: which of the two (clk2's divider, §2.5); moving PLL B doesn't, and 4 mA drive takes off only 3 dB |
 
 ### 2.1 The codec's timing pattern (1)
@@ -157,6 +162,16 @@ the noise generator on the antenna, one capture dump and
 exactly this shape), tell whether it is fixed in the codec's frequency
 — and could simply be equalised in software — or moves with the
 crystal filter.
+
+Measured (22 November 2026, `xtal_sweep.py`): it moves with the crystal
+filter. The response after the filter, C(d), is flat within 0.3 dB from
+−18 to +6 kHz, which an echo in the codec's samples could not be. The
+filter itself has about 3 dB of ripple, its troughs 8.5–10 kHz apart
+(40,001.5, 40,010 and 40,020 kHz): the period seen in the captures.
+Equalising it in software would only flatten the display: the ripple
+lowers signals and the band's noise together, so it costs no
+signal-to-noise ratio
+([`sbitx_filter_measurements.md`](sbitx_filter_measurements.md) §2.4).
 
 ### 2.4 The LPF sweep's broad raises (7)
 
@@ -219,11 +234,14 @@ dB over the floor. Every one is a × clk1 + b × 25 MHz — the five from
 
 **Images (13).** Four of the backward spurs are the second mixer's
 images of fixed-RF spurs the survey also found — 14.3084, 29.1629,
-29.3448 and 29.5268 MHz — each 11–14 dB weaker than its source. That
-suggests the crystal filter is only 11–14 dB down 48 kHz from its
-centre, so a strong station 48 kHz below the dial would throw a
-backward ghost about that much weaker than itself. A carrier would
-measure it directly (§5).
+29.3448 and 29.5268 MHz — each 11–14 dB weaker than its source. They
+don't come through the crystal filter: measured with the noise
+generator, it is 48–49 dB down where the second mixer's image falls
+([`sbitx_filter_measurements.md`](sbitx_filter_measurements.md) §2.5),
+so a real station 48 kHz below the dial makes a ghost 48 dB or more
+weaker. These lines get in after the filter, as the 60 m beat does
+(below): they are the si5351's, and clk1 is the second mixer's own
+oscillator.
 
 **Mixing products.** The clk2-harmonic products (slopes ±2, ±3, ±4):
 18 at 8 mA, 15 at 6 mA, 6 at 4 mA, and 18 with the relays open (made on
@@ -243,8 +261,9 @@ next. A run on one band with 1 kHz steps would classify them.
 
 - 5.308 and 5.318 MHz are one backward line, seen seven times (5.3085
   to 5.3225 MHz, 37.8 dB): the second mixer's image of a line at
-  5.2548 MHz, below the band where the survey didn't reach, and by
-  §2.5's 11–14 dB likely about 50 dB itself.
+  5.2548 MHz, below the band where the survey didn't reach. If it is
+  the si5351's, getting in after the crystal filter like the images
+  above, that line is about 50 dB itself.
 - 5.437 MHz is a fixed-RF line at 5.436761 MHz, 29 dB, just above the
   band: at 5 kHz steps the survey's edge left it too few sightings.
 - 5.354, 5.359 and 5.362 MHz are still each seen at a single dial even
@@ -323,11 +342,11 @@ Either side of that dial the codec sees the same tone, at the same
 audio frequency whichever side of clk1 the beat is on, so the line comes
 back as the slope −15 line, crossing 48 kHz ÷ 15 = 3.2 kHz lower. It is
 the same relation as the second mixer's images (13), with a difference: it is
-only 0.8 dB weaker than its source, where the images of real signals
-were 11–14 dB weaker. For the folded line the beat is 48 kHz above the
-crystal filter's centre; a signal coming through the filter would lose
-those 11–14 dB there. So the beat doesn't come in through the antenna
-path and the crystal filter: it gets in after the filter — on clk1's
+only 0.8 dB weaker than its source, where the images of the si5351's
+fixed lines were 11–14 dB weaker. For the folded line the beat is 48 kHz
+above the crystal filter's centre; a signal coming through the filter
+would lose 48 dB or more there (measured on 22 November). So the beat
+doesn't come in through the antenna path and the crystal filter: it gets in after the filter — on clk1's
 own output (both PLLs are on one chip), in the second mixer, or between
 there and the codec. The ±30 pair, 15 dB weaker, meets at the same dial
 with twice the slope: the beat's second harmonic, made after the beat
@@ -638,10 +657,11 @@ Two ways at them:
   crossings for a up to ±28 fall from nine to three (10.1276, 24.9420
   and 29.6867 MHz), though with different a, whose strength isn't
   known. With clk1 at exactly 40 MHz every one would sit on a multiple
-  of 5 MHz, none in a ham band — but that is a 12.4 kHz second IF, and
-  with the crystal filter only 11–14 dB down at 48 kHz, signals 15–35 kHz
-  below the dial would fold into the passband. Low side is a software
-  change (the second IF's sideband), not yet studied.
+  of 5 MHz, none in a ham band — but that is a 12.4 kHz second IF, whose
+  image, 24.8 kHz from the dial, is inside the crystal filter's 27 kHz
+  passband or on its skirt: signals 15–35 kHz below the dial would fold
+  in. Low side is a software change (the second IF's sideband); it was
+  considered and not taken (§6).
 
 A test of the family needs no build: move `xtal_filter_center` 1 kHz
 (`L XTALCENTER`), which moves clk1 1 kHz, and each line moves a kHz —
@@ -900,7 +920,8 @@ at night on the low bands. A quiet band is the worst case.
 and hides weak birdies, and an image of noise is only more noise. It is
 the right source for the LPFs (`lpf_sweep.py`), the crystal filter
 (`xtal_sweep.py`), the 8 kHz ripple (§2.3) and the depth of LPF_B's
-17 m roll-off (8).
+17 m roll-off (8) — all four measured with it on 22 November 2026
+([`sbitx_filter_measurements.md`](sbitx_filter_measurements.md)).
 
 **A clean carrier** finds spurious responses: sweep it slowly across a
 band with the dial still, and anything that answers anywhere but where
@@ -938,22 +959,35 @@ Taken (29 October 2026):
    second IF's sideband round: not worth it without hardware results
    first.
 
+Taken (22 November 2026):
+
+8. Clk1 on the low side will not be done. The low skirt would give the
+   second mixer's image a few dB more rejection (the high one levels off
+   at 48–49 dB, the low one keeps falling past 55 dB), but the change
+   turns the second IF's sideband round, touches the transmit IF
+   placement, and leaves three lattice crossings of unknown strength.
+   The lattice is left to hardware.
+9. The ripple (6), LPF_B (8) and the crystal filter 48 kHz from its
+   centre (13) are measured (§2.3, table in §2); the images (13) are
+   not the filter's.
+10. Next: the 48 kHz comb's source (11).
+
 Still open, the heard ones first (for when it is picked up again):
 
 - The clk1 lattice (§2.7), the loudest heard (S4 at 29.5268 and
   10.1456 MHz, S2 at 14.3084): confirmed by ear; PLL B's setting doesn't
-  touch it. Next: a study of clk1 on the low side; the hardware's
-  options for the clock lines.
+  touch it, and clk1 on the low side isn't being done (§6, 8). Left to
+  the hardware: the clock lines' filtering and layout.
 - The 48 kHz comb (11), heard at S2 on 10 m: its source (below).
-- From §2: check the block-rate comb on SSB transmit (5); measure the
-  ripple (6) and LPF_B (8) with the noise generator.
+- From §2: check the block-rate comb on SSB transmit (5).
 - The 48 kHz comb's source (11): measure the codec's sample rate
   against the TCXO; a run with the Pi's HDMI, Wi-Fi and USB off.
 - The cost of a lower si5351 drive (12): a steady signal's level at 8,
   6 and 4 mA. Keeping a lower drive would then want a setting in
   `hw_settings.ini` and the transmit power scales re-checked.
-- The crystal filter 48 kHz from its centre (13): a carrier 48 kHz
-  below the dial.
+- How the second-mixer images of the si5351's lines (13) get in after
+  the crystal filter; low priority, as they are images of lines already
+  there.
 - The single-dial lines (14), lower priority (60 m): 60 m's has PLL A − PLL B's frequency
   but stayed with PLL B moved (clk1 divider 22, §2.5): PLL A or clk2's
   16th harmonic, with clk1's 18th; only 3 dB weaker at 4 mA, which
