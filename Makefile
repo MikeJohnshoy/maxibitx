@@ -78,7 +78,7 @@ check-filters:
 TESTS := test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse \
 	test-upsample48k test-cw test-key-input test-radio test-encoder test-keyer \
 	test-keyer-straight test-radio-hw test-tci-ws test-tci test-cw-decoder test-cw-spot test-capture-dump \
-	test-codec-check test-i2c test-cw-shape
+	test-codec-check test-i2c test-cw-shape test-si5351
 KEYERS := keyer keyer_straight
 OBJ_NO_KEYER := $(filter-out src/$(KEYER).o,$(OBJ))
 
@@ -102,7 +102,7 @@ test:
 	if [ $$fail -eq 0 ]; then echo "all passed"; else echo "$$fail FAILED - see test-logs/"; exit 1; fi
 
 clean:
-	rm -f $(OBJ) maxibitx test-cw-shape test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw test-key-input test-keyer test-keyer-straight test-tci-ws test-tci test-radio-hw test-encoder test-radio test-cw-decoder test-cw-spot test-capture-dump test-codec-check test-i2c \
+	rm -f $(OBJ) maxibitx test-cw-shape test-fft-filter test-tx-pipeline test-rx-filter test-rx-audio test-rx-audio-impulse test-upsample48k test-cw test-key-input test-keyer test-keyer-straight test-tci-ws test-tci test-radio-hw test-encoder test-radio test-cw-decoder test-cw-spot test-capture-dump test-codec-check test-i2c test-si5351 \
 		src/fft_filter.o src/fft_filter_test.o src/tx_pipeline.o src/tx_pipeline_test.o \
 		src/rx_filter.o src/rx_filter_test.o src/rx_audio_test.o src/rx_audio_impulse_test.o src/upsample48k_test.o \
 		$(KEYERS:%=src/%.o)
@@ -221,6 +221,12 @@ test-codec-check: src/codec_check.c src/codec_check.h src/codec_check_test.c
 # decided by the harness: no I2C hardware. See i2c_test.c.
 test-i2c: src/i2c.c src/i2c.h src/i2c_test.c
 	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/i2c.c src/i2c_test.c -o $@ $(TEST_LIBS)
+
+# si5351v2.c's frequency arithmetic - every clk1 and clk2 setting within
+# half a step, AN619's registers exact, what si5351bx_setfreq() writes -
+# with the I2C writes captured: no hardware. See si5351_test.c.
+test-si5351: src/si5351v2.c src/si5351.h src/si5351_test.c
+	$(CC) -O2 -Wall -Wextra -std=gnu11 -Isrc src/si5351v2.c src/si5351_test.c -o $@ -lm $(TEST_LIBS)
 
 # keyer.h, twice: test-keyer against keyer.c - the design study's golden
 # cases, random paddle input checked sample for sample against the
