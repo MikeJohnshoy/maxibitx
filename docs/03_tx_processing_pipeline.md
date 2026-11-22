@@ -331,8 +331,9 @@ product is deep in its stopband.
 47,042,400 Hz, the same as RX without RIT (XIT, when on, adds its
 offset here). The output is
 47,042,400 − 40,012,399.6 = 7,030,000.4 Hz: on the dial, to within the
-trim's rounding and the si5351's own step (a few hertz; it sets clk1 in
-steps of about 2.7 Hz). The zeroed image, if any of it survives, would
+trim's rounding to a hertz and the si5351's own steps (it sets each
+clock to the nearest one: 1.3 Hz for clk1, 1.5 to 2.4 Hz for clk2, so
+within half that). The zeroed image, if any of it survives, would
 land 1,400 Hz below that (~7,028,600 Hz); on the air a remote receiver
 tuned there heard nothing.
 
@@ -566,8 +567,8 @@ calibrated — that is still an open item — or about whether
 ## Known limitations
 
 - **Transmit frequency not yet measured since clk1's trims.** The trims
-  put the carrier on the dial by arithmetic, to within the si5351's step
-  of about 2.7 Hz; the transmit measurements so far predate them, and
+  put the carrier on the dial by arithmetic, to within about a hertz;
+  the transmit measurements so far predate them, and
   `cal` and `codec_rate` with them. A check against a GPS-locked
   receiver (a KiwiSDR advertising GPS) would close it: see
   [`dsp_design_notes/tx_test_tones_and_alc.md`](dsp_design_notes/tx_test_tones_and_alc.md),
