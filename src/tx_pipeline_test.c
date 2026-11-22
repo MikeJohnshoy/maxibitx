@@ -766,6 +766,40 @@ int main(void)
 		failures += fails;
 	}
 
+	// --- Case J: the carrier's error, for clk1 to take out --------------
+	// tx_pipeline_if_error_hz() is what radio.c moves clk1 by at key-down.
+	// At the nominal rate it must equal Case H's offset (the IF in force
+	// less the IF wanted) for CW, and the SSB rotation's own rounding for
+	// SSB; with the codec fast by e, the whole IF made grows by e.
+	{
+		const int pitches[] = { 600, 700, 800 };
+		const int bfo = TX_PIPELINE_BENCH_BFO_FREQ_HZ, xc = TX_PIPELINE_BENCH_XTAL_CENTER_HZ;
+		const double ratio = 96027.0 / 96000.0;
+		int fails = 0;
+		printf("\nJ. The carrier's error, at the nominal rate and 96,027 Hz\n");
+		for (unsigned i = 0; i < sizeof(pitches) / sizeof(pitches[0]); i++) {
+			int pitch = pitches[i];
+			struct tx_pipeline *p = tx_pipeline_new();
+			tx_pipeline_set_if_placement(p, bfo, xc, pitch);
+			double made = pitch + p->cw_shift_bins * (double)TX_PIPELINE_BIN_HZ;
+			double nominal = tx_pipeline_if_error_hz(p, TX_PIPELINE_CW, bfo, xc, pitch, 1.0);
+			double fast = tx_pipeline_if_error_hz(p, TX_PIPELINE_CW, bfo, xc, pitch, ratio);
+			double ssb = tx_pipeline_if_error_hz(p, TX_PIPELINE_LSB, bfo, xc, pitch, 1.0);
+			double ssb_made = p->ssb_shift_bins * (double)TX_PIPELINE_BIN_HZ;
+			printf("   pitch %4d: CW %+6.2f Hz, %+6.2f Hz at 96,027; SSB %+6.2f Hz\n", pitch,
+			       nominal, fast, ssb);
+			if (fabs(nominal - (made - (bfo - xc))) > 1e-6 ||
+			    fabs(fast - nominal - made * (ratio - 1.0)) > 1e-6 ||
+			    fabs(ssb - (ssb_made - (bfo - xc))) > 1e-6 || fabs(nominal) > TX_PIPELINE_BIN_HZ / 2.0) {
+				fprintf(stderr, "   FAIL: pitch %d's error isn't the IF made less the IF wanted\n",
+				        pitch);
+				fails++;
+			}
+			tx_pipeline_free(p);
+		}
+		failures += fails;
+	}
+
 	printf("\n%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);
 	return failures ? 1 : 0;
 }
