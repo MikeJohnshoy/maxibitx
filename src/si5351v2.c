@@ -3,8 +3,9 @@
 // The si5351 clock generator: clk2 (the first LO, dial + xtal_filter_center)
 // on PLL A, clk1 (the second LO in receive, bfo_freq in transmit) on
 // PLL B; clk0 is off. Each output runs on an even integer divider, its
-// PLL a 25MHz multiple plus a fraction in 1/2^19 steps
-// (set_freq_fixeddiv()). Register formulas: SiLabs AN619.
+// PLL a whole multiple of the TCXO plus a fraction in steps of
+// 1/SI5351_PLL_DENOM, rounded to the nearest (si5351_pll_for()). Register
+// formulas: SiLabs AN619 (si5351_registers()).
 
 #include <stdio.h>
 #include <linux/types.h>
@@ -102,24 +103,27 @@ void si5351a_clkoff(uint8_t clk)
   c = denom
 */
 
-static void setup_pll(uint8_t pll, uint8_t mult, uint32_t num, uint32_t denom)
+void si5351_registers(uint32_t a, uint32_t b, uint32_t c, uint32_t *p1, uint32_t *p2,
+                      uint32_t *p3)
 {
-  uint32_t P1;          // PLL config register P1
-  uint32_t P2;          // PLL config register P2
-  uint32_t P3;          // PLL config register P3
+  if (b == 0) {
+    *p1 = 128 * a - 512;
+    *p2 = 0;
+    *p3 = 1;
+  } else {
+    // Whole numbers throughout: 128 * b is under 2^28 for any 20-bit b, and
+    // floor(128 b / c) must be exact, or P2 goes negative and wraps.
+    uint32_t f = (128 * b) / c;
+    *p1 = 128 * a + f - 512;
+    *p2 = 128 * b - c * f;
+    *p3 = c;
+  }
+}
 
-  if (num == 0){
-    P1 = 128 * mult - 512;
-    P2 = 0;
-    P3 = 1;    
-  }
-  else {
-    P1 = (uint32_t)(128 * ((float)num / (float)denom));
-    P1 = (uint32_t)(128 * (uint32_t)(mult) + P1 - 512);
-    P2 = (uint32_t)(128 * ((float)num / (float)denom));
-    P2 = (uint32_t)(128 * num - denom * P2);
-    P3 = denom;
-  }
+static void setup_pll(uint8_t pll, uint32_t mult, uint32_t num, uint32_t denom)
+{
+  uint32_t P1, P2, P3;  // PLL config registers
+  si5351_registers(mult, num, denom, &P1, &P2, &P3);
   i2cSendRegister(pll + 0, (P3 & 0x0000FF00) >> 8);
   i2cSendRegister(pll + 1, (P3 & 0x000000FF));
   i2cSendRegister(pll + 2, (P1 & 0x00030000) >> 16);
@@ -173,16 +177,8 @@ static void setup_multisynth(uint8_t clk, uint8_t pllSource, uint32_t divider,  
     div4 = SI5351_DIVBY4;
     P1 = P2 = 0;
     P3 = 1;
-  } else if (num == 0) {
-    /* Integer mode */
-    P1 = 128 * divider - 512;
-    P2 = 0;
-    P3 = 1;
   } else {
-    /* Fractional mode */
-    P1 = 128 * divider + ((128 * num) / denom) - 512;
-    P2 = 128 * num - denom * ((128 * num) / denom);
-    P3 = denom;
+    si5351_registers(divider, num, denom, &P1, &P2, &P3);
   }
 
   i2cSendRegister(synth + 0,   (P3 & 0x0000FF00) >> 8);
@@ -208,16 +204,34 @@ static void setup_multisynth(uint8_t clk, uint8_t pllSource, uint32_t divider,  
   i2cSendRegister(control, dat);
 }
 
-// frequency on clk, from pll at frequency x divider: the PLL a whole
-// multiple of the TCXO plus num/2^19 of it, the output multisynth an
-// integer divider.
-static void set_freq_fixeddiv(int clk, int pll, uint32_t frequency, int divider,  uint8_t drive_strength){
-  int32_t denom = 0x80000;
-  int32_t pllfreq = frequency * divider;
-  int32_t multi = pllfreq / xtal_freq_calibrated;
-  int32_t num = ((uint64_t)(pllfreq % xtal_freq_calibrated) * 0x80000)/xtal_freq_calibrated;
+void si5351_pll_for(uint32_t frequency, uint32_t divider, uint32_t ref_hz, uint32_t *mult,
+                    uint32_t *num)
+{
+  uint64_t pll = (uint64_t)frequency * divider;
+  uint64_t a = pll / ref_hz;
+  uint64_t b = ((pll % ref_hz) * SI5351_PLL_DENOM + ref_hz / 2) / ref_hz;
+  if (b == SI5351_PLL_DENOM) { // rounded up to the next whole multiple
+    a++;
+    b = 0;
+  }
+  *mult = (uint32_t)a;
+  *num = (uint32_t)b;
+}
 
-  setup_pll(pll, multi, num, denom);
+double si5351_actual_hz(uint32_t frequency, uint32_t divider, uint32_t ref_hz)
+{
+  uint32_t a, b;
+  si5351_pll_for(frequency, divider, ref_hz, &a, &b);
+  return (double)ref_hz * (a + (double)b / SI5351_PLL_DENOM) / divider;
+}
+
+// frequency on clk, from pll at frequency x divider: the PLL a whole
+// multiple of the TCXO plus num/SI5351_PLL_DENOM of it, the output
+// multisynth an integer divider.
+static void set_freq_fixeddiv(int clk, int pll, uint32_t frequency, int divider,  uint8_t drive_strength){
+  uint32_t mult, num;
+  si5351_pll_for(frequency, (uint32_t)divider, (uint32_t)xtal_freq_calibrated, &mult, &num);
+  setup_pll(pll, mult, num, SI5351_PLL_DENOM);
   setup_multisynth(clk, pll, divider, 0, 1, SI_R_DIV_1, drive_strength);
 }
 
