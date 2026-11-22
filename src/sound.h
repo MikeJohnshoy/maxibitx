@@ -91,6 +91,14 @@ int sound_update_cw_if_placement(void);
    radio_tx_allowed() refuses transmit on 0. */
 int sound_tx_if_placed(void);
 
+/* Hz to add to bfo_freq for clk1 during a transmission, so its carrier
+   lands on the dial: CW's (cw_mode 1, also CWR) or SSB's (cw_mode 0: USB,
+   LSB and DIGITAL), as tx_pipeline_if_error_hz() works them out for the
+   placement in force, the CW tone and hw_settings.ini's codec_rate.
+   Re-derived with the placement by sound_update_cw_if_placement(); 0
+   before the first one. Any thread. */
+int sound_tx_clk1_trim_hz(int cw_mode);
+
 /* T/R timing instrumentation, on only when MAXIBITX_TR_TIMING is set.
 
    sound_tr_timing_enabled(): whether it is set (read once, cached).
