@@ -63,6 +63,11 @@ where RIT has the receiver listening, a red "TX" marker where XIT will
 transmit (solid while transmitting); an arrow at the edge shows an
 offset beyond the span.
 
+With the CW filter on (CW, CWR, USB and LSB), a shaded band behind the
+trace, and a bar on the scale, show what it passes: its width, centred
+where a signal is heard at the pitch - on the dial in CW and CWR, the
+pitch above it in USB and below it in LSB - and moved with RIT.
+
 SPOT (CW and CWR) is auto zero-beat, one shot: it finds the strongest CW
 tone in the narrow filter (300 Hz either side of the pitch with the
 filter off) over the last 1.5 s, moves the dial so the station sits
@@ -282,6 +287,8 @@ TX_RED = "#E5484D"
 DECODE_LINES = 2
 DECODE_KEEP = 2000                  # characters of decoded text kept on screen
 RIT_GREEN = "#7FE0A0"            # the RIT marker; XIT's is TX_RED
+PASSBAND_FILL = "#183447"        # the narrow filter's band behind the trace
+PASSBAND_EDGE = "#4A7F99"        # its edges, and its bar on the scale
 
 
 def s_unit_label(db):
@@ -2069,6 +2076,43 @@ class Panel(tk.Tk):
         c.create_polygon(w / 2 - 4, y0, w / 2 + 4, y0, w / 2, y0 + 5, fill=AMBER, outline="",
                          tags="scale")
 
+    def passband_hz(self):
+        """The CW filter's passband as offsets from the dial, (lo, hi), or
+        None when it is out of circuit: its width, centred where the
+        demodulator puts the pitch - the dial in CW and CWR, dial + pitch
+        in USB, dial - pitch in LSB (rx_audio.h) - plus RIT."""
+        if not self.narrow_var.get():
+            return None
+        try:
+            width, pitch = int(self.width_var.get()), int(self.pitch_var.get())
+        except ValueError:
+            return None
+        centre = {"CW": 0, "CWR": 0, "USB": pitch, "LSB": -pitch}.get(self.mode)
+        if centre is None:
+            return None
+        centre += self.rit_hz
+        return centre - width / 2.0, centre + width / 2.0
+
+    def draw_passband(self, w, span_hz, behind):
+        """The CW filter's passband: behind the trace (behind=True, drawn
+        before it) a shaded band with edge lines, else a bar on the scale.
+        Tagged "trace", so each frame draws it afresh."""
+        band = self.passband_hz()
+        if band is None:
+            return
+        x0, x1 = (w / 2 + hz / (2.0 * span_hz) * w for hz in band)
+        if x1 < 0 or x0 > w:
+            return
+        x0, x1 = max(x0, 0.0), min(x1, float(w))
+        c = self.canvas
+        if behind:
+            c.create_rectangle(x0, 0, x1, TRACE_H, fill=PASSBAND_FILL, outline="", tags="trace")
+            for x in (x0, x1):
+                c.create_line(x, 0, x, TRACE_H, fill=PASSBAND_EDGE, tags="trace")
+        else:
+            c.create_rectangle(x0, TRACE_H, x1, TRACE_H + 3, fill=PASSBAND_EDGE, outline="",
+                               tags="trace")
+
     def draw_offset_marker(self, w, span_hz, hz, tag, label, color, label_y, solid=False):
         """Where an offset from the dial lands - RIT's receiver, XIT's
         transmitter: a dashed line through the trace and waterfall (solid
@@ -2199,12 +2243,14 @@ class Panel(tk.Tk):
                 c.create_line(*coords.tolist(), fill=color, width=width, tags="trace")
 
             self.add_waterfall_row(to_frac(db))
+            span = half_bins * bin_hz
+            self.draw_passband(w, span, behind=True)
             if self.peak_var.get():
                 trace(self.update_peak(db), PEAK_COLOR, 1)
             trace(db, TRACE, 1.5)
             c.create_line(w / 2, 0, w / 2, TRACE_H, fill=AMBER, width=1.5, tags="trace")
-            self.draw_scale(w, half_bins * bin_hz)
-            span = half_bins * bin_hz
+            self.draw_scale(w, span)
+            self.draw_passband(w, span, behind=False)
             self.draw_offset_marker(w, span, self.rit_hz, "rit", "RIT", RIT_GREEN, 2)
             # XIT's label sits a line lower, clear of RIT's; the line goes
             # solid while transmitting, when it is where the signal is.
