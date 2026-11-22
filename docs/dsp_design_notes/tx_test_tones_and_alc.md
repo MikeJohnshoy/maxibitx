@@ -2,8 +2,10 @@
 
 Status: in progress. Step 1 (the test-tone generator) is built and
 bench-tested; step 2 (the carrier-offset check and fix) is measured,
-fixed and confirmed on air, and the reference-frequency question it
-raised is settled. Step 4's limiter is built and bench-tested and is
+fixed and confirmed on air, and the frequency calibration it raised is
+measured on receive: the si5351's reference and the codec's sample rate
+(22 November 2026), each with its own setting; transmit since then is
+still to be checked. Step 4's limiter is built and bench-tested and is
 live at its normal setting. Steps 3 and 5 are open.
 
 ## Why
@@ -157,7 +159,7 @@ USB read 7,219,986 Hz and LSB 7,217,981 Hz, against 7,219,993.75 and
 7,217,993.75 predicted. Sideband placement is correct; what's left is a
 few Hz of bin quantization plus the reference error below.
 
-## Frequency calibration (the si5351 reference)
+## Frequency calibration (the si5351 reference and the codec's rate)
 
 The transmit tone measurements all read low by about the same fraction:
 
@@ -195,11 +197,74 @@ nominal 25,000,000, and WWV on receive is the reference to re-check it
 against. Transmit should now be within the ~6 Hz of bin quantization;
 confirming that needs a GPS-locked receiver, not the one used so far.
 
+(Superseded on 22 November 2026, below: one WWV frequency can't
+separate the reference from the codec's clock, and at 15 MHz their two
+errors cancel.)
+
 **Lesson for the next measurement:** an absolute frequency check is only
 as good as the receiver making it, and here transmit and receive respond
 to a reference error with opposite signs - so a disagreement between a
 transmit and a receive check localizes the error rather than averaging
 into a wrong answer.
+
+### Two clocks, measured on WWV (22 November 2026)
+
+The survey of the receiver's own spurs found the codec running about
+280 ppm fast (`rx_artifacts_and_spur_survey_study.md` §2.5): its 48 kHz
+comb is half of 96,027 samples a second. The software reckons every
+frequency at the nominal 96,000, so a fast codec moves the 24 kHz
+receive IF by 24,000 × 280 ppm = 6.7 Hz: every frequency reads that much
+low, on every band alike. A reference error instead grows with the
+frequency. WWV on four frequencies, read with SPOT, with `cal` at
+25,000,000:
+
+| WWV | Read | Error | Fit: −6.7 Hz + 0.54 ppm |
+|---|---|---|---|
+| 10 MHz | 9,999,998 | −2 | −1.3 |
+| 15 MHz | 15,000,002 | +2 | +1.4 |
+| 20 MHz | 20,000,005 | +5 | +4.1 |
+| 25 MHz | 25,000,006 | +6 | +6.8 |
+
+A straight line fits all four within a hertz. Its slope, +0.54 ppm on
+receive, puts the reference 0.54 ppm low: 24,999,986.5 Hz, so
+`cal=24999986`. Its steady part, −6.7 Hz, is the codec 280 ppm fast. At
+15 MHz the two nearly cancel, which is why the September check there
+looked right. With `cal=24999986`, WWV read 9,999,993, 14,999,993 and
+19,999,993: 7 Hz low on every band, the codec's share alone. The fit's
+6.7 Hz on the 24 kHz IF is 279 ppm, so `codec_rate=96027` (readings in
+whole hertz can't tell it from 96,028).
+
+`codec_rate` doesn't change the software's own reckoning; it moves clk1.
+In receive clk1 is `xtal_filter_center` plus the 24 kHz IF scaled to the
+codec's rate (`radio_rx_clk1_hz()`), so the dial reads true. In transmit
+clk1 is `bfo_freq` plus the transmit IF's error for the mode
+(`sound_tx_clk1_trim_hz()`, from `tx_pipeline_if_error_hz()`): its
+rounding to whole 46.875 Hz bins, which this note's step 2 left in
+place, and the codec's scaling. Raising clk1 lowers the carrier by the
+same amount, so the carrier lands on the dial. Before the trims, on
+Mike's board (`bfo_freq=40048000`, `xtal_filter_center=40012400`), the
+arithmetic put CW at a 700 Hz pitch about 31 Hz high (21 Hz of rounding,
+10 Hz of codec) and SSB about 12 Hz low. Neither has been measured on
+air since: that is the open check, on a GPS-locked receiver.
+
+What's left: the si5351 sets clk1 in steps of about 2.7 Hz (its PLL's
+fractional step, divided down), truncating, so the trim lands within
+that; and the codec's scaling of a signal's own offset from the dial,
+280 ppm of it — 0.2 Hz at a CW pitch, 6 Hz at the panadapter's ±20 kHz
+edges.
+
+**Measuring them.** Read WWV with SPOT on at least three frequencies
+(5, 10, 15, 20, 25 MHz) and fit the errors against frequency:
+
+- the slope, in ppm, is the reference's error, with the receive sign:
+  reading high by s ppm means the reference is s ppm low, so
+  `cal` = 25,000,000 × (1 − s ppm) (or the current `cal` scaled the same
+  way);
+- the steady part, E Hz (negative when reading low), is the codec's:
+  `codec_rate` = current `codec_rate` × (1 − E / 24,000).
+
+Set `cal` first and read again: the readings should then all be the same
+few hertz off, which is the codec's alone.
 
 **Refining it.** Better references, in order:
 
