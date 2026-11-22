@@ -49,12 +49,14 @@
 // band then extends from that same point in its own direction.
 //
 // A rotate moves whole bins, so each is rounded to the nearest one: on
-// this board's values, at the default pitch, that is 467 bins
-// (21,890.625 Hz) for CW and 482 (22,593.750 Hz) for SSB, leaving the
-// carrier 9.4 Hz and 6.3 Hz low respectively. Another CW pitch rounds
-// differently - 600 Hz lands 15.6 Hz low and 800 Hz 3.1 Hz low - so the
-// carrier stays within half a bin of the dial at any pitch rather than
-// exactly on it (tx_pipeline_test.c Case H bounds both).
+// the bench values below, at the default pitch, that is 467 bins
+// (21,890.625 Hz) for CW and 482 (22,593.750 Hz) for SSB, which would
+// leave the carrier 9.4 Hz and 6.3 Hz low respectively; another CW pitch
+// rounds differently, up to half a bin (23.4 Hz) either way
+// (tx_pipeline_test.c Case H bounds both). The codec's actual rate scales
+// the whole IF too. tx_pipeline_if_error_hz() works out the sum for a
+// signal, and radio.c moves clk1 by it at key-down (through sound.c), so
+// the carrier lands on the dial.
 //
 // The two frequencies below are radio.c's compiled-in defaults, used as
 // the pipeline's starting placement and by the bench harness (which
@@ -192,6 +194,21 @@ void tx_pipeline_reset(struct tx_pipeline *p);
 // wrong IF is worse than transmitting at the default one.
 int tx_pipeline_set_if_placement(struct tx_pipeline *p, int bfo_hz, int xtal_center_hz,
                                   int cw_tone_hz);
+
+// How far above the dial a signal's carrier lands with clk1 at bfo_hz, in
+// Hz: the IF the placement in force actually produces, less the
+// bfo_hz - xtal_center_hz the analog chain needs. Two things make up the
+// difference - the rotation's rounding to whole bins, and rate_ratio, the
+// codec's actual rate over the nominal TX_PIPELINE_FS_HZ, which scales
+// every frequency the pipeline makes. For TX_PIPELINE_CW the IF is the
+// keyed tone plus the CW rotation, so tone_hz is the tone cw.c actually
+// generates (its oscillator's quantized frequency, vfo_actual_hz());
+// SSB (USB or LSB) has its suppressed carrier at the SSB rotation and
+// ignores tone_hz. Raising clk1 by the result moves the carrier down by
+// the same amount, onto the dial.
+double tx_pipeline_if_error_hz(const struct tx_pipeline *p, enum tx_pipeline_signal signal,
+                               int bfo_hz, int xtal_center_hz, double tone_hz,
+                               double rate_ratio);
 
 // Sets the limiter's ceiling as an amplitude in (0, 1], where 1.0 is the
 // full-scale signal the per-band calibration turns into
