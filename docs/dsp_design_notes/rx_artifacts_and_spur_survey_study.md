@@ -821,8 +821,9 @@ moves at a multiple of the PLL's divider, less one — and a line is
 grouped by where it crosses the dial (offset 0), which a slope error of
 one barely moves, then fitted by least squares. Its tolerance grows
 with the slope, 35 Hz plus 5 Hz per unit: each PLL's fractional setting
-misses by up to 48 Hz (25 MHz ÷ 2^19), about 5 Hz at clk2, and a
-product multiplies that. Tested on a simulated radio with a PLL A − PLL
+missed by up to 48 Hz (25 MHz ÷ 2^19) when the surveys were run, about
+5 Hz at clk2, and a product multiplies that. (`si5351v2.c` now rounds to
+steps of 25 MHz ÷ 1,048,575, within 12 Hz at the PLL.) Tested on a simulated radio with a PLL A − PLL
 B line made by `si5351v2.c`'s arithmetic: at 100 Hz steps it was found
 with slope +15.00, crossing the dial at 5.363786 MHz against 5.363785
 predicted.
