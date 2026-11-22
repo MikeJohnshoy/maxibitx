@@ -310,11 +310,12 @@ each clock actually does). `si5351bx_init(bus)` (`si5351v2.c`) powers
 down all three clocks and brings up the I2C connection on the bus it is
 given, `radio_hw_i2c_bus()`; `main()`
 then explicitly starts `clk1` at its RX value
-(`xtal_filter_center + RX_IF_FREQ_HZ`) before calling `si5351_reset()`.
+(`radio_rx_clk1_hz()`: `xtal_filter_center + RX_IF_FREQ_HZ`, the IF
+scaled to the codec's actual rate, below) before calling `si5351_reset()`.
 Unlike `clk2` (which `radio_tune_to()` sweeps constantly) or the older
 single-value scheme this replaced, `clk1` isn't touched again until the
-first TX burst — `radio_tx_apply()` (`radio.c`) retunes it to `bfo_freq`
-for the duration of TX and restores this RX value the moment TX ends;
+first TX burst — `radio_tx_apply()` (`radio.c`) retunes it to `bfo_freq`,
+plus the mode's trim (`sound_tx_clk1_trim_hz()`), for the duration of TX and restores this RX value the moment TX ends;
 see [`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md) and
 [`dsp_design_notes/antialias_filter_design.md`](dsp_design_notes/antialias_filter_design.md)
 §3 for why RX and TX need different `clk1` values in the first place.
@@ -327,8 +328,18 @@ at the top level or in sbitx's own `[tcxo]` section, so a file needs no
 clock is set, and with it left out the nominal 25,000,000 is used. An
 error here moves transmit and receive in *opposite* directions, both in
 proportion to the operating frequency (1 ppm is 7 Hz at 7 MHz, 15 Hz at
-15 MHz). This board measures at its nominal 25,000,000, checked against
-WWV on receive. Measuring it:
+15 MHz). Mike's sBitx measures 24,999,986 Hz, from WWV on receive.
+
+The codec has a clock of its own, a 12 MHz crystal, and the software
+reckons every frequency at its nominal 96,000 samples a second.
+`hw_settings.ini`'s `codec_rate` gives its actual rate (96,000 if left
+out, and 95,904 to 96,096 accepted). Receive's clk1 is set to
+`xtal_filter_center` plus the 24 kHz IF scaled to that rate, and
+transmit's clk1 is moved by the transmit IF's error for the mode — its
+whole-bin rounding and the same scaling — so a codec off its nominal
+rate costs neither direction anything. Its error is the same few hertz
+on every band, which is what tells it apart from `cal`'s. Mike's sBitx
+measures 96,027 Hz. Measuring both:
 [`dsp_design_notes/tx_test_tones_and_alc.md`](dsp_design_notes/tx_test_tones_and_alc.md),
 "Frequency calibration".
 
