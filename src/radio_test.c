@@ -79,6 +79,8 @@ int sound_tx_first_block(int64_t *a, int64_t *b, int64_t *c) {
 }
 int sound_tx_if_placed(void) { return 1; }
 int sound_update_cw_if_placement(void) { return 0; }
+// clk1's TX trims, distinct so a check can tell which one radio.c used.
+int sound_tx_clk1_trim_hz(int cw_mode) { return cw_mode ? -21 : 12; }
 void cw_set_pitch(int hz) { (void)hz; }
 int rx_audio_set_narrow_pitch(int hz) { return hz; }
 int rx_audio_get_narrow_pitch(void) { return 700; }
@@ -252,6 +254,28 @@ int main(void) {
   tx(0);
   check(radio_set_clk1_divider(0) == 0 && radio_get_clk1_divider() == 18,
         "back in receive: automatic again");
+
+  printf("clk1 and the codec's rate\n");
+  radio_set_mode(RADIO_MODE_CW);
+  radio_tune_to(14060000);
+  check(clk[1] == C + RX_IF_FREQ_HZ, "nominal rate: receive clk1 at centre + 24 kHz");
+  check(tx(1) == 0 && clk[1] == (uint32_t)(bfo_freq - 21) && clk[2] == 14060000 + C,
+        "CW transmit: clk1 at bfo_freq plus CW's trim, clk2 untouched");
+  tx(0);
+  radio_set_mode(RADIO_MODE_CWR);
+  check(tx(1) == 0 && clk[1] == (uint32_t)(bfo_freq - 21), "CWR transmits as CW: CW's trim");
+  tx(0);
+  radio_set_mode(RADIO_MODE_USB);
+  check(tx(1) == 0 && clk[1] == (uint32_t)(bfo_freq + 12), "USB: SSB's trim");
+  tx(0);
+  radio_set_mode(RADIO_MODE_DIGITAL);
+  check(tx(1) == 0 && clk[1] == (uint32_t)(bfo_freq + 12), "DIGITAL: SSB's trim");
+  check(tx(0) == 0 && clk[1] == C + RX_IF_FREQ_HZ, "back in receive: clk1 untrimmed");
+  codec_rate = 96027;
+  check(radio_rx_clk1_hz() == C + 24007,
+        "codec 96,027 Hz: receive clk1 at centre + 24,006.75 Hz, rounded");
+  check(tx(1) == 0 && tx(0) == 0 && clk[1] == C + 24007, "... and receive after TX writes it");
+  codec_rate = RADIO_CODEC_RATE_NOMINAL_HZ;
 
   printf("\n%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);
   return failures ? 1 : 0;
