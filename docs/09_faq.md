@@ -332,7 +332,8 @@ is wired where, and that is in `radio_hw.c`. A radio's calibration
 differs from one radio to the next, even between two of the same board,
 and that stays in `hw_settings.ini`:
 
-- the reference frequency (`cal`);
+- the reference frequency (`cal`) and the codec's sample rate
+  (`codec_rate`);
 - `bfo_freq` and `xtal_filter_center`;
 - the per-band power scale.
 
@@ -515,6 +516,15 @@ mixer's LO sits above the signal. At 7 MHz 1 ppm is about 7 Hz; at
 between a transmit measurement and a receive measurement localize the
 error rather than average into a wrong answer. Receiving WWV is the
 reference to check it against.
+
+A second setting, `codec_rate`, gives the codec's actual sample rate.
+The codec runs from its own 12 MHz crystal, and an error there shifts
+every frequency by the same few hertz on every band, rather than in
+proportion. Reading WWV on several frequencies separates the two: the
+part that grows with frequency is `cal`'s, the steady part
+`codec_rate`'s
+([`dsp_design_notes/tx_test_tones_and_alc.md`](dsp_design_notes/tx_test_tones_and_alc.md),
+"Frequency calibration").
 
 ## Interfaces and applications
 
@@ -741,7 +751,7 @@ board's honest rated output; voice power never checked on a wattmeter;
 `POWER` and `ALC` bench-tested but not yet exercised against a running
 daemon; remote element keying absent (CW text works, over TCI too);
 TCI's CW text not yet tried on the air (its I/Q is, with sdrOxide, and
-its audio both ways, with WSJT-X on a zBitx); carrier placement a
-few Hz low from whole-bin rotation (6.25 Hz on SSB, 9.4 Hz on CW); and
+its audio both ways, with WSJT-X on a zBitx); the transmit frequency
+not yet checked on a GPS-locked receiver since clk1's trims; and
 on the zBitx, SSB from the microphone and anything for the RP2040 front
 panel.
