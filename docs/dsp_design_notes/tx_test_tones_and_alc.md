@@ -4,8 +4,8 @@ Status: in progress. Step 1 (the test-tone generator) is built and
 bench-tested; step 2 (the carrier-offset check and fix) is measured,
 fixed and confirmed on air, and the frequency calibration it raised is
 measured on receive: the si5351's reference and the codec's sample rate
-(22 November 2026), each with its own setting; transmit since then is
-still to be checked. Step 4's limiter is built and bench-tested and is
+(22 November 2026), each with its own setting, and WWV now reads true
+to the hertz; transmit since then is still to be checked. Step 4's limiter is built and bench-tested and is
 live at its normal setting. Steps 3 and 5 are open.
 
 ## Why
@@ -261,7 +261,8 @@ leaned high by 0–4 Hz. Since then `si5351v2.c` rounds the fraction to
 the nearest step, in steps of 1/1,048,575 (the largest denominator the
 chip's 20-bit register holds): every clock within half a step either
 side, 0.66 Hz for clk1 and 0.75 to 1.2 Hz for clk2
-(`si5351_test.c`). Not yet read on WWV.
+(`si5351_test.c`). On WWV after that change SPOT read 10,000,000,
+15,000,000 and 20,000,001: receive is on frequency to SPOT's hertz.
 
 What's left: the si5351's half step, above; and the codec's scaling of a
 signal's own offset from the dial, 280 ppm of it — 0.2 Hz at a CW pitch,
