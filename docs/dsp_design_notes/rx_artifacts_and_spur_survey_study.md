@@ -232,7 +232,10 @@ The comb's fundamental, fitted to the corrected readings, is
 the codec's clock domain, with period two frames (12 MHz × (1 + ε) ÷
 250), and the codec's 12 MHz crystal is about 280 ppm fast: several
 times a crystal's usual tolerance. The same ε explains the 6–8 Hz the
-survey read the TCXO and the si5351's lines low (§2.7).
+survey read the TCXO and the si5351's lines low (§2.7). WWV confirms
+it, and `hw_settings.ini`'s `codec_rate` now corrects every frequency
+for it (`tx_test_tones_and_alc.md`, "Frequency calibration"); the comb
+itself, a real signal, is unchanged by that.
 
 Why two frames is not yet known. In its USB mode the codec makes each
 frame from 125 clocks of 12 MHz, an odd number, so anything it divides
