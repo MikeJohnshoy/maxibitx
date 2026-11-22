@@ -1076,8 +1076,9 @@ oscillator with 1.46 Hz steps, so a 700 Hz pitch is 698.7 Hz.) A codec
 running off its nominal rate scales the whole IF as well. So at
 key-down clk1 is set not to `bfo_freq` itself but to `bfo_freq` plus
 the IF's error for the mode (`sound_tx_clk1_trim_hz()`), which moves
-the carrier back onto the dial, to within the si5351's own step of a
-few hertz.
+the carrier back onto the dial, to within about a hertz: the si5351
+sets each clock to the nearest of its own steps, 1.3 Hz for clk1 and
+1.5 to 2.4 Hz for clk2.
 
 Following a CW key-down at the default pitch through the chain, on a
 dial of 7,030,000 Hz, with the codec at its nominal rate:
