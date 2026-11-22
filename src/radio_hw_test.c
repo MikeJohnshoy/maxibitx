@@ -30,6 +30,7 @@
 
 int bfo_freq = 40035000;
 int xtal_filter_center = 40012400;
+int codec_rate = RADIO_CODEC_RATE_NOMINAL_HZ;
 void si5351_set_calibration(int32_t cal) { (void)cal; }
 
 #define PINS 28
@@ -139,6 +140,10 @@ int main(void) {
   check(sbitx_version[0] == 0, "sbitx_version inside a [section] is ignored");
   load_ini(NULL);
   check(sbitx_version[0] == 0, "no hw_settings.ini names no board");
+  load_ini("sbitx_version = SBITX_V3\ncodec_rate = 96027\n");
+  check(codec_rate == 96027, "\"codec_rate = 96027\" is read");
+  load_ini("sbitx_version = SBITX_V3\ncodec_rate = 97000\n");
+  check(codec_rate == RADIO_CODEC_RATE_NOMINAL_HZ, "codec_rate 1% off is refused: the nominal rate");
 
   printf("B. Selecting the board\n");
   check(radio_hw_select_board("") < 0, "an empty name is refused");
