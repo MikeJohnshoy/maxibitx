@@ -369,6 +369,14 @@ static int handle_line(int fd, char *line)
             snprintf(buf, sizeof(buf), "%d\n", radio_get_xtal_filter_center());
             send_line(fd, buf);
             get_log("rigctl: l XTALCENTER -> %d Hz\n", radio_get_xtal_filter_center());
+        } else if (strcmp(level_name, "CODECRATE") == 0) {
+            // Extension, read-only: hw_settings.ini's codec_rate in Hz, which
+            // sets the receive clk1 (radio_rx_clk1_hz()), for tools that
+            // work out the si5351's products.
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%d\n", codec_rate);
+            send_line(fd, buf);
+            get_log("rigctl: l CODECRATE -> %d Hz\n", codec_rate);
         } else if (strcmp(level_name, "SIDRIVE") == 0) {
             // Extension: the si5351's output drive in mA (si5351.h).
             char buf[16];
