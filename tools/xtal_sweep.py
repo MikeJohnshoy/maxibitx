@@ -53,6 +53,7 @@ ini.
                     on it) measured the simple way as well, for comparison
                     and for a carrier: a steady carrier is part of C to
                     the fit, but this window follows it through the filter
+                    (in each step's line and the CSV, not the plot)
     --dial HZ       tune here for the sweep, and back afterwards
     --out PREFIX    output name (default xtal_sweep_<time>)
     --refit FILE    no radio: fit and report a sweep's _raw.csv again
@@ -457,12 +458,12 @@ def report(settings, step, k_max, levels, window_db, prefix):
             w.writerow([st, f"{v:.2f}" if m else ""])
     written = [prefix + ".csv", prefix + "_if.csv", prefix + "_steps.csv"]
     steps = [(st, v) for st, v, m in zip(settings, g, measured) if m]
-    if plot(prefix + ".png", xs_ok, rel, window_db, offsets, c, steps, edges, depth):
+    if plot(prefix + ".png", xs_ok, rel, offsets, c, steps, edges, depth):
         written.append(prefix + ".png")
     return written
 
 
-def plot(path, xs, rel, window_db, offsets, c, steps, edges, depth):
+def plot(path, xs, rel, offsets, c, steps, edges, depth):
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -473,12 +474,7 @@ def plot(path, xs, rel, window_db, offsets, c, steps, edges, depth):
     fig, (a1, a2, a3) = plt.subplots(3, 1, figsize=(10, 9.5), dpi=120,
                                      gridspec_kw={"height_ratios": [3, 2, 1.4]})
     fig.patch.set_facecolor(ground)
-    a1.plot(xs / 1e3, rel, color="#2a78d6", lw=2, label="fitted from every offset")
-    pts = [(s, v) for s, v in window_db if v is not None]
-    if pts:
-        wp = max(v for _, v in pts)
-        a1.plot([s / 1e3 for s, _ in pts], [v - wp for _, v in pts], color="#eb6834",
-                lw=0, marker="o", ms=3, label="window at the dial")
+    a1.plot(xs / 1e3, rel, color="#2a78d6", lw=2)
     for level in LEVELS_DB:
         lo, hi = edges[level]
         if level <= depth - 1 and lo is not None and hi is not None:
@@ -488,7 +484,6 @@ def plot(path, xs, rel, window_db, offsets, c, steps, edges, depth):
     a1.set_xlabel("crystal frequency (kHz)", color=muted)
     a1.set_ylabel("dB below the peak", color=muted)
     a1.set_title("Crystal filter", loc="left", color=ink)
-    a1.legend(frameon=False, fontsize=9, loc="lower center")
     a2.plot(offsets / 1e3, c, color="#1baf7a", lw=2)
     a2.set_xlabel("offset from the dial (kHz)", color=muted)
     a2.set_ylabel("dB relative to the dial", color=muted)
