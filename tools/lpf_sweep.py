@@ -51,7 +51,8 @@ station in the window doesn't set it.
 
 Outputs: PREFIX.csv (each filter against LPF_A, A above the floor),
 PREFIX_raw.csv (every state's level, for --replot), and PREFIX.png if
-matplotlib is installed. Printed: each filter's passband loss against A,
+matplotlib is installed, with the ham bands shaded in the colour of the
+filter the radio selects for each, and labelled with it. Printed: each filter's passband loss against A,
 its -3 and -20 dB points, and its attenuation at the 2nd and 3rd
 harmonics of the bands it carries.
 
@@ -95,6 +96,7 @@ MIN_EXCESS_DB = 3.0                     # above the floor, or "below the floor"
 MIN_REF_DB = 6.0                        # LPF_A above the floor, to compare against
 A_FLAT_HZ = 28000000                    # LPF_A taken as flat up to here
 EDGE_HOLD_POINTS = 2                    # an edge: this many points in a row below
+BAND_MIN_MHZ = 0.25                     # a narrower band is drawn this wide
 
 # The sBitx's switch points (radio_hw.c) and the bands each filter carries.
 SWITCH_HZ = {"D": 5500000, "C": 10500000, "B": 18500000, "A": 30000000}
@@ -286,6 +288,18 @@ def plot(path, freqs, raw, vs_a, a_above, bound):
     for i, s in enumerate(STATES):
         top.plot(mhz, raw[:, i], color=colors[s], lw=1.2,
                  ls="--" if s == "none" else "-", label=f"LPF_{s}" if s != "none" else "all off")
+    # Each ham band, shaded in the colour of the filter the radio selects
+    # for it (SWITCH_HZ), and labelled with its name and that filter. A band
+    # narrower than BAND_MIN_MHZ is drawn that wide, to stay visible.
+    for name, lo, hi in BANDS:
+        x = filter_for(lo)
+        a, b = lo / 1e6, hi / 1e6
+        if b - a < BAND_MIN_MHZ:
+            a, b = (a + b - BAND_MIN_MHZ) / 2, (a + b + BAND_MIN_MHZ) / 2
+        for ax in (top, bot):
+            ax.axvspan(a, b, color=colors.get(x, "#999999"), alpha=0.18, lw=0)
+        bot.text((a + b) / 2, 11, f"{name.replace(' ', '')}\n{x or '-'}", ha="center",
+                 va="top", fontsize=7, color=colors.get(x, "#555555"))
     top.set_ylabel("level, dBFS/Hz")
     top.set_title("Received noise with each filter held")
     top.legend(ncol=5, fontsize=8)
@@ -299,9 +313,10 @@ def plot(path, freqs, raw, vs_a, a_above, bound):
         bot.axvline(SWITCH_HZ[x] / 1e6, color=colors[x], lw=0.6, alpha=0.5)
     bot.set_ylabel("dB")
     bot.set_xlabel("MHz")
-    bot.set_title("Each filter against LPF_A (dotted: where it fell into the floor)")
+    bot.set_title("Each filter against LPF_A (dotted: where it fell into the floor); "
+                  "shaded: the ham bands, in the colour of the filter each uses")
     shown = np.concatenate([v[~np.isnan(v)] for v in list(vs_a.values()) + list(bound.values())])
-    bot.set_ylim(bottom=max(-80.0, float(np.min(shown)) - 5 if len(shown) else -80.0), top=5)
+    bot.set_ylim(bottom=max(-80.0, float(np.min(shown)) - 5 if len(shown) else -80.0), top=12)
     bot.legend(fontsize=8)
     bot.grid(alpha=0.3)
     fig.tight_layout()
