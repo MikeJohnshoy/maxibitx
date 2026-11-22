@@ -233,6 +233,16 @@ int tx_pipeline_set_if_placement(struct tx_pipeline *p, int bfo_hz, int xtal_cen
 	return 0;
 }
 
+double tx_pipeline_if_error_hz(const struct tx_pipeline *p, enum tx_pipeline_signal signal,
+                               int bfo_hz, int xtal_center_hz, double tone_hz,
+                               double rate_ratio)
+{
+	double made = signal == TX_PIPELINE_CW
+	                  ? tone_hz + p->cw_shift_bins * (double)TX_PIPELINE_BIN_HZ
+	                  : p->ssb_shift_bins * (double)TX_PIPELINE_BIN_HZ;
+	return made * rate_ratio - ((double)bfo_hz - (double)xtal_center_hz);
+}
+
 void tx_pipeline_set_ceiling(struct tx_pipeline *p, float ceiling)
 {
 	if (!(ceiling > 0.0f) || ceiling > 1.0f)
