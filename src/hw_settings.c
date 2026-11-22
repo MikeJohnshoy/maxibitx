@@ -158,6 +158,20 @@ void hw_settings_load(void) {
       if (!strcmp(key, "bfo_freq")) {
         bfo_freq = (int)value;
         printf("init: bfo_freq loaded from %s: %d Hz\n", HW_SETTINGS_PATH, bfo_freq);
+      } else if (!strcmp(key, "codec_rate")) {
+        // The codec's actual sample rate (radio.c). Out of range is a typo:
+        // keep the nominal rate rather than retune clk1 by it.
+        if (value >= RADIO_CODEC_RATE_MIN_HZ && value <= RADIO_CODEC_RATE_MAX_HZ) {
+          codec_rate = (int)value;
+          printf("init: codec_rate loaded from %s: %d Hz (%+.0f ppm from nominal)\n",
+                 HW_SETTINGS_PATH, codec_rate,
+                 (codec_rate - RADIO_CODEC_RATE_NOMINAL_HZ) * 1e6 / RADIO_CODEC_RATE_NOMINAL_HZ);
+        } else {
+          codec_rate = RADIO_CODEC_RATE_NOMINAL_HZ;
+          printf("init: codec_rate=%ld in %s is outside %d-%d - using %d Hz\n", value,
+                 HW_SETTINGS_PATH, RADIO_CODEC_RATE_MIN_HZ, RADIO_CODEC_RATE_MAX_HZ,
+                 RADIO_CODEC_RATE_NOMINAL_HZ);
+        }
       } else if (!strcmp(key, "xtal_filter_center")) {
         xtal_filter_center = (int)value;
         printf("init: xtal_filter_center loaded from %s: %d Hz\n",
