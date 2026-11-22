@@ -21,6 +21,7 @@ test-cw-spot
 test-capture-dump
 test-codec-check
 test-i2c
+test-si5351
 test-cw-shape
 src/*.o
 test-logs/
