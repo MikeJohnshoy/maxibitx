@@ -171,13 +171,31 @@ double sound_get_alc_db(void) {
 // sound_tx_if_placed() at 0 until a later call succeeds.
 static atomic_int tx_if_placed = 1;
 
+// clk1's TX trims for the placement in force (sound_tx_clk1_trim_hz()).
+static atomic_int tx_clk1_trim_cw_hz = 0;
+static atomic_int tx_clk1_trim_ssb_hz = 0;
+
 int sound_update_cw_if_placement(void) {
   if (!cw_tx_pipeline)
     return 0; // nothing built yet; sound_thread_start() will do it
   int r = tx_pipeline_set_if_placement(cw_tx_pipeline, bfo_freq, xtal_filter_center,
                                        cw_get_pitch());
   atomic_store(&tx_if_placed, r == 0);
+  if (r == 0) {
+    double ratio = (double)codec_rate / RADIO_CODEC_RATE_NOMINAL_HZ;
+    double cw = tx_pipeline_if_error_hz(cw_tx_pipeline, TX_PIPELINE_CW, bfo_freq,
+                                        xtal_filter_center, vfo_actual_hz(cw_get_pitch()),
+                                        ratio);
+    double ssb = tx_pipeline_if_error_hz(cw_tx_pipeline, TX_PIPELINE_USB, bfo_freq,
+                                         xtal_filter_center, 0.0, ratio);
+    atomic_store(&tx_clk1_trim_cw_hz, (int)lround(cw));
+    atomic_store(&tx_clk1_trim_ssb_hz, (int)lround(ssb));
+  }
   return r;
+}
+
+int sound_tx_clk1_trim_hz(int cw_mode) {
+  return atomic_load(cw_mode ? &tx_clk1_trim_cw_hz : &tx_clk1_trim_ssb_hz);
 }
 
 int sound_tx_if_placed(void) {
@@ -1225,8 +1243,9 @@ int sound_thread_start(const char *device_name) {
             bfo_freq, xtal_filter_center);
   } else {
     printf("sound: TX IF placed from bfo_freq - xtal_filter_center = %d Hz, "
-           "CW tone %d Hz\n",
-           bfo_freq - xtal_filter_center, cw_get_pitch());
+           "CW tone %d Hz; clk1 trimmed %+d Hz for CW, %+d Hz for SSB\n",
+           bfo_freq - xtal_filter_center, cw_get_pitch(), sound_tx_clk1_trim_hz(1),
+           sound_tx_clk1_trim_hz(0));
   }
 
   if (pcm_playback) {
