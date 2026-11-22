@@ -116,10 +116,10 @@ int main(int argc, char **argv) {
   // started here before anything downstream needs it - at its RX value;
   // it only switches to bfo_freq during a TX burst
   int i2c_bus = si5351bx_init(radio_hw_i2c_bus());
-  si5351bx_setfreq(1, xtal_filter_center + RX_IF_FREQ_HZ);
+  si5351bx_setfreq(1, radio_rx_clk1_hz());
   si5351_reset();
   printf("init: si5351 oscillator ready on I2C bus %d, clk1 (RX) at %d Hz\n",
-         i2c_bus, xtal_filter_center + RX_IF_FREQ_HZ);
+         i2c_bus, radio_rx_clk1_hz());
  
   // The INA260 power monitor needs the I2C bus si5351bx_init() just
   // brought up, so it can only be probed after it, not before.
