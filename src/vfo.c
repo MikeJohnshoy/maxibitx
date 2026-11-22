@@ -32,6 +32,10 @@ void vfo_start(struct vfo *v, int frequency_hz, int start_phase) {
   v->freq_hz = frequency_hz;
 }
 
+double vfo_actual_hz(int frequency_hz) {
+  return (double)((frequency_hz * 65536) / sampling_freq) * sampling_freq / 65536.0;
+}
+
 // figure out what quadrant we are in and read the sine value
 // for a given phase without advancing (vfo_read() and vfo_read_iq())
 static int vfo_lookup(int phase) {
