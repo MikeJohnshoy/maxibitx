@@ -247,11 +247,25 @@ arithmetic put CW at a 700 Hz pitch about 31 Hz high (21 Hz of rounding,
 10 Hz of codec) and SSB about 12 Hz low. Neither has been measured on
 air since: that is the open check, on a GPS-locked receiver.
 
-What's left: the si5351 sets clk1 in steps of about 2.7 Hz (its PLL's
-fractional step, divided down), truncating, so the trim lands within
-that; and the codec's scaling of a signal's own offset from the dial,
-280 ppm of it — 0.2 Hz at a CW pitch, 6 Hz at the panadapter's ±20 kHz
-edges.
+With `codec_rate=96027` WWV read 5,000,002, 10,000,004, 15,000,004 and
+20,000,004: a few hertz high on every band, not the 0 expected. Back to
+back on 10 MHz, `codec_rate=96000` read 9,999,992 and 96027 read
+10,000,003, 11 Hz apart for a 7 Hz move of clk1. The si5351 explained
+it. `si5351v2.c` set each PLL's fraction in steps of 1/2^19 of the TCXO
+and truncated, so every clock came out up to a step low: up to 2.6 Hz
+for clk1 and 3.4 to 4.8 Hz for clk2 over the bands. clk1 at 40,036,400
+came out 1.07 Hz low and at 40,036,407 0.12 Hz low, so it really moved
+7.95 Hz. A low clk2 makes a station read high by as much, and SPOT
+settles where that amount depends on the dial's last hertz, so readings
+leaned high by 0–4 Hz. Since then `si5351v2.c` rounds the fraction to
+the nearest step, in steps of 1/1,048,575 (the largest denominator the
+chip's 20-bit register holds): every clock within half a step either
+side, 0.66 Hz for clk1 and 0.75 to 1.2 Hz for clk2
+(`si5351_test.c`). Not yet read on WWV.
+
+What's left: the si5351's half step, above; and the codec's scaling of a
+signal's own offset from the dial, 280 ppm of it — 0.2 Hz at a CW pitch,
+6 Hz at the panadapter's ±20 kHz edges.
 
 **Measuring them.** Read WWV with SPOT on at least three frequencies
 (5, 10, 15, 20, 25 MHz) and fit the errors against frequency:
