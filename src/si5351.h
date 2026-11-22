@@ -37,4 +37,28 @@ int si5351_get_clk1_divider(void); // 0 for automatic
 // The divider si5351bx_setfreq() uses for clk1 at frequency.
 int si5351_clk1_divider_for(uint32_t frequency);
 
+// ---- The arithmetic, for the bench harness (si5351_test.c) -----------------
+
+// The PLL fraction's denominator, the largest the 20-bit P3 register holds.
+// A PLL step is then the TCXO / SI5351_PLL_DENOM, about 23.8 Hz, and an
+// output's that divided by its divider: 1.3 Hz for the sBitx's clk1 (18),
+// 1.5 to 2.4 Hz for clk2 over the bands (dividers 16 to 10).
+#define SI5351_PLL_DENOM 1048575u
+
+// The PLL setting for frequency out of an output divider: frequency x
+// divider = ref_hz x (mult + num / SI5351_PLL_DENOM), num rounded to the
+// nearest, so the output lands within half a step of frequency, either side.
+void si5351_pll_for(uint32_t frequency, uint32_t divider, uint32_t ref_hz, uint32_t *mult,
+                    uint32_t *num);
+
+// What frequency actually comes out as, from si5351_pll_for(), with the
+// TCXO at ref_hz.
+double si5351_actual_hz(uint32_t frequency, uint32_t divider, uint32_t ref_hz);
+
+// AN619's register values for a + b/c (a PLL's multiplier or a
+// multisynth's divider): P1 = 128a + floor(128b/c) - 512,
+// P2 = 128b - c floor(128b/c), P3 = c; integer mode (P2 0, P3 1) for b 0.
+void si5351_registers(uint32_t a, uint32_t b, uint32_t c, uint32_t *p1, uint32_t *p2,
+                      uint32_t *p3);
+
 #endif /* SI5351_H */
