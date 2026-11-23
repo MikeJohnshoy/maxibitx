@@ -64,7 +64,7 @@ double sound_get_mic_tx_gain(void);
    Not to be confused with sound_set_tx_drive() above, which is the
    codec's analog output - mute sequencing, not a power control. MICGAIN
    is what drives the signal into this ceiling. The whole chain:
-   docs/03_tx_processing_pipeline.md, "Setting power". */
+   docs/00_intro.md §7, "Setting power". */
 void sound_set_tx_power(double fraction);
 double sound_get_tx_power(void);
 
