@@ -9,8 +9,7 @@ provide the display and controls.
 
 A small separate desktop control panel runs on the rpi, or on another machine on the network.
 
-![maxibitx's control panel on 40 m CW](maxibitx/data
-/maxibitx_icon.png)
+![maxibitx's control panel on 40 m CW](maxibitx/data/maxibitx_icon.png)
 
 ## Where it came from
 
