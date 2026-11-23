@@ -80,7 +80,7 @@ int uac_is_active(void);
 
 /* Kenwood TS-480-subset CAT over the gadget's CDC-ACM port (/dev/ttyGS0) -
  * see the CAT section of usb_gadget.c and
- * docs/04_remote_control_and_iq_output.md. Used by FLRig, and by WSJT-X
+ * docs/06_api.md, "Kenwood CAT". Used by FLRig, and by WSJT-X
  * either directly or through FLRig's relay; only one process can hold the
  * port at a time. Independent of hamlib.c's rigctld server. Best-effort:
  * failure (e.g. no gadget) isn't fatal. Call after uac_init(); there's no
