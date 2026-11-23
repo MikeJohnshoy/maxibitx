@@ -47,14 +47,6 @@ applications to maxibitx.
 | USB audio rate conversion | `decim48k.c`, `upsample48k.c` |
 | External interfaces | `interfaces/hamlib.c` (rigctld), `interfaces/hpsdr_p1.c` (HPSDR Protocol 1), `interfaces/usb_gadget.c` (USB audio + Kenwood CAT), `interfaces/iq_stream.c` (I/Q for the control panel), `interfaces/tci.c`, `tci_cw.c`, `tci_stream.c`, `tci_ws.c` (TCI: control, audio, I/Q and CW text over a WebSocket) |
 
-`make test` runs every bench test below and says which, if any, failed.
-The DSP is bench-tested on its own (`make test-fft-filter`,
-`test-tx-pipeline`, `test-rx-filter`, `test-rx-audio`,
-`test-rx-audio-impulse`, `test-upsample48k`, `test-cw`, `test-key-input`,
-`test-keyer`, `test-keyer-straight`), and so are the TCI
-server (`test-tci-ws`, `test-tci`, over loopback) and the board layer
-(`test-radio-hw`, with GPIO and I2C stubbed), without any hardware attached.
-
 ## Features & Capabilities
 
 ### Hardware & Architecture
@@ -80,6 +72,13 @@ server (`test-tci-ws`, `test-tci`, over loopback) and the board layer
 ### Built-in Verification
 - **Hardware-free bench suite:** `make test` runs isolated unit and loopback tests across the DSP chains (`tx_pipeline`, `rx_filter`, `rx_audio`, CW/keyer), TCI WebSocket server, and stubbed board hardware layers with no radio attached.
 - **Measure your own radio** xtal_sweep, lpf_sweep, spur_survey, cw_shape and capture_check. Tools for characterising the hardware itself
+- `make test` runs every bench test below and says which, if any, failed.
+The DSP is bench-tested on its own (`make test-fft-filter`,
+`test-tx-pipeline`, `test-rx-filter`, `test-rx-audio`,
+`test-rx-audio-impulse`, `test-upsample48k`, `test-cw`, `test-key-input`,
+`test-keyer`, `test-keyer-straight`), and so are the TCI
+server (`test-tci-ws`, `test-tci`, over loopback) and the board layer
+(`test-radio-hw`, with GPIO and I2C stubbed), without any hardware attached.
 
 ## Building and running
 
