@@ -14,8 +14,8 @@
 // All offsets passed in here are BCM GPIO numbers - the kernel's own
 // numbering, and what /dev/gpiochip0 expects - not wiringPi's pin numbers.
 // radio_hw.h's BCM numbers come from the boards' wiring
-// (docs/01_hardware_init_and_control.md, "Migrating off wiringPi: BCM pin
-// mapping"); another board's need deriving the same way, not assuming.
+// (docs/08_troubleshooting_and_bringup.md, "GPIO pin numbers"); another
+// board's need deriving the same way, not assuming.
 
 #ifndef GPIO_H
 #define GPIO_H
