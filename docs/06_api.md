@@ -210,7 +210,7 @@ whatever ceiling is in force, so past the ceiling it moves `ALC` rather
 than output power. To set a voice level, advance `MICGAIN` until speech
 peaks read a couple of dB on `ALC`. In DIGITAL there is no radio-side
 drive at all - set the host's output level while watching `ALC`.
-[`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md),
+[`00_intro.md`](00_intro.md) §7,
 "Setting power", has the whole chain.
 
 ## iq_stream (UDP 4536)
@@ -243,7 +243,7 @@ relative, not calibrated.
 arrives at −*d* Hz if read as I + jQ. Use I − jQ (negate Q) to get the
 conventional orientation, as the example above does. This comes from
 the radio's mixer chain, and HPSDR carries the same samples (see
-[`02_rx_processing_pipeline.md`](02_rx_processing_pipeline.md)).
+[`00_intro.md`](00_intro.md) §5).
 
 ## HPSDR Protocol 1 (UDP 1024)
 
@@ -335,6 +335,14 @@ DIGITAL. `MD1;` or `MD3;` still change the mode.
 
 **FLRig:** choose the **QMX** rig type, not Kenwood TS-480. It sends
 only the commands above, and its RIT control maps onto `RT`/`RU`/`RD`.
+The generic Kenwood profile also works, but sends split and menu
+commands that are silently ignored, and its "VFO B" box is easily
+mistaken for a RIT readout.
+
+FLRig polls every get several times a second, so the console shows a
+get only when its answer changes, and every set. `AC;` (the antenna
+tuner, part of FLRig's poll) is recognised and ignored, without a log
+line.
 
 ## TCI (TCP 50001)
 
@@ -345,9 +353,11 @@ frames. For programs that connect to a TCI radio - JTDX, WSJT-X Improved,
 MSHV, loggers, and anything using Hamlib's TCI backend (model 43001) -
 it replaces CAT and the USB gadget with one network connection. Several
 clients can be connected at once, and a change made by any of them, or
-anywhere else in maxibitx, is sent to all. What the implementation does
-and why is in [`04_remote_control_and_iq_output.md`](04_remote_control_and_iq_output.md)
-and [`dsp_design_notes/tci_design_study.md`](dsp_design_notes/tci_design_study.md).
+anywhere else in maxibitx, is sent to all. A client that falls behind
+has its binary frames (audio and I/Q) dropped once 2 MB is queued for it,
+and is disconnected past 8 MB. How the server is built:
+[`00_intro.md`](00_intro.md) §3; what the clients were found to need:
+[`dsp_design_notes/tci_design_study.md`](dsp_design_notes/tci_design_study.md).
 
 **Connecting.** `ws://<pi>:50001/` (any path). On connect the server sends
 `protocol:ExpertSDR3,2.0;` and `device:maxibitx;`, the initialization
@@ -479,7 +489,7 @@ station yet.
 5. **Split:** off. `FR`/`FT`/split aren't implemented.
 
 Transmit power in DIGITAL hasn't been calibrated on a wattmeter - see
-[`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md),
+[`00_intro.md`](00_intro.md) §7,
 "Known limitations".
 
 ## Not available yet
