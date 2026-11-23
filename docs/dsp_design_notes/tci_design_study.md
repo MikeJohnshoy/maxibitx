@@ -497,7 +497,7 @@ Four files in `src/interfaces/`, as §9 laid out: `tci_ws.c` (701 lines),
 `tci.c` (728), `tci_stream.c` (496), and the header `tci.h` for
 `sound.c` and `maxibitx.c` - 1925 lines of C in the three, inside §1's
 prediction.
-[`04_remote_control_and_iq_output.md`](../04_remote_control_and_iq_output.md)
+[`06_api.md`](../06_api.md)
 describes the implementation and [`06_api.md`](../06_api.md) is the
 client-side reference. Where it differs from, or settles, what the study
 proposed:
