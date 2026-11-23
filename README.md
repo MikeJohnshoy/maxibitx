@@ -10,7 +10,7 @@ controls, over the network or USB.
 A small separate control panel, `tools/rigctl_panel.py`, runs on the
 Pi's own screen or on another machine on the network.
 
-![maxibitx's control panel on 40 m CW](data/maxibitx_console.png)
+![maxibitx's control panel on 40 m CW](data/maxibitx_icon.png)
 
 ## Where it came from
 
