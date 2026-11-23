@@ -192,7 +192,7 @@ HPSDR consumers get what they expect, and the consumers that do care
 (`rx_audio.c` via `RX_IQ_SPECTRUM_INVERTED`, and the control panel)
 compensate explicitly at their own boundary. Correcting it centrally
 would have meant un-correcting it for everything downstream.
-[`02_rx_processing_pipeline.md`](02_rx_processing_pipeline.md) has the
+[`00_intro.md`](00_intro.md) §5 has the
 chain.
 
 ## Hardware
@@ -427,7 +427,7 @@ down in `CLAUDE.md` so it survives contributors.
 ### How does ALC work in maxibitx?
 
 Four things with distinct jobs, and most confusion about ALC comes from
-collapsing them. [`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md),
+collapsing them. [`00_intro.md`](00_intro.md) §7,
 "Setting power", is the full account.
 
 Two values in `hw_settings.ini` describe the radio.
@@ -605,7 +605,7 @@ the block size. A paddle works too: `keyer.c` is a bug, ultimatic or
 iambic A/B keyer at 1-60 WPM, chosen with rigctld `U KEYER` and
 `L KEYSPD` or the control panel. As a straight key either contact keys, a mono plug is detected
 at start-up, and the ring doubles as the mic PTT in USB/LSB
-([`01_hardware_init_and_control.md`](01_hardware_init_and_control.md),
+([`00_intro.md`](00_intro.md) §4,
 "The key jack"). The microphone arrives through the WM8731 codec and
 is scaled by `mic_tx_gain` on the way into the transmit pipeline.
 
@@ -617,7 +617,7 @@ test-tone generator is the way to make one without a key. Remote *audio*
 input exists only for DIGITAL, through the USB gadget. Remote keying of
 individual elements and remote voice audio are both real gaps rather
 than oversights; they are listed in
-[`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md)'s known
+[`00_intro.md`](00_intro.md) §7's known
 limitations.
 
 ### What is `rigctl_panel.py`?
@@ -746,7 +746,7 @@ working radio with uncalibrated numbers rather than no radio.
 ### What's not done?
 
 The current list, from
-[`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md) and the
+[`00_intro.md`](00_intro.md) §7 and the
 design notes: two-tone power and IMD measurements to establish this
 board's honest rated output; voice power never checked on a wattmeter;
 `POWER` and `ALC` bench-tested but not yet exercised against a running
