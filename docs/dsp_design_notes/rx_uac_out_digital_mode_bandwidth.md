@@ -26,7 +26,7 @@ signals than usb_gadget using wsjtx for decodes."*
 
 Both paths end in the same WSJT-X decoder; they differ only in what
 feeds it. SparkSDR gets raw baseband I/Q over `hpsdr_p1.c`
-(`04_remote_control_and_iq_output.md`) and does its own demodulation
+(`06_api.md`) and does its own demodulation
 and windowing, free to hand WSJT-X as wide an audio window as it
 likes. The UAC2 gadget instead hands WSJT-X `rx_audio.c`'s `uac_out`
 tap directly - whatever comes out the far end of the same 4-stage
