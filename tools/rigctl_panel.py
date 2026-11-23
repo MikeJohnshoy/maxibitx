@@ -12,7 +12,7 @@ docs/06_api.md describes both.
 The screen, top to bottom:
 
     band menu, frequency, mode (CW CWR USB LSB DIGI), RX/TX, volume, gear
-    RIT and its steps          |  FILTER: on, width, centre, SPOT
+    RIT and its steps          |  CW FILTER: on, width, centre, SPOT
     span                                   status              S-meter
     spectrum, frequency scale, waterfall
     CW: ten macros  |  USB/LSB: mic gain and ALC  |  DIGI: a note
@@ -63,10 +63,12 @@ where RIT has the receiver listening, a red "TX" marker where XIT will
 transmit (solid while transmitting); an arrow at the edge shows an
 offset beyond the span.
 
-With the CW filter on (CW, CWR, USB and LSB), a shaded band behind the
-trace, and a bar on the scale, show what it passes: its width, centred
-where a signal is heard at the pitch - on the dial in CW and CWR, the
-pitch above it in USB and below it in LSB - and moved with RIT.
+The CW filter is in circuit only in CW and CWR: the radio holds it out
+in USB, LSB and DIGI whatever it is set to, and its controls grey out
+there; the setting comes back with CW. While it is on, a shaded band
+behind the trace, and a bar on the scale, show what it passes: its
+width, centred on the dial (where a station is heard at the pitch) and
+moved with RIT.
 
 SPOT (CW and CWR) is auto zero-beat, one shot: it finds the strongest CW
 tone in the narrow filter (300 Hz either side of the pitch with the
@@ -91,7 +93,7 @@ rigctld commands used:
     l RFPOWER / L RFPOWER   TX power, 0.0-1.0 of max_power
     l ALC                   limiter gain reduction, dB
     l MICGAIN / L MICGAIN   mic gain multiplier, USB/LSB
-    u NARROW / U NARROW     the CW filter in or out (DIGITAL holds it out)
+    u NARROW / U NARROW     the CW filter in or out (held out but in CW and CWR)
     l CWPITCH / L CWPITCH   the filter's centre and the CW pitch, Hz
     l CWWIDTH / L CWWIDTH   the filter's width, Hz
     u KEYER / U KEYER       0 straight, 1 bug, 2 ultimatic, 3 iambic A, 4 B
@@ -1180,7 +1182,7 @@ class Panel(tk.Tk):
             ttk.Button(rit, text=t, style="Step.TButton", width=-4,
                        command=lambda d=d: self.on_rit_step(d)).grid(row=0, column=5 + i, padx=1)
 
-        flt = ttk.LabelFrame(row, text="FILTER", padding=(4, 0, 4, 4))
+        flt = ttk.LabelFrame(row, text="CW FILTER", padding=(4, 0, 4, 4))
         flt.grid(row=0, column=1, sticky="nsew", padx=(75, 0))
         self.filter_frame = flt
         self.narrow_check = ttk.Checkbutton(flt, text="ON", variable=self.narrow_var,
@@ -1389,13 +1391,13 @@ class Panel(tk.Tk):
         cw_state = ["!disabled"] if key == "cw" else ["disabled"]
         for w in (self.cw_entry, self.send_button, self.stop_button, self.spot_button):
             w.state(cw_state)
-        # The radio holds the CW filter out of circuit in DIGITAL whatever
-        # it is set to; the controls say so rather than look live.
-        gated = key == "digi"
+        # The radio holds the CW filter out of circuit but in CW and CWR,
+        # whatever it is set to; the controls say so rather than look live.
+        gated = key != "cw"
         self.narrow_check.state(["disabled"] if gated else ["!disabled"])
         for combo in (self.width_combo, self.pitch_combo):
             combo.configure(state="disabled" if gated else "readonly")
-        self.filter_frame.configure(text="FILTER - out of circuit in DIGI" if gated else "FILTER")
+        self.filter_frame.configure(text="CW FILTER - CW and CWR only" if gated else "CW FILTER")
         self.canvas.configure(cursor="crosshair" if mode_name in CLICK_STEP_HZ else "")
 
     # ---- status line ----
@@ -2078,20 +2080,16 @@ class Panel(tk.Tk):
 
     def passband_hz(self):
         """The CW filter's passband as offsets from the dial, (lo, hi), or
-        None when it is out of circuit: its width, centred where the
-        demodulator puts the pitch - the dial in CW and CWR, dial + pitch
-        in USB, dial - pitch in LSB (rx_audio.h) - plus RIT."""
-        if not self.narrow_var.get():
+        None when it is out of circuit (off, or any mode but CW and CWR):
+        its width, centred on the dial, where the demodulator puts a
+        station at the pitch (rx_audio.h), plus RIT."""
+        if not self.narrow_var.get() or self.mode not in ("CW", "CWR"):
             return None
         try:
-            width, pitch = int(self.width_var.get()), int(self.pitch_var.get())
+            width = int(self.width_var.get())
         except ValueError:
             return None
-        centre = {"CW": 0, "CWR": 0, "USB": pitch, "LSB": -pitch}.get(self.mode)
-        if centre is None:
-            return None
-        centre += self.rit_hz
-        return centre - width / 2.0, centre + width / 2.0
+        return self.rit_hz - width / 2.0, self.rit_hz + width / 2.0
 
     def draw_passband(self, w, span_hz, behind):
         """The CW filter's passband: behind the trace (behind=True, drawn
