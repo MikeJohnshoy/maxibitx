@@ -87,7 +87,8 @@ then `make` again.
 The Pi needs the codec's overlay (`dtoverlay=audioinjector-wm8731-audio`),
 the si5351's I2C bus (on an sBitx, the `i2c-rtc-gpio` overlay it shares
 with the RTC), and the user in the `gpio` group; see
-[`docs/01_hardware_init_and_control.md`](docs/01_hardware_init_and_control.md).
+[`docs/00_intro.md`](docs/00_intro.md) §4 and
+[`docs/08_troubleshooting_and_bringup.md`](docs/08_troubleshooting_and_bringup.md).
 A zBitx also needs the UART off
 ([`docs/08_troubleshooting_and_bringup.md`](docs/08_troubleshooting_and_bringup.md)).
 The USB gadget needs a device-mode USB port and a few kernel options:
@@ -97,17 +98,12 @@ The USB gadget needs a device-mode USB port and a few kernel options:
 
 | Doc | Content |
 |---|---|
-| [`docs/00_intro.md`](docs/00_intro.md) | Introduction to maxibitx: the whole system in one stand-alone document, including the RX and TX pipelines in detail |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Design rationale and build order, step by step, with measurements |
-| [`docs/01_hardware_init_and_control.md`](docs/01_hardware_init_and_control.md) | GPIO, si5351/I2C, WM8731 codec bring-up |
-| [`docs/02_rx_processing_pipeline.md`](docs/02_rx_processing_pipeline.md) | Antenna to I/Q and audio, stage by stage |
-| [`docs/03_tx_processing_pipeline.md`](docs/03_tx_processing_pipeline.md) | Audio source to antenna: keying/PTT, `tx_pipeline.c`, power, known limitations |
-| [`docs/04_remote_control_and_iq_output.md`](docs/04_remote_control_and_iq_output.md) | How the external interfaces are implemented |
-| [`docs/05_process_and_threading_model.md`](docs/05_process_and_threading_model.md) | Startup sequence, threads, and a map for reading `sound.c` |
+| [`docs/00_intro.md`](docs/00_intro.md) | How maxibitx works: the hardware, the code, and the receive and transmit chains in detail. The one description of the current system |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How it was designed and built, step by step, with measurements: a historical record |
 | [`docs/06_api.md`](docs/06_api.md) | The external interfaces - rigctld, I/Q streams, USB audio and CAT, TCI - for building an app on maxibitx, plus WSJT-X setup |
-| [`docs/08_troubleshooting_and_bringup.md`](docs/08_troubleshooting_and_bringup.md) | Hardware bring-up gotchas |
+| [`docs/08_troubleshooting_and_bringup.md`](docs/08_troubleshooting_and_bringup.md) | Bring-up and troubleshooting: what goes wrong and how to tell |
 | [`docs/09_faq.md`](docs/09_faq.md) | Common questions: where it came from, why the design is the way it is, ALC, the interfaces, what's not done |
-| [`docs/dsp_design_notes/`](docs/dsp_design_notes/) | Measurements, derivations and debugging history for the DSP |
+| [`docs/dsp_design_notes/`](docs/dsp_design_notes/) | Design studies, measurements, derivations and debugging history: dated records |
 | [`docs/code_comments.md`](docs/code_comments.md) | Comment policy: code says what's true now, docs say how it got there |
 
 ## Credits
