@@ -190,16 +190,16 @@ void radio_set_mode(enum radio_mode m) {
   default:                 rx_audio_set_demod(RX_DEMOD_CW);  break;
   }
 
-  // DIGITAL takes stage 3 (the narrow CW filter) out of circuit and holds
-  // it out. Not a preference: DIGITAL exists to feed WSJT-X through
-  // rx_audio.c's uac_out tap, which sits downstream of stage 3, so a filter
-  // carried in from a CW session gives the decoder a ~300Hz slice of the
-  // ~2.7kHz window FT8 spreads across. The demod switch above deliberately
-  // treats DIGITAL as USB, which means rx_audio.c cannot tell the two
-  // apart - this call is how it learns the difference. It remembers the
-  // operator's own setting and restores it as soon as the mode leaves
-  // DIGITAL. docs/dsp_design_notes/rx_uac_out_digital_mode_bandwidth.md §11.
-  rx_audio_inhibit_narrow_filter(m == RADIO_MODE_DIGITAL);
+  // Stage 3, the narrow CW filter, is in circuit only in CW and CWR; every
+  // other mode takes it out and holds it out. A ~300Hz slice around the CW
+  // pitch makes USB or LSB voice unreadable, and DIGITAL feeds WSJT-X
+  // through rx_audio.c's uac_out tap, downstream of stage 3, where it would
+  // hand the decoder a fraction of the ~2.7kHz window FT8 spreads across
+  // (docs/dsp_design_notes/rx_uac_out_digital_mode_bandwidth.md §11). The
+  // daemon enforces it, not a control panel, because CAT and TCI clients
+  // set the mode too. rx_audio.c remembers the operator's own setting and
+  // restores it on the way back to CW or CWR.
+  rx_audio_inhibit_narrow_filter(m != RADIO_MODE_CW && m != RADIO_MODE_CWR);
 }
 
 int radio_set_cw_pitch(int hz) {
