@@ -16,7 +16,7 @@ Three open transmit questions need a known, repeatable test signal:
 - **The SSB carrier offset.** A bench model of `tx_pipeline.c` plus the
   analog mixers predicts that USB, LSB and DIGITAL put the suppressed
   carrier about 700 Hz off the dial
-  ([`../03_tx_processing_pipeline.md`](../03_tx_processing_pipeline.md),
+  ([`00_intro.md`](../00_intro.md) §7,
   "Known limitations"). On-air SSB tests so far used a mic and a whistle,
   which showed the correct side of the dial but not the exact position.
 - **Voice and DIGITAL power.** CW is calibrated on a wattmeter (a steady
