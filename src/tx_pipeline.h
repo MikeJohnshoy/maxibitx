@@ -5,7 +5,7 @@
 // at a time and sends its output - a real IF near 22.6kHz - to the
 // exciter. Per block: bandpass (300-3000Hz), zero one sideband, rotate
 // bins (the IF shift), inverse FFT, real part. How that IF becomes RF:
-// docs/03_tx_processing_pipeline.md. Derivations and bench results:
+// docs/00_intro.md §7. Derivations and bench results:
 // docs/ARCHITECTURE.md §10 steps 4, 5 and 8.
 //
 // Built on fft_filter.h's per-instance struct filter. Deliberately free
@@ -90,7 +90,7 @@ enum tx_pipeline_signal {
 // file. Envelope means 2*|out_c[i]|, the magnitude of the still-complex
 // signal, not the input audio's peak. A constant-envelope signal at or
 // below the ceiling - a steady tone, or CW, which is driven at the ceiling
-// (below) - never moves the gain. Why each of those: docs/03_tx_processing_pipeline.md, "Setting power".
+// (below) - never moves the gain. Why each of those: docs/00_intro.md §7, "Setting power".
 //
 // CW is driven at the ceiling instead (cw_drive), so each element keeps
 // cw.c's shape at any POWER; limited, the gain moves on every rise and
