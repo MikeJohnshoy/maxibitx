@@ -122,12 +122,12 @@ The screen, top to bottom:
   transmitting. The display stays centred on the dial, so a signal
   doesn't move when either does. An offset past the span shows as an
   arrow at that edge. Retuning clears both.
-  **FILTER:** the CW filter on or off, its width and its centre (the CW
-  pitch). In DIGI the radio holds the filter out of circuit and the
-  group says so. While it is on, a shaded band behind the trace and a bar
-  on the scale show what it passes: its width, centred where a signal is
-  heard at the pitch (the dial in CW and CWR, the pitch above it in USB,
-  below it in LSB), moved with RIT.
+  **CW FILTER:** the CW filter on or off, its width and its centre (the
+  CW pitch). It is in circuit only in CW and CWR: in USB, LSB and DIGI the
+  radio holds it out whatever it is set to, the controls grey out and the
+  group says so, and the setting comes back with CW. While it is on, a
+  shaded band behind the trace and a bar on the scale show what it
+  passes: its width, centred on the dial, moved with RIT.
 - **Spectrum:** span (5, 10 or 25 kHz), a status line, the S-meter, then
   the trace, a frequency scale and the waterfall under it. The FFT is
   longer at the narrower spans (bins of 23, 11.7 and 5.9 Hz at 25, 10
