@@ -649,6 +649,14 @@ no second consumer downstream whose whole purpose it defeats. CW and CWR
 are what stage 3 is for. So the gate is one mode wide, which is also the
 narrowest change that fixes the actual hazard.
 
+Widened on 23 November 2026: the gate is now every mode but CW and CWR.
+A filter left on from a CW session made USB or LSB voice unreadable, by
+the panel or by a CAT or TCI client that never shows the filter, and
+picking a CW signal out in USB is what CW mode is for. The control panel
+renamed its group CW FILTER and greys it outside CW and CWR. The
+mechanism is unchanged: radio.c passes a wider condition to
+`rx_audio_inhibit_narrow_filter()`.
+
 ### Proof
 
 `rx_audio_test.c` Case I, on a tone 900 Hz off dial center (reaching stage
