@@ -25,7 +25,7 @@ piece. wiringPi gave way to the kernel's GPIO character device,
 bit-banged I2C to the kernel's I2C driver, and the rest of the DSP and
 all of the UI were left to mature external SDR apps.
 
-**maxibitx** starts from minibitx's hardware and control layer and adds
+**maxibitx** started from minibitx's hardware and control layer and adds
 an all-mode transmitter pipeline and an onboard demodulator - without
 bringing the coupling back. Every job lives in its own small file,
 and no UI runs in the process. Anything an external display or controller needs
