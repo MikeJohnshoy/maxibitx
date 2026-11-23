@@ -1,9 +1,8 @@
 # 09 — FAQ
 
-Short answers to the questions that come up most, with pointers to the
-doc that carries the full story. Where a question rests on an
-assumption that turned out to be wrong, the answer says so rather than
-answering the question as asked.
+Short answers to the questions that come up most, each with a link to
+the doc that has the full story. Where a question rests on an
+assumption that turned out to be wrong, the answer says so.
 
 ## Origins and design
 
@@ -17,742 +16,347 @@ forked and extended at [drexjj/sbitx](https://github.com/drexjj/sbitx).
 It is full of features and has grown accordingly: `sbitx.c` and
 `sbitx_gtk.c` are more than 3,000 and 12,000 lines, with the GTK user
 interface, the DSP and the hardware control intertwined in the same
-files. That coupling has real costs — it is hard for a new developer to
-find how anything works, and a change in one area can land somewhere
-unrelated.
+files. That makes it hard for a new developer to find how anything
+works, and a change in one area can land somewhere unrelated.
 
 **minibitx** asked how little code it takes to run the sBitx hardware
 well. It kept the hardware layer and threw out everything else: wiringPi
 gave way to the kernel's GPIO character device, bit-banged I2C to the
-kernel's I2C driver, and all of the UI and most of the DSP were left to
-mature external SDR applications. What remained was a headless daemon
-that brought up the radio and streamed I/Q.
+kernel's I2C driver, and the UI and most of the DSP were left to mature
+external SDR applications. What remained was a headless daemon that
+brought up the radio and streamed I/Q.
 
 **maxibitx** starts from minibitx's hardware and control layer and adds
-back an all-mode transmitter and an onboard demodulator — without
+back an all-mode transmitter and an onboard demodulator, without
 bringing the coupling back. Every job lives in its own small file, no UI
 runs in the process, and anything a display or controller needs goes
-through a narrow documented interface
-([`06_api.md`](06_api.md)). The whole daemon is about 11,500 lines of C
-across 30 files, and a large part of that is the external interfaces.
+through a documented interface ([`06_api.md`](06_api.md)). The daemon
+is about 14,000 lines of C in 36 source files, and a large part of that
+is the external interfaces.
 
 ### Can lessons from maxibitx be used to improve sbitx?
 
-Some can be lifted directly; the most valuable one probably cannot.
-
-Portable as-is: the kernel GPIO character device and kernel I2C in place
-of wiringPi and bit-banging; feeding ALSA playback continuously rather
-than only during transmit; `SCHED_FIFO` on the audio thread; keeping
-spectrum and meter computation off the DSP functions the audio path
-depends on; and the `filter_tune()` normalization fix described below.
-Each is a contained change.
+Some can be lifted directly: the kernel GPIO character device and
+kernel I2C in place of wiringPi and bit-banging; feeding ALSA playback
+continuously rather than only during transmit; `SCHED_FIFO` on the
+audio thread; keeping spectrum and meter work off the audio path; and
+the `filter_tune()` normalization fix described below. Each is a
+contained change.
 
 The structural lesson is harder to transplant, because it *is* the
-structure. [`ARCHITECTURE.md`](ARCHITECTURE.md) §2 catalogues five
-categories of already-diagnosed sbitx/zbitx bugs, and the largest by
-measured cost is UI work sharing blocking resources with the real-time
-audio path — `zbitx_poll()`'s blocking bit-banged I2C to the display
-shares a mutex with the audio thread, costing 52–66 ms per call with two
-fields dirty and up to ~2,256 ms when a mode click dirties two hundred.
-Several point fixes were tried and one was rejected in review for
-regressing display responsiveness elsewhere, which is the signature of a
-problem that isn't at any one call site. maxibitx doesn't solve that
-problem; it declines to have it, by running no UI in-process at all.
+structure. The most expensive sbitx/zbitx bug category on record is UI
+work sharing blocking resources with the real-time audio path:
+`zbitx_poll()`'s bit-banged I2C to the display shares a mutex with the
+audio thread, costing 52–66 ms per call and up to about 2.3 s when a
+mode click dirties two hundred fields
+([`ARCHITECTURE.md`](ARCHITECTURE.md) §2). maxibitx doesn't solve that
+problem; it declines to have it, by running no UI in-process.
 Retrofitting that into a program whose UI and DSP share a file is a
-rewrite, not a patch.
-
-What sbitx could take from it without a rewrite is the discipline rather
-than the architecture: measure before changing, write the measurement
-down, and keep the history in documents instead of in comments.
+rewrite, not a patch. What sbitx could take without a rewrite is the
+discipline: measure before changing, write the measurement down, and
+keep the history in documents instead of in comments.
 
 ### What are the main lessons learned building maxibitx?
 
-The one you'd name first is that `maxibitx.c` brings up each piece of
-the radio in turn, in dependency order, and each step reports its own
-result on the console. The settings file and the board it names first,
-then GPIO (relays held in an RX-safe state), then the si5351 over I2C,
-then the INA260 power monitor which needs that bus, then the VFO phase
-table, CW, the demodulator, each external
-interface, the codec, and finally the audio thread. Every step prints an
-`init:` line, and most degrade rather than abort — if rigctld can't bind
-its port the daemon says so and carries on. That ordering made it
-possible to get each section working and *keep* it working while the
-next one was built, and when something broke the console said which
-stage it broke at.
-
-Three more are worth naming alongside it.
+**Bring the radio up one piece at a time.** `maxibitx.c` starts each
+part in dependency order, each step printing an `init:` line, and most
+steps degrade rather than abort
+([`00_intro.md`](00_intro.md#startup-and-shutdown)). That made it
+possible to get each section working and keep it working while the next
+was built, and when something broke the console said at which stage.
 
 **Bench-test the DSP with no hardware attached.** Every signal-chain
-change is proven numerically first (`make test-fft-filter`,
-`test-tx-pipeline`, `test-rx-filter`, `test-rx-audio`,
-`test-upsample48k`). The +66 dB filter normalization error, the LSB
-sideband that would have transmitted nothing, the sideband-zero
-rejection figure and the limiter's scale-don't-clip behavior were all
-caught or confirmed on the bench, not on the air.
+change is proven numerically first (`make test`). The +66 dB filter
+normalization error, an LSB sideband that would have transmitted
+nothing, and the limiter's scale-don't-clip behavior were all caught or
+confirmed on the bench, not on the air.
 
-**Measurements beat intuition, including mine.** The transmit tone tests
-appeared to show the si5351 reference about 1.5 ppm low, and the fix
-looked obvious. Receiving WWV showed the reference was at nominal and
-the *remote receiver* used for the tests was the thing in error. What
-made that provable was noticing that a reference error moves transmit
-and receive in opposite directions — so a disagreement between the two
-localizes the error instead of averaging into a wrong answer.
+**Measurements beat intuition.** A reference error moves transmit and
+receive in opposite directions, so comparing the two localizes an error
+instead of averaging it into a wrong answer. That is how a remote
+receiver, not the radio, was found to be off frequency in the early
+tone tests (see
+[How is the radio's frequency calibrated?](#how-is-the-radios-frequency-calibrated)).
 
-**Write the history down somewhere it will survive.**
-[`code_comments.md`](code_comments.md) sets the rule that code comments
-describe what the code does now and history lives in the docs, and
-`tools/check_comments.py` flags drift from it. This exists because the
-alternative was observed: comments that narrate a change accumulate
-until nobody can tell current behavior from an old story about it.
+**Write the history down somewhere it will survive.** Comments describe
+what the code does now, and history lives in the docs
+([`code_comments.md`](code_comments.md)), because comments that narrate
+changes accumulate until nobody can tell current behavior from an old
+story about it.
 
 ## DSP and numerics
 
-### Does maxibitx do its FFTs in 16-bit integer? Does that hurt performance?
+### Does maxibitx do its FFTs in 16-bit integer?
 
-No — the premise doesn't hold. Everything in the signal chain is
-single-precision floating point. `fft_filter.c` allocates with
-`fftwf_alloc_complex()` and plans with `fftwf_plan_dft_1d()`, and the
-buffers are `complex float` throughout; the binary links `-lfftw3f`, the
-single-precision FFTW.
+No. The whole signal chain is single-precision floating point:
+`fft_filter.c` uses single-precision FFTW (`fftwf_*`, linked with
+`-lfftw3f`) on `complex float` buffers. Integers appear only at the
+edges, where a format demands them: 32-bit samples at the codec, and
+16-bit samples in HPSDR and `iq_stream` packets. Float lets the
+pipeline be unity-gain by construction, without tracking fixed-point
+scaling at every stage.
 
-Integers appear only at the edges, where the outside world demands them:
-32-bit samples at the ALSA/WM8731 boundary, and 16-bit samples on the
-wire in the HPSDR Protocol 1 payload and `iq_stream`'s packets, because
-those formats specify int16. Nothing is *computed* in integer.
+### Did sbitx use a mix of FFT types?
 
-Had it been integer, it would have hurt — not in raw speed on a Pi 4,
-which has hardware floating point, but in the engineering. Fixed-point
-FFT work means tracking scaling at every stage and choosing between
-overflow and lost resolution at each one. Float lets the pipeline be
-unity-gain by construction, which is what makes a claim like "the
-limiter deviates from a pure gain by 78 dB" measurable rather than
-buried under scaling artifacts.
+Not of FFT types: sbitx uses one block size (`filter_new(1024, 1025)`)
+almost everywhere, and maxibitx adopted the same. Two other things were
+found ([`ARCHITECTURE.md`](ARCHITECTURE.md) §4):
 
-### Did we find that sbitx used a mix of FFT types?
-
-Not a mix of *types* — sbitx uses one FFT block size essentially
-everywhere (`filter_new(1024, 1025)`, Kaiser beta 5), and maxibitx
-deliberately adopted the same size. Two related things were found
-instead, both recorded in [`ARCHITECTURE.md`](ARCHITECTURE.md) §4 and
-the step-2 bench results.
-
-**An uncompensated normalization.** sbitx's `filter_tune()` leaves every
-filter's passband gain at an uncorrected +20·log10(N) — +66 dB at this
-N — which its `rx_linear()` and `tx_process()` never visibly correct.
-Presumably it is absorbed, unremarked, into whatever empirically tuned
-gain constant follows. It was caught here by measuring +66.23 dB where
-0 dB was expected, and fixed by using 1/N² instead of sbitx's 1/N in the
-initial gain: one of the two FFT round-trips inside `window_filter()`
-was going uncompensated. maxibitx's filter is unity-gain by
-construction, so any gain constant added later calibrates real analog
-gain rather than partly undoing an unlabeled FFT artifact.
-
-**A mix of *mechanisms*, which is probably what the question is after.**
-sbitx filters narrow CW on receive with a bespoke IIR while transmitting
-through an FFT chain — two separate pieces of machinery doing closely
-related work. maxibitx's design decision was to run one shared FFT
-filter for both directions, which is what makes pitch and width live
-operator controls instead of recompiled coefficients. The cost was
-quantified before it was accepted: roughly 300 Hz of transition per side
-against the elliptic design's measured 135 Hz, about a 2× softer skirt.
-
-That prediction turned out to be wrong in an interesting direction. The
-filter that got built is three times longer than the one those numbers
-describe, and it measures *sharper* than the elliptic, with a stopband
-30–55 dB deeper. The real cost was in the time domain, where nobody had
-looked: a linear-phase FIR of that length delays everything by 16 ms, and
-a keyed CW element took 20 ms to settle against the elliptic's 7 ms. A
-minimum-phase realization of the same response brings those to 4.5 ms and
-8.8 ms with the magnitude response intact, and it is now the only
-realization the FFT filter offers — the linear-phase one has no operator
-control, because 16 ms of group delay is not something anyone copying CW
-would choose. The FFT filter became the *default* receive narrow filter at
-the same time.
-
-There's a second twist. The FFT filter existed on the receive side to make
-pitch and width adjustable, and elliptic coefficients merely can't be
-designed *at runtime* — nothing stopped stage 3 from carrying more than one
-of them. It now carries 24, six pitches by four widths, designed
-offline and switched by loading a coefficient set. That gives the elliptic
-the adjustability the migration was for, at quantized values instead of
-continuous ones, and keeps its faster attack — 5.2 ms against the
-minimum-phase FFT filter's 8.8 ms at the same width. So the receive side has
-two working answers, and the elliptic bank is kept deliberately rather than
-as legacy: four biquads per sample against a 4096-point transform every
-block matters on a Pi Zero 2W, and it is what the odd-block-size path falls
-back to. Which one sounds better on a crowded band is still an on-air
-question.
+- **An uncompensated normalization.** sbitx's `filter_tune()` leaves
+  each filter's passband gain at +20·log10(N), +66 dB at this N,
+  presumably absorbed into an empirically tuned gain constant later.
+  maxibitx measured +66.23 dB where 0 dB was expected and fixed it, so
+  its filter is unity-gain and any gain constant calibrates real analog
+  gain.
+- **A mix of mechanisms.** sbitx filters narrow CW on receive with an
+  IIR and transmits through an FFT chain. maxibitx has an FFT narrow
+  filter (the default: continuously tunable, minimum-phase) and kept a
+  bank of 24 elliptic designs as the alternative
+  ([`00_intro.md`](00_intro.md#stage-3-the-narrow-filter); the
+  comparison is in
+  [`rx_narrow_filter_fft_vs_elliptic.md`](dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md)).
 
 ### Why is the raw I/Q spectrally inverted?
 
-A station *d* Hz above the dial arrives at −*d* in the baseband I/Q,
-because the first mixer's local oscillator sits above the signal. The
-inversion is left in deliberately: `sound.c` doesn't correct it, so
-HPSDR consumers get what they expect, and the consumers that do care
-(`rx_audio.c` via `RX_IQ_SPECTRUM_INVERTED`, and the control panel)
-compensate explicitly at their own boundary. Correcting it centrally
-would have meant un-correcting it for everything downstream.
-[`00_intro.md`](00_intro.md) §5 has the
-chain.
+Because the first mixer's local oscillator sits above the signal, a
+station *d* Hz above the dial arrives at −*d* in the baseband I/Q. It
+is left that way so HPSDR clients get what they expect, and the
+consumers that care (`rx_audio.c` and the control panel) compensate at
+their own boundary
+([`00_intro.md`](00_intro.md#the-baseband-iq-and-its-consumers)).
 
 ## Hardware
 
-### Where did the code that initializes and controls the radio hardware come from?
+### Where did the hardware control code come from?
 
-From sbitx, by way of JJ's 64-bit fork and minibitx, and then rewritten
-rather than copied. The *knowledge* is Farhan's — which si5351 clock
-does what, the crystal filter centre, the LPF relay mapping, the band
-scale table — and that carries over. The mechanism does not: wiringPi
-and bit-banged I2C were both replaced by kernel interfaces, and the pin
-numbers had to be re-derived because wiringPi's numbering isn't the
-kernel's.
+From sbitx, by way of JJ's 64-bit fork and minibitx, rewritten rather
+than copied. The knowledge is Farhan's (which si5351 clock does what,
+the crystal filter centre, the LPF relay mapping, the band scale table);
+the mechanism is new. `data/hw_settings.ini` is deliberately the same
+file sbitx uses, with the same key names, so `cal`, `bfo_freq` and the
+per-band `scale` table carry straight over from a calibrated board.
 
-`data/hw_settings.ini` deserves a mention here: it is deliberately the
-*same file* sbitx uses, with the same key names and section layout, so
-`cal`, `bfo_freq` and the per-band `scale` table carry straight over
-from an existing calibrated board. Those values are physical
-measurements of one specific radio, not source constants, and they
-belong in a file for exactly that reason.
+One trap in that file: a top-level key placed below a `[section]`
+header belongs to that section and is ignored, so `bfo_freq`,
+`xtal_filter_center`, `full_scale_power` and the other top-level keys
+go above the first `[section]` (`cal` may also be in `[tcxo]`, where
+sbitx puts it). The console names any key in the wrong place
+([`08_troubleshooting_and_bringup.md`](08_troubleshooting_and_bringup.md#the-radio-board-at-startup)).
 
-One trap in that file is worth knowing, because it has cost time once
-already: the parser tracks `[sections]`, so a *top-level* key placed
-below a section header belongs to that section and is ignored.
-`bfo_freq`, `xtal_filter_center`, `full_scale_power`, `max_power` and
-the other top-level keys must all appear before the first `[section]`
-line. `cal` may be at the top level too, or inside `[tcxo]`, where sbitx
-puts it - so a file needs no `[tcxo]` section. It used to be silent; now
-the console says `init: <key> in data/hw_settings.ini is inside a
-[section], so it is ignored` for any of them, `cal` included.
+### Does maxibitx use wiringPi for GPIO?
 
-### How do we control GPIO for the LPF relays and PTT — with wiringPi?
-
-Not with wiringPi. It was removed, and that was one of minibitx's
-founding changes. `gpio.c` talks straight to the kernel through the
-Linux GPIO character-device ioctl API (uAPI v2, `<linux/gpio.h>`),
-issuing a `GPIO_V2_GET_LINE_IOCTL` per line against `/dev/gpiochip0` and
-holding the returned line-request file descriptor for the life of the
-process. One request and one descriptor per line, which matches how the
-hardware layer already treats each pin as an independent handle.
-
-Two reasons. wiringPi is unmaintained upstream with no Pi 5 support —
-not an immediate problem on a Pi 4, but not a foundation either — and
-the character device is the kernel's own current supported interface, so
-this isn't a workaround chosen to shed a dependency.
-
-The catch worth knowing about: every offset in `gpio.h` is a **BCM GPIO
-number**, the kernel's numbering, not the wiringPi pin numbers the old
-code used. The sBitx's BCM numbers, in its board profile in
-`radio_hw.c`, were derived from a `gpio readall` capture on real sBitx
-v2 hardware. Porting to a different
-board means re-deriving that mapping the same way, not assuming it.
+No. `gpio.c` uses the kernel's GPIO character device (uAPI v2,
+`/dev/gpiochip0`), the kernel's own supported interface; wiringPi is
+unmaintained and has no Pi 5 support. Every pin number is a BCM number,
+not a wiringPi one
+([`08_troubleshooting_and_bringup.md`](08_troubleshooting_and_bringup.md#gpio-pin-numbers)
+has the conversion, and [`00_intro.md`](00_intro.md) §4 the pin
+tables).
 
 ### How did we eliminate bit-banging on the I2C bus?
 
-By deleting it and letting the kernel's driver do the job. `i2c.c` opens
-`/dev/i2c-N` and issues standard SMBus ioctls —
-`i2c_write_byte_data()`, `i2c_read_byte_data()` and the block variants —
-returning negative errno on failure. That is the whole of it; there is
-no timing loop and no GPIO toggling anywhere in the I2C path.
-
-This is more than tidiness. The most expensive bug category on record in
-[`ARCHITECTURE.md`](ARCHITECTURE.md) §2 is a blocking bit-banged I2C
-exchange to the zbitx display that shares a mutex with the audio thread,
-so a slow display update stalls audio through lock contention — 52–66 ms
-in the ordinary case and over two seconds in the worst one. A bit-banged
-bus is a busy-wait holding a lock, which is precisely what a real-time
-audio thread cannot afford to be behind.
+By deleting it. `i2c.c` opens `/dev/i2c-N` and issues standard SMBus
+ioctls, with no timing loop and no GPIO toggling. A bit-banged bus is a
+busy-wait, and when it holds a lock the audio thread needs, it stalls
+the audio: that is the zbitx display bug described above.
 
 ### How does maxibitx run on both the sBitx and the zBitx?
 
-By keeping every difference between the boards in one file,
-`radio_hw.c`, so that nothing else has to know which board it is on.
+Every difference between the boards is in one file, `radio_hw.c`, as a
+profile per board: the pins, the LPF plan, the I2C bus, the knobs, the
+relay half of the T/R sequence, and whether the board may transmit.
+`hw_settings.ini`'s `sbitx_version` line picks the profile
+(`SBITX_V3` for an sBitx DE, v2 or v3, `SBITX_V4` for a zBitx), and
+there is no default, because driving one board's pins as another's
+could key a transmitter. The rest of the code calls operations that
+mean the same on every board. What differs from one radio to the next,
+even of the same board, is calibration, and stays in `hw_settings.ini`.
 
-**The boards are mostly the same radio.** Both have the same WM8731
-codec, run at the same 96 kHz in the same 1024-frame blocks. Both have
-an si5351 with the same clock roles, the key jack on BCM 4 and 5, and
-four LPF relays on BCM 24, 25, 8 and 7. So the DSP, the keyer, the
-clocks and all the external interfaces run unchanged on either. What
-differs:
-
-| | sBitx (DE, v2, v3) | zBitx |
-|---|---|---|
-| `sbitx_version` in `hw_settings.ini` | `SBITX_V3` | `SBITX_V4` |
-| si5351's I2C bus | 22 (the RTC's bus) | 3, shared with the RP2040 front panel |
-| LPFs | in the receive path too: the band's filter follows the dial | switched only for transmit; 15 m on LPF B, not A |
-| T/R lines | TX_LINE (BCM 23), and EXT_PTT (BCM 12) for an external amplifier | TX_LINE, which also powers the PA, and RX_LINE (BCM 15), which connects the receiver; BCM 12 held low |
-| Front-panel knobs | two encoders, read by the Pi | on the RP2040 panel, not read |
-| Transmit | yes | refused for now (below) |
-
-**`hw_settings.ini` names the board, and there is no default.** At
-start-up, `sbitx_version` selects one profile from the `boards[]` table
-in `radio_hw.c`. Without that line, maxibitx stops before touching any
-pin, because driving one board's pins as another's could key a
-transmitter. A profile is mostly data:
-
-- which pin does what;
-- the LPF band plan, and whether the LPFs are in the receive path;
-- the I2C bus;
-- the knobs;
-- whether the board may transmit;
-- one function for the board's relay switching between receive and
-  transmit.
-
-**The rest of the code calls operations that mean the same on every
-board**, declared in `radio_hw.h`:
-
-- `radio_hw_gpio_init()` claims the board's pins in their receive state.
-- `radio_hw_tune()` is called on every retune. On the sBitx it selects
-  the band's LPF. On the zBitx it does nothing, because the LPFs are
-  switched at transmit.
-- `radio_hw_relays_tx()` is the board's half of the T/R sequence.
-- `radio_hw_tx_permitted()`, `radio_hw_tx_settle_ms()`,
-  `radio_hw_i2c_bus()` and `radio_hw_knob()` answer the questions other
-  files need answered.
-
-The T/R switch shows the split. `radio.c` does the part that is the
-same on every board:
-
-1. Mute receive capture.
-2. Set the clocks for transmit.
-3. Call `radio_hw_relays_tx(1)`.
-4. Raise the exciter feed.
-
-Going back to receive is the reverse. What happens inside step 3 is the
-board's:
-
-- **sBitx:** raise EXT_PTT, wait `ext_ptt_delay_ms` for an external
-  amplifier, then raise TX_LINE.
-- **zBitx**, as its own software does it: drop RX_LINE, select the LPF
-  for the transmit frequency, wait 10 ms, then power the PA.
-
-`radio.c` doesn't know either sequence, and doesn't need to.
-
-**Two kinds of difference, kept apart.** The board type decides what
-is wired where, and that is in `radio_hw.c`. A radio's calibration
-differs from one radio to the next, even between two of the same board,
-and that stays in `hw_settings.ini`:
-
-- the reference frequency (`cal`) and the codec's sample rate
-  (`codec_rate`);
-- `bfo_freq` and `xtal_filter_center`;
-- the per-band power scale.
-
-Where a radio's crystal filter sits is one such value, its
-`xtal_filter_center`, not code. It can be measured on the radio with
-rigctld's `L XTALCENTER` and `tools/xtal_sweep.py`
-([`zbitx_port_study.md`](dsp_design_notes/zbitx_port_study.md) §11). On
-the zBitx measured so far, the filter turned out to be centred where
-the sBitx's default puts it.
-
-**Where the zBitx stands:**
-
-- **Receive works** on a zBitx with its Pi Zero 2W.
-- **Transmit works**, calibrated to 2 W on every band into a dummy load.
-  Those scales are in `data/hw_settings_zbitx.ini` as conservative
-  defaults; the PA has more in it, but it hasn't been measured further
-  (study §12). A remote receiver puts it on frequency, with USB and LSB
-  on the right sideband; DIGITAL over TCI transmits; and CW's first
-  element arrives with 16 ms or more to spare.
-- **The CPU is not a concern.** With stage 1 vectorized, processing on
-  the Zero 2W averages 4.3 ms of each 10.67 ms block and peaks at 6 ms
-  (study §10).
-- **The RP2040 front panel** freezes on the last screen zbitx drew,
-  since nothing talks to it; nothing else is affected (study §3.7).
-
-**Adding a board** means adding a profile to `boards[]`, plus a relay
-function if its T/R sequence differs from both existing ones.
-`make test-radio-hw` checks each profile:
-
-- the pins it claims, and their levels;
-- its LPF selection;
-- the order of its relays;
-- that it refuses to transmit where it has no LPF.
-
-The pin numbers have to come from the new board itself, by reading its
-wiring or its own software's pin map, converted to BCM numbering. They
-can't be assumed from either existing profile.
+On the zBitx, receive works, transmit is calibrated to 2 W on every
+band, and the Pi Zero 2W has CPU to spare; there is no microphone SSB
+yet, and the RP2040 front panel isn't driven. The pin and LPF tables are
+in [`00_intro.md`](00_intro.md) §4, and the port in
+[`zbitx_port_study.md`](dsp_design_notes/zbitx_port_study.md). Adding a
+board means adding a profile, with pin numbers taken from that board,
+and `make test-radio-hw` checks it.
 
 ## Audio and real time
 
 ### What was the key to getting rid of the ALSA overruns and underruns?
 
-There wasn't one key — there were three distinct causes wearing the same
-symptom, and each needed its own fix.
-[`08_troubleshooting_and_bringup.md`](08_troubleshooting_and_bringup.md)
+There were three causes with the same symptom, each with its own fix:
+
+- **Feed playback all the time**, writing silence when not
+  transmitting. Writing only during transmit let the device drain and
+  underrun between every CW burst.
+- **Run the audio thread at `SCHED_FIFO`**, which `make` grants with
+  `cap_sys_nice`. As an ordinary thread it is preempted past period
+  boundaries.
+- **Recover properly**, checking the result of `snd_pcm_prepare()`
+  (with `snd_pcm_drop()` first where a driver needs it), and stop
+  playback cleanly if recovery fails.
+
+[`08_troubleshooting_and_bringup.md`](08_troubleshooting_and_bringup.md#audio-thread-xruns-hw00-captureplayback)
 has the detail.
-
-**Feed playback continuously, not only during transmit.** This is the
-one that surprises people. ALSA's underrun detection is tied to the
-hardware clock draining the ring buffer against the software pointer,
-not to whether you are calling `writei()`. Writing only during a CW
-burst left the device with nothing arriving while the key was up, so it
-drained its ~43 ms buffer and underran between every burst; the first
-write of the next burst then hit that stale underrun and needed
-recovery. Hence the "xrun, recovering" storm on every key-down. Writing
-silence the rest of the time keeps the device running — which is what
-sbitx's own full-duplex path does.
-
-**Give the audio thread real-time priority.** `sound_thread_start()`
-requests `SCHED_FIFO` at maximum priority through `pthread_attr_t`, so
-`pthread_create()` fails fast if the privilege isn't there rather than
-silently falling back long after startup claims success. As an ordinary
-`SCHED_OTHER` thread it competes with everything else and gets preempted
-past a period boundary. The reported symptom was an immediate xrun flood
-at startup with nothing even connected, right after the
-`failed to set audio thread to SCHED_FIFO` warning. `make` grants
-`cap_sys_nice` for this reason.
-
-**Recover properly, and stop if recovery fails.** A bare
-`snd_pcm_prepare()` clears a fresh `-EPIPE`, but on a device stuck for a
-more persistent reason `prepare()` itself fails, and a `snd_pcm_drop()`
-followed by `prepare()` is what some drivers actually need. Both call
-sites must check the return value — the playback path once discarded it
-and spun forever printing recovery messages at the full loop rate, which
-was a real bug. It now disables playback gracefully with one clear
-message instead.
 
 ### Why does nothing block the audio thread?
 
-Because the measured bug history says that is where the expensive
-mistakes live. `sound.c`'s `audio_loop()` takes no lock shared with an
-ordinary thread, sleeps nowhere, and does no I/O; work for other threads
-goes through lock-free rings. Control surfaces such as `hamlib.c` and
-`usb_gadget.c` only ever set or read plain in-process state, and human-
-speed controls like mic gain and TX power are plain variables written by
-one thread and read once per block by the other. The rule is written
-down in `CLAUDE.md` so it survives contributors.
+Because the bug history says that is where the expensive mistakes live.
+`sound.c`'s `audio_loop()` takes no lock shared with an ordinary thread,
+sleeps nowhere and does no I/O; work for other threads goes through
+lock-free rings, and slow-moving controls are plain variables read once
+per block. The rule is in `CLAUDE.md`, and
+[`interfaces_and_codec_bringup_notes.md`](dsp_design_notes/interfaces_and_codec_bringup_notes.md)
+§2 and §5 have the attempts that taught it.
 
 ## Power and ALC
 
 ### How does ALC work in maxibitx?
 
-Four things with distinct jobs, and most confusion about ALC comes from
-collapsing them. [`00_intro.md`](00_intro.md) §7,
-"Setting power", is the full account.
+A peak limiter holds the transmitted envelope at or below a ceiling, as
+a gain rather than a clip, so a signal held at the ceiling comes out
+clean, just smaller. POWER moves the ceiling; mic gain (or, in DIGITAL,
+the host's level) is the drive pushed into it; ALC reads how far the
+limiter is pulling back. `full_scale_power` and `max_power` in
+`hw_settings.ini` set the ceiling in watts, so no client can exceed
+`max_power`. The limiter never raises quiet audio, and CW never moves
+it, so `cw.c`'s 9 ms rise and fall come through untouched.
+[`00_intro.md`](00_intro.md#setting-power) is the full account.
 
-Two values in `hw_settings.ini` describe the radio.
-`full_scale_power` is what a full-scale signal produces once the
-`[tx_band]` scales are calibrated — the board's rated output, a
-measurement. `max_power` is the ceiling the limiter holds — a choice.
+### Does the limiter need headroom between `full_scale_power` and `max_power`?
 
-Two runtime controls sit either side of the limiter. **POWER**
-(`l/L RFPOWER`, 0–1 of `max_power`) *moves the limiter's threshold*; it
-is emphatically not a gain applied after the limiter, because a gain
-there could walk straight past `max_power`, which is the one thing that
-value exists to prevent. **MICGAIN** is the drive: how hard the signal
-is pushed into whatever ceiling is in force. Turning drive up does not
-raise peak power — it raises the average relative to the peak, and it
-moves the ALC meter rather than the wattmeter.
-
-The limiter itself applies `min(1, ceiling/envelope)` to
-`2*|out_c[i]|` in `tx_pipeline.c` — the magnitude of the still-complex
-signal just before the real part is taken. That is the envelope the
-exciter will actually radiate; the input audio's peak is the wrong
-quantity, because the 300–3000 Hz bandpass and the sideband zero both
-change it and an SSB envelope peak can exceed the audio peak that
-produced it.
-
-**It is a gain, never a clip.** A sine times a constant is still a sine,
-so a signal held at the ceiling comes out clean, just smaller. Case F in
-`tx_pipeline_test.c` measures this: a tone driven 6 dB too hot comes out
-at exactly rated power, reads 6.02 dB on the ALC meter, and differs from
-the correctly-driven waveform by 7.70e−05 — 82 dB down — where
-truncating at the ceiling would differ by 4.99e−01, 6 dB down.
-
-Output is delayed 2 ms while the gain is computed from the undelayed
-signal, with attack rate-limited to cross the whole gain range in
-exactly that window, so the gain arrives before the peak that needs it.
-Release is 250 ms. And the gain only ever reduces: quiet audio transmits
-quietly, because raising the average to meet the ceiling is a speech
-compressor, a different thing that belongs upstream and isn't built.
-
-CW never moves the gain at all — the pipeline drives it at the ceiling,
-so a key-down carrier sits exactly there at any POWER — and `cw.c`'s
-9 ms rise and fall come through untouched.
-
-### Does the limiter need headroom between full_scale_power and max_power?
-
-No, and an early draft of the design note wrongly said it did. A 100 W
-rig makes 100 W on CW and 100 W PEP on SSB; its ALC stops the drive from
-exceeding rated output rather than reserving part of the PA. Equal
-values are the normal setting.
-
-The working range comes from the drive side, where there is plenty:
-`mic_tx_gain` reaches 64×, and in DIGITAL the level is the host's
-entirely, so the signal arriving at the limiter can exceed full scale by
-20 dB or more. Before the limiter existed that overshoot reached
-`TX_SAMPLE_CLAMP` and was hard-clipped. Setting `max_power` below
-`full_scale_power` means one thing only: running below rated power.
+No. Equal values are the normal setting, as a 100 W rig makes 100 W on
+CW and 100 W PEP on SSB. The working range is on the drive side, where
+mic gain reaches 64× and a host's audio can arrive 20 dB or more above
+full scale. A `max_power` below `full_scale_power` simply means running
+below rated power.
 
 ### How does maxibitx's ALC differ from sbitx's?
 
-This one deserves an honest boundary. What maxibitx does is described
-above and is measured. What sbitx's current TX gain control does in
-detail has *not* been read line by line in the course of this work, so a
-point-by-point comparison would be guesswork and isn't offered here.
-
-What can be said is what maxibitx deliberately chose, and why each
-choice was available. Output power here is set solely by the DAC
-amplitude, with the analog chain at fixed gain, which is what makes a
-feed-forward limiter sufficient — there is no loop to close because the
-amplitude-to-watts mapping is already calibrated per band. The ceiling
-is declared in watts in a settings file rather than living as an
-empirical constant in source. And the limiter's behavior is verified
-numerically on the bench rather than by ear. Whether and where sbitx
-differs is a reading exercise someone should do before claiming an
-answer.
+sbitx's transmit gain control hasn't been read line by line in this
+work, so a point-by-point comparison isn't offered. What maxibitx chose:
+output power is set only by the DAC amplitude, with the analog chain at
+fixed, calibrated gain per band, which is what makes a feed-forward
+limiter sufficient; the ceiling is declared in watts in a settings file;
+and the limiter is verified numerically on the bench
+([`tx_test_tones_and_alc.md`](dsp_design_notes/tx_test_tones_and_alc.md)).
 
 ### How is the radio's frequency calibrated?
 
-Through `cal` in `hw_settings.ini` — sbitx's own key, in sbitx's own
-`[tcxo]` section — which sets the si5351's reference frequency. Every
-clock derives from it.
+With two settings in `hw_settings.ini`, checked against WWV on several
+frequencies:
 
-The non-obvious part: a reference error moves transmit and receive in
-*opposite* directions. Transmit shifts by `(T/C − 1)(f − 22,600)` and
-the receive display by `−(T/C − 1)(f − 24,000)`, because the first
-mixer's LO sits above the signal. At 7 MHz 1 ppm is about 7 Hz; at
-15 MHz about 15 Hz. That opposite sign is what let a disagreement
-between a transmit measurement and a receive measurement localize the
-error rather than average into a wrong answer. Receiving WWV is the
-reference to check it against.
+- `cal`, the si5351's reference frequency. Its error grows with
+  frequency (1 ppm is about 10 Hz at 10 MHz) and moves transmit and
+  receive in *opposite* directions.
+- `codec_rate`, the codec's actual sample rate. Its error is the same
+  few hertz on every band.
 
-A second setting, `codec_rate`, gives the codec's actual sample rate.
-The codec runs from its own 12 MHz crystal, and an error there shifts
-every frequency by the same few hertz on every band, rather than in
-proportion. Reading WWV on several frequencies separates the two: the
-part that grows with frequency is `cal`'s, the steady part
-`codec_rate`'s
-([`dsp_design_notes/tx_test_tones_and_alc.md`](dsp_design_notes/tx_test_tones_and_alc.md),
-"Frequency calibration").
+The part of the receive error that grows with frequency is `cal`'s, the
+steady part `codec_rate`'s. The procedure is in
+[`tx_test_tones_and_alc.md`](dsp_design_notes/tx_test_tones_and_alc.md),
+"Frequency calibration".
 
 ## Interfaces and applications
 
 ### Why are there so many ways to talk to maxibitx?
 
-Because they answer different questions, and each was added when
-something real needed it. None is a fallback for another.
-
-**HPSDR Protocol 1** (UDP) exists because mature SDR applications
-already speak it — it is how SparkSDR and SDR Console get I/Q and
-control without anyone writing a maxibitx-specific driver.
-
-**rigctld** (TCP 4532) exists because Hamlib is the lingua franca of
-station control, so WSJT-X, FLRig and anything else that knows how to
-talk to a radio can tune and key this one.
-
-**The USB gadget** exists because WSJT-X on a host PC needs a *sound
-card* and a *serial port*, not a network protocol. The Pi presents
-itself as both over one USB cable, which is why FT8 works with the same
-setup a commercial rig would use.
-
-**`iq_stream`** (UDP 4536) exists because the control panel needed a
-spectrum and neither of the other two was a good fit: HPSDR wants a
-discovery handshake and a session, and rigctld carries no samples.
-It is deliberately the most minimal thing that works — send any datagram
-to subscribe, re-send within five seconds to stay subscribed, and
-packets of 128 I/Q pairs arrive with a four-byte magic and a sequence
-number.
-
-**TCI** (TCP 50001) exists because the digital-mode programs and loggers
-that support Expert Electronics' TCI - JTDX, WSJT-X Improved, MSHV, Log4OM
-and others, and Hamlib's TCI backend - get control, receive and transmit
-audio, and I/Q over one network connection, with no USB cable, virtual
-audio cable or COM port. It complements HPSDR rather than replacing it:
-SparkSDR and Thetis are TCI servers themselves, not clients
-([`dsp_design_notes/tci_design_study.md`](dsp_design_notes/tci_design_study.md)).
-
-The underlying principle is in the README: no UI in the process, and
-everything a display or controller needs goes through a documented
-interface. Several interfaces is the cost of that, and it's a much lower
+Because each answers a different need: HPSDR Protocol 1 for existing
+SDR applications, rigctld for anything that speaks Hamlib, the USB
+gadget for programs that want a sound card and a serial port,
+`iq_stream` for a spectrum without HPSDR's session handshake, and TCI
+for programs that want control, audio and I/Q over one network
+connection ([`00_intro.md`](00_intro.md#what-it-serves),
+[`06_api.md`](06_api.md#the-interfaces-at-a-glance)). Several small
+interfaces are the cost of keeping UI out of the process, and a lower
 cost than one interface that has to be all things.
 
 ### Which external applications work well with maxibitx?
 
-**SparkSDR** and **SDR Console** over HPSDR Protocol 1 for I/Q
-reception; **WSJT-X** for FT8 over the USB gadget's audio and CAT,
-decoding on par with SparkSDR on the same I/Q in a side-by-side and
-confirmed in both directions by a two-way contact on 2026-09-23;
-**FLDigi** over that same gadget audio path; and **FLRig** for control.
-
-Two setup details that cost real time to find, both in
-[`06_api.md`](06_api.md). FLRig should be set to the **QMX** rig type,
-not Kenwood TS-480. And WSJT-X and FLRig cannot both own the gadget's
-COM port at once: either point WSJT-X's Hamlib client straight at the
-serial port with FLRig closed, or let FLRig own the port and set WSJT-X's
-rig to "FLRig" pointing at its XML-RPC server. The same rule applies to
-any other application that wants that port.
-
-One trap that used to be waiting there is now closed in code. WSJT-X reads
-its audio from a tap downstream of the narrow CW filter, so an operator
-coming off a CW session with a 300 Hz filter engaged would have handed the
-decoder a fraction of FT8's ~2.7 kHz window, with poor decodes as the only
-symptom. Selecting DIGITAL — from the panel, over CAT, or by WSJT-X itself
-— now takes that filter out of circuit and holds it out, and gives it back
-on the way back to CW or CWR, the only modes it is in circuit in (USB and
-LSB hold it out too)
-([`dsp_design_notes/rx_uac_out_digital_mode_bandwidth.md`](dsp_design_notes/rx_uac_out_digital_mode_bandwidth.md)
-§11).
+SparkSDR, SDR Console and sdrOxide for I/Q; WSJT-X for FT8 over the USB
+gadget, decoding on par with SparkSDR, with a two-way contact made;
+FLDigi over the gadget's audio; and FLRig for control, set to the
+**QMX** rig type. WSJT-X and FLRig can't both own the gadget's COM port
+at once. [`06_api.md`](06_api.md#using-it-with-wsjt-x) has the setup,
+and its TCI section the setup for JTDX and WSJT-X Improved.
 
 ### How does maxibitx work with a key and a microphone?
 
-It uses the sBitx hardware's own connections. The key jack's two contacts
-are GPIO lines read as edge events: the kernel timestamps every edge, a
-thread of its own receives them and requests TX on a closure, and once per
-audio block `cw_poll_key()` places each edge at its own sample, one block
-late. So a mark is as long as the key was down, to the sample, whatever
-the block size. A paddle works too: `keyer.c` is a bug, ultimatic or
-iambic A/B keyer at 1-60 WPM, chosen with rigctld `U KEYER` and
-`L KEYSPD` or the control panel. As a straight key either contact keys, a mono plug is detected
-at start-up, and the ring doubles as the mic PTT in USB/LSB
-([`00_intro.md`](00_intro.md) §4,
-"The key jack"). The microphone arrives through the WM8731 codec and
-is scaled by `mic_tx_gain` on the way into the transmit pipeline.
-
-Remote operation is partly there. A computer sends CW as text — rigctld
-`b` (Hamlib's `send_morse`), Kenwood `KY`, or the control panel's text
-line — which the keyer sends at its own speed, and a touch of the key
-stops it. Remote PTT in CW on its own still transmits no carrier; the
-test-tone generator is the way to make one without a key. Remote *audio*
-input exists only for DIGITAL, through the USB gadget. Remote keying of
-individual elements and remote voice audio are both real gaps rather
-than oversights; they are listed in
-[`00_intro.md`](00_intro.md) §7's known
-limitations.
+Through the sBitx's own connections. The key jack's contacts are read as
+kernel-timestamped edges and placed at the sample where they happened,
+and `keyer.c` is a straight, bug, ultimatic or iambic A/B keyer at
+1–60 WPM. A mono plug is detected at start-up, and the ring is the mic
+PTT in USB and LSB. The microphone comes in through the codec
+([`00_intro.md`](00_intro.md#the-key-jack)). From a computer, CW goes
+as text (rigctld `b`, Kenwood `KY`, TCI or the control panel), sent by
+the keyer; individual elements can't be keyed remotely
+([`06_api.md`](06_api.md#not-available-yet)).
 
 ### What is `rigctl_panel.py`?
 
-A Tk control panel, about sixteen hundred lines of Python, laid out for the
-sBitx's 7-inch 800×480 touchscreen and usable in a window on any machine
-on the network. It shows the frequency (tunable digit by digit), band,
-mode, RIT, volume, the CW filter and its width and centre, keyer type and
-speed, CW text and ten macros, mic gain and ALC in USB/LSB, TX power, a
-Tune button, an S-meter, and a live spectrum, frequency scale and
-waterfall with a 5, 10 or 25 kHz span, with a marker where RIT is
-listening. Settings (the connection, paddle reversal,
-the TX test tones, the macros and the fields they fill in) open from its
-gear button. [`../tools/README.md`](../tools/README.md) describes it.
-
-Two things make it more interesting than a utility. First, it is a
-*client*, not part of the daemon — it speaks the ordinary rigctld
-protocol for control and subscribes to `iq_stream` for the spectrum, so
-everything it does, any other application can do. It is the working
-proof that [`06_api.md`](06_api.md) is sufficient. Second, it is a
-development instrument: its Settings offered a switch to A/B the
-elliptic and FFT narrow filters on real signals, at any of the bank's 24
-pitch and width settings, until the FFT filter was settled as the choice
-(the switch remains in rigctld as `u FFTFILT`). That comparison is also where the panel taught its own lesson —
-an earlier layout implied the pitch and width controls belonged to the FFT
-filter alone, so a long stretch of listening compared something other than
-what the operator believed, and the FFT filter was thought to sound worse
-than the bench predicted for as long as that lasted. It is the default now
-([`dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md`](dsp_design_notes/rx_narrow_filter_fft_vs_elliptic.md)
-§16). A control surface that misrepresents what it controls costs more than
-a missing feature.
+A Tk control panel laid out for the sBitx's 7-inch touchscreen and
+usable in a window on any machine on the network: frequency, mode, RIT,
+the CW filter, the keyer and CW text, power and mic gain, an S-meter,
+and a live spectrum and waterfall
+([`../tools/README.md`](../tools/README.md#rigctl_panelpy)). It is a
+client, not part of the daemon: it uses only rigctld and `iq_stream`,
+so it is the working proof that [`06_api.md`](06_api.md) is enough to
+build a radio front end on.
 
 ### Could `rigctl_panel.py` be replaced by a full-featured SDR application?
 
-Yes, and that is the intended path rather than a concession. Everything
-a complete radio application needs is already exposed: I/Q for a
-panadapter over HPSDR or `iq_stream`, full tuning, mode, RIT, PTT,
-power and metering over rigctld, and demodulated audio over the USB
-gadget. [`06_api.md`](06_api.md) exists specifically so somebody can
-build that application without modifying the daemon.
-
-There are three shapes it could take. A native app on the Pi 4 driving a
-local touchscreen — this is the one that must stay a *separate process*,
-because putting a UI back in the daemon reintroduces the single most
-expensive bug category in the project's history. A network application
-on a desktop, which is what SparkSDR and SDR Console already are, so
-this case is partly answered. Or a browser front-end talking to a small
-bridge process, which would suit a phone or tablet.
-
-The honest caveat is that a complete application is a large amount of
-work, and the parts of it that are radio-specific are the parts already
-done. What's left is UI, and UI is most of it.
+Yes, and that is the intended path. Everything one needs is already
+exposed: I/Q over HPSDR, `iq_stream` or TCI, full control over rigctld
+or TCI, and audio over the USB gadget or TCI. It could be a native app
+on the Pi's touchscreen (as a separate process, never inside the
+daemon), a desktop network application (which SparkSDR and SDR Console
+already are), or a browser front end behind a small bridge. The
+radio-specific parts are done; what's left is UI, and UI is most of the
+work.
 
 ## Modes and scope
 
 ### Why doesn't maxibitx support NBFM, AM or SAM?
 
-The recorded reason in [`ARCHITECTURE.md`](ARCHITECTURE.md) §8 is short:
-"AM/FM — not relevant to this HF hardware," alongside onboard digital
-mode encode/decode as explicitly deferred. v1 scope was SSB and CW
-sharing one pipeline, plus DIGITAL as a mode value for host-generated
-audio, and CW-reverse, which has since become a mode of its own (`CWR`).
-
-That reason is sound for transmit and for NBFM generally — this is an HF
-SSB radio, its crystal filter is about 2.4 kHz wide, and nothing about
-the hardware wants FM. It is thinner for AM and SAM on *receive*, where
-shortwave broadcast listening is a real use and the demodulator
-architecture would take them fairly cheaply: `rx_audio.c` already has
-the complex signal in hand at stage 2, and an envelope detector or a
-synchronous detector with a carrier-tracking loop would slot in beside
-the existing branch. The honest statement is that they were out of scope
-rather than impossible, and that receive-side AM/SAM is a reasonable
-thing to ask for.
-
-Note also that the widest filter is set by the crystal filter, so AM
-reception would be single-sideband-wide by nature — which is what SAM
-would be good at.
+They were out of scope, not impossible
+([`ARCHITECTURE.md`](ARCHITECTURE.md) §8). For transmit, and for NBFM
+in general, that is sound: this is an HF SSB and CW radio. Receive-side
+AM and SAM for shortwave broadcast listening would be fairly cheap:
+`rx_audio.c` has the complex signal at stage 2, where an envelope
+detector or a carrier-tracking synchronous detector would sit beside the
+existing ones. Stage 1 passes one side of the carrier, 0 to 3 kHz, so
+AM would need a double-sideband variant of it; SAM can work from one
+sideband as it is.
 
 ## Working on the code
 
 ### How do I know a change hasn't broken the DSP?
 
-Run `make test`. It builds and runs every bench test, one line each,
-and exits non-zero if any fails; each test can also be run on its own
-(`make test-fft-filter && ./test-fft-filter`, and so on, listed in
-`00_intro.md` §8). They link the DSP files without any hardware code
-(`test-radio-hw` links `radio_hw.c` with GPIO and I2C stubbed), so they
-run anywhere, and besides passing or failing they print the measured
-numbers next to the expected ones. `make check-comments` flags comments that have drifted into
-narrating history, and errors outright if a source file's header names a
-different file — the signature of a file uploaded under the wrong name,
-which has happened twice and broken the build both times.
-
-For a comment-only change there is a stricter check: the machine code
-must be identical, compared through `objdump -d` plus the `.rodata` and
-`.data` sections. [`code_comments.md`](code_comments.md) has the
-procedure.
+Run `make test`. It runs every bench test without hardware, one line
+each, and exits non-zero if any fails
+([`00_intro.md`](00_intro.md#8-testing) lists them). `make
+check-comments` checks the comment policy. A comments-only change must
+also leave the machine code identical
+([`code_comments.md`](code_comments.md) has the procedure).
 
 ### Why is there a comment policy?
 
-Because comments that tell stories go stale silently, and a stale
-comment is worse than none — it actively misleads. The rule is that a
-comment says what the code does *now*: units, ranges, invariants, where
-a constant came from, coupling to other code, and known open caveats.
-History — earlier versions, bugs and how they were found, on-air
-reports, dates, old values, long derivations and measurement tables —
-goes in `docs/`, where it can be read as a narrative and where being
-about the past is the point. Every fix that teaches something gets both:
-a short current-tense comment, and the story in the doc that covers that
-behavior.
+Because a stale comment is worse than none. A comment says what the
+code does now: units, ranges, invariants, where a constant came from,
+coupling to other code and known caveats. History, bugs and how they
+were found, and measurements go in `docs/`. A fix that teaches
+something gets both ([`code_comments.md`](code_comments.md)).
 
 ### What happens if `data/hw_settings.ini` is missing?
 
-maxibitx won't start. The file names the radio board
-(`sbitx_version = SBITX_V3` for an sBitx DE, v2 or v3, `SBITX_V4` for
-a zBitx), and without that line maxibitx prints the valid lines and
-exits before touching any GPIO line or clock: driving one board's pins
-as another's could key a transmitter, so there is no default. This is
-the exception to the general pattern, in which most initialization
-steps degrade rather than abort. Every other key is optional. The file
-carries physical measurements of one specific board — reference
-frequency, BFO, crystal filter centre, per-band power scales, rated
-power — and a key left out takes its compiled-in default, giving a
-working radio with uncalibrated numbers rather than no radio.
+maxibitx won't start: the file names the radio board, and without that
+line maxibitx prints the valid lines and exits before touching any GPIO
+line or clock. Every other key is optional and takes its compiled-in
+default, giving a working radio with uncalibrated numbers
+([`08_troubleshooting_and_bringup.md`](08_troubleshooting_and_bringup.md#the-radio-board-at-startup)).
 
 ### What's not done?
 
-The current list, from
-[`00_intro.md`](00_intro.md) §7 and the
-design notes: two-tone power and IMD measurements to establish this
-board's honest rated output; voice power never checked on a wattmeter;
-`POWER` and `ALC` bench-tested but not yet exercised against a running
-daemon; remote element keying absent (CW text works, over TCI too);
-TCI's CW text not yet tried on the air (its I/Q is, with sdrOxide, and
-its audio both ways, with WSJT-X on a zBitx); the transmit frequency
-checked on remote receivers but not yet on a GPS-locked one; and
-on the zBitx, SSB from the microphone and anything for the RP2040 front
-panel.
+The radio's open items are in
+[`00_intro.md`](00_intro.md#known-limitations), and what an application
+can't do yet is in [`06_api.md`](06_api.md#not-available-yet).
