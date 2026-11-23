@@ -5,7 +5,8 @@ bench-tested; step 2 (the carrier-offset check and fix) is measured,
 fixed and confirmed on air, and the frequency calibration it raised is
 measured on receive: the si5351's reference and the codec's sample rate
 (22 November 2026), each with its own setting, and WWV now reads true
-to the hertz; transmit since then is still to be checked. Step 4's limiter is built and bench-tested and is
+to the hertz; transmit since then, checked on remote receivers, lands
+on frequency. Step 4's limiter is built and bench-tested and is
 live at its normal setting. Steps 3 and 5 are open.
 
 ## Why
@@ -244,8 +245,10 @@ place, and the codec's scaling. Raising clk1 lowers the carrier by the
 same amount, so the carrier lands on the dial. Before the trims, on
 Mike's board (`bfo_freq=40048000`, `xtal_filter_center=40012400`), the
 arithmetic put CW at a 700 Hz pitch about 31 Hz high (21 Hz of rounding,
-10 Hz of codec) and SSB about 12 Hz low. Neither has been measured on
-air since: that is the open check, on a GPS-locked receiver.
+10 Hz of codec) and SSB about 12 Hz low. Checked afterwards on remote
+receivers (November 2026), transmit appears on frequency. A GPS-locked
+receiver (a KiwiSDR advertising GPS) would put a number on it to the
+hertz.
 
 With `codec_rate=96027` WWV read 5,000,002, 10,000,004, 15,000,004 and
 20,000,004: a few hertz high on every band, not the 0 expected. Back to
