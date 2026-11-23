@@ -589,7 +589,8 @@ coming off a CW session with a 300 Hz filter engaged would have handed the
 decoder a fraction of FT8's ~2.7 kHz window, with poor decodes as the only
 symptom. Selecting DIGITAL — from the panel, over CAT, or by WSJT-X itself
 — now takes that filter out of circuit and holds it out, and gives it back
-when the mode changes again
+on the way back to CW or CWR, the only modes it is in circuit in (USB and
+LSB hold it out too)
 ([`dsp_design_notes/rx_uac_out_digital_mode_bandwidth.md`](dsp_design_notes/rx_uac_out_digital_mode_bandwidth.md)
 §11).
 
