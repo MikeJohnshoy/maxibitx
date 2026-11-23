@@ -29,6 +29,10 @@ measures:
     a mark starts at 60% and ends at 40% of the key-down level, so fading
     doesn't split it, and the dots are found by clustering the marks'
     lengths, so a stray fragment isn't taken for one.
+  - Where the sidebands come from: 43 ms frames inside long elements,
+    centred on the edges, and in the gaps, compared at 150, 338 and 600
+    Hz. Keying sidebands are only on the edges; phase noise or hum, of
+    the transmitter or the receiver, is there in steady key-down too.
   - Rise and fall times, 10% to 90% of the key-down level, the median over
     the elements, and chirp: the frequency in the first 3 ms after each
     element reaches 90%, against the rest of it. Measured on the widest
@@ -104,6 +108,11 @@ MARK_ON, MARK_OFF = 0.6, 0.4       # a mark starts above, and ends below, these 
 TIMING_HZ = (1200, 600, 300, 150)  # rise and fall: the widest the noise allows
 TIMING_SNR_DB = 26                 # the 10% point is -20 dB, plus 6 dB of margin
 CHIRP_EARLY_MS = 3.0
+SPLIT_FRAME = 256                  # steady key-down against the edges: 43 ms, 23 Hz bins
+SPLIT_MARGIN_S = 0.010             # steady frames keep this clear of either edge
+SPLIT_OFFSETS_HZ = (150, 338, 600)
+SPLIT_CLEAR_DB = 3                 # this close to the gaps: nothing there
+SPLIT_KEYING_DB = 10               # the edges this far above steady key-down: keying
 
 # cw.c's ramp: DL1YCF's coefficients for sin(2 pi k y), k = 1 to 5.
 DL1YCF_COEFF = (-0.12182865361171612, -0.018557469249199286, -0.0009378783245428506,
@@ -412,6 +421,43 @@ def confirmed(marks, guide):
     return out
 
 
+def steady_vs_edges(b, marks):
+    """Where the sidebands come from. Short frames (SPLIT_FRAME samples)
+    taken inside long elements, at least SPLIT_MARGIN_S from either edge;
+    centred on each rising edge; and inside gaps, as the noise. Keying
+    sidebands are only on the edges; phase noise or hum, the transmitter's
+    or the receiver's, are there in steady key-down too. Returns
+    {offset: (steady, edge, gap)} in dBc of the median frame's power, both
+    sides averaged, and how many frames of each; None without steady
+    frames."""
+    n, margin = SPLIT_FRAME, int(SPLIT_MARGIN_S * RATE)
+    w = bh4(n)
+    f = np.fft.fftshift(np.fft.fftfreq(n, 1 / RATE))
+    spec = lambda s: np.abs(np.fft.fftshift(np.fft.fft(b[s:s + n] * w))) ** 2
+    steady, edge, gap = [], [], []
+    for m in marks:
+        u, d = int(m["up50"]), int(m["down50"])
+        if d - u - 2 * margin >= n:
+            steady.append(spec(u + margin))
+        if u - n // 2 >= 0 and u + n // 2 <= len(b):
+            edge.append(spec(u - n // 2))
+    for a, z in zip(marks, marks[1:]):
+        g0, g1 = int(a["down50"]) + margin, int(z["up50"]) - margin
+        if g1 - g0 >= n:
+            gap.append(spec(g0))
+    if not steady or not edge or not gap:
+        return None, (len(steady), len(edge), len(gap))
+    # Medians over the frames: a burst of interference in one frame
+    # mustn't decide it, and fading moves every class alike.
+    st, ed, gp = (np.median(np.array(v), axis=0) for v in (steady, edge, gap))
+    ref = st[np.abs(f) <= 30].max()
+    out = {}
+    for hz in SPLIT_OFFSETS_HZ:
+        sel = np.abs(np.abs(f) - hz) <= 12
+        out[hz] = tuple(10 * math.log10(v[sel].mean() / ref + 1e-30) for v in (st, ed, gp))
+    return out, (len(steady), len(edge), len(gap))
+
+
 def chirp(b, marks):
     """Median of (frequency in the first CHIRP_EARLY_MS after 90%) minus
     (the rest of the mark), over marks long enough, in Hz; and how many."""
@@ -504,6 +550,24 @@ def report(x, f0, dial, label):
               f"{MARK_HZ} Hz, {len(guide)} elements)")
     else:
         print(f"  speed: too few elements found ({len(guide)})")
+
+    split, counts = steady_vs_edges(b, guide)
+    if split is None:
+        print(f"  steady key-down against the edges: not enough frames ({counts[0]} inside "
+              f"elements, {counts[1]} on edges, {counts[2]} in gaps; elements need to be "
+              f"{(SPLIT_FRAME / RATE + 2 * SPLIT_MARGIN_S) * 1000:.0f} ms long)")
+    else:
+        print(f"  steady key-down against the edges, median frame in 23 Hz bins ({counts[0]} "
+              f"frames inside elements, {counts[1]} on edges, {counts[2]} in gaps):")
+        for hz, (st, ed, gp) in split.items():
+            if st <= gp + SPLIT_CLEAR_DB:
+                verdict = ("keying: only on the edges" if ed > gp + SPLIT_CLEAR_DB
+                           else "nothing above the noise")
+            elif ed >= st + SPLIT_KEYING_DB:
+                verdict = f"mostly keying: {ed - st:.0f} dB stronger on the edges"
+            else:
+                verdict = "there in steady key-down too: phase noise or hum, either end"
+            print(f"    {hz:4d} Hz  steady {st:6.1f}  edges {ed:6.1f}  gaps {gp:6.1f} dBc   {verdict}")
 
     # The widest band the noise allows, and that leaves out any other
     # station: its filter reaches to 1.25 times the width.
