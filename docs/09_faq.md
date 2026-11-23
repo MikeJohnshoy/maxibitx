@@ -753,6 +753,6 @@ board's honest rated output; voice power never checked on a wattmeter;
 daemon; remote element keying absent (CW text works, over TCI too);
 TCI's CW text not yet tried on the air (its I/Q is, with sdrOxide, and
 its audio both ways, with WSJT-X on a zBitx); the transmit frequency
-not yet checked on a GPS-locked receiver since clk1's trims; and
+checked on remote receivers but not yet on a GPS-locked one; and
 on the zBitx, SSB from the microphone and anything for the RP2040 front
 panel.
