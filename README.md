@@ -36,17 +36,6 @@ The whole daemon is about 14,000 lines of C in 36 files; a big part of that is
 in a collection of external interfaces. These provide a variety of ways to connect
 applications to maxibitx.
 
-| Job | Files |
-|---|---|
-| Startup and shutdown | `maxibitx.c` |
-| Radio state: tuning, RIT, mode, T/R switching | `radio.c` |
-| Hardware: board profiles, GPIO, I2C, si5351 clocks, LPF relays, board calibration | `radio_hw.c`, `gpio.c`, `i2c.c`, `si5351v2.c`, `hw_settings.c` |
-| Real-time audio thread and WM8731 codec | `sound.c` |
-| RX: I/Q mixing, anti-aliasing, demodulation | `vfo.c`, `antialias.c`, `rx_audio.c`, `rx_filter.c` |
-| TX: CW keying, shared FFT TX pipeline | `cw.c`, `key_input.c`, `keyer.c`, `morse.c`, `tx_pipeline.c`, `fft_filter.c` |
-| USB audio rate conversion | `decim48k.c`, `upsample48k.c` |
-| External interfaces | `interfaces/hamlib.c` (rigctld), `interfaces/hpsdr_p1.c` (HPSDR Protocol 1), `interfaces/usb_gadget.c` (USB audio + Kenwood CAT), `interfaces/iq_stream.c` (I/Q for the control panel), `interfaces/tci.c`, `tci_cw.c`, `tci_stream.c`, `tci_ws.c` (TCI: control, audio, I/Q and CW text over a WebSocket) |
-
 ## Features & Capabilities
 
 ### Hardware & Architecture
@@ -79,6 +68,17 @@ The DSP is bench-tested on its own (`make test-fft-filter`,
 `test-keyer`, `test-keyer-straight`), and so are the TCI
 server (`test-tci-ws`, `test-tci`, over loopback) and the board layer
 (`test-radio-hw`, with GPIO and I2C stubbed), without any hardware attached.
+
+| Job | Files |
+|---|---|
+| Startup and shutdown | `maxibitx.c` |
+| Radio state: tuning, RIT, mode, T/R switching | `radio.c` |
+| Hardware: board profiles, GPIO, I2C, si5351 clocks, LPF relays, board calibration | `radio_hw.c`, `gpio.c`, `i2c.c`, `si5351v2.c`, `hw_settings.c` |
+| Real-time audio thread and WM8731 codec | `sound.c` |
+| RX: I/Q mixing, anti-aliasing, demodulation | `vfo.c`, `antialias.c`, `rx_audio.c`, `rx_filter.c` |
+| TX: CW keying, shared FFT TX pipeline | `cw.c`, `key_input.c`, `keyer.c`, `morse.c`, `tx_pipeline.c`, `fft_filter.c` |
+| USB audio rate conversion | `decim48k.c`, `upsample48k.c` |
+| External interfaces | `interfaces/hamlib.c` (rigctld), `interfaces/hpsdr_p1.c` (HPSDR Protocol 1), `interfaces/usb_gadget.c` (USB audio + Kenwood CAT), `interfaces/iq_stream.c` (I/Q for the control panel), `interfaces/tci.c`, `tci_cw.c`, `tci_stream.c`, `tci_ws.c` (TCI: control, audio, I/Q and CW text over a WebSocket) |
 
 ## Building and running
 
