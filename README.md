@@ -1,7 +1,5 @@
 # maxibitx
 
-NOTE: THIS BRANCH RUNS ON BOTH ZBITX AND SBITX HARDWARE
-
 A headless, all-mode (CW, USB, LSB, DIGITAL) radio daemon for the
 Raspberry Pi inside an [sBitx](https://github.com/afarhan/sbitx). It
 brings up the radio hardware, runs the receive and transmit signal
@@ -13,11 +11,9 @@ provide the display and controls, over the network or USB.
 
 **sbitx** is Ashhar Farhan's (VU2ESE) software for his radio. His software was forked
 to https://github.com/drexjj/sbitx/tree/main and greatly refined and extended.  **sbitx**
-now has many new features, and the codebase and file size has grown. `sbitx.c` and`sbitx_gtk.c`
+gained many new features, and the codebase and file size have grown. `sbitx.c` and 'sbitx_gtk.c`
 alone are more than 3,000 and 12,000 lines respectively, with the GTK user interface, DSP and
-hardware initialization and control intertwined. That coupling has real costs.
-It can be difficult for a new developer to find and understand how things work,
-and changes carry a risk of unintended impacts.
+hardware initialization and control intertwined. 
 
 **minibitx** asked how little code it takes to run the sBitx hardware
 well. It pulled out only what the hardware needs and refined each
@@ -32,7 +28,7 @@ and no UI runs in the process. Anything an external display or controller needs
 goes through a narrow, documented interface
 ([`docs/06_api.md`](docs/06_api.md)).
 
-The whole daemon is about 11,500 lines of C in 30 files; a big part of that is 
+The whole daemon is about 14,000 lines of C in 36 files; a big part of that is 
 in a collection of external interfaces. These provide a variety of ways to connect
 applications to maxibitx.
 
@@ -65,6 +61,7 @@ server (`test-tci-ws`, `test-tci`, over loopback) and the board layer
 ### Receive & Transmit DSP
 - **All-mode transceiver pipeline:** Full support for **CW**, **USB**, **LSB**, and **DIGITAL** modes across all nine HF bands (80m–10m).
 - **Refined CW keying:** Supports straight keys and iambic paddles with proper element weighting, clean envelope shaping, no dropped leading/trailing elements, and ~5 W output across all bands.
+- CW keying passes ARRL's Clean Signal Initiative mask at 40 WPM
 - **Timing-adaptive CW decoding:** Fundamentally timing-based decoder that adapts to character/element timing variations and shifting signal conditions.
 - **Onboard demodulation & filtering:** Dedicated CW, USB, and LSB demodulators drive the speaker directly alongside audio routing for digital mode software.
 - **Verified voice & digital operation:** Proven on-air with SSB voice and two-way FT8 contacts via WSJT-X over the USB audio gadget.
@@ -78,6 +75,7 @@ server (`test-tci-ws`, `test-tci`, over loopback) and the board layer
 
 ### Built-in Verification
 - **Hardware-free bench suite:** `make test` runs isolated unit and loopback tests across the DSP chains (`tx_pipeline`, `rx_filter`, `rx_audio`, CW/keyer), TCI WebSocket server, and stubbed board hardware layers with no radio attached.
+- **Measure your own radio** xtal_sweep, lpf_sweep, spur_survey, cw_shape and capture_check. Tools for characterising the hardware itself
 
 ## Building and running
 
