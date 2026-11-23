@@ -40,14 +40,14 @@ applications to maxibitx.
 
 ### Hardware & Architecture
 - **Multi-board support:** Runs natively on **sBitx** (DE, v2, v3) and **zBitx** hardware from a single codebase, configured via `data/hw_settings.ini`.
-- **Modular headless architecture:** Separates real-time DSP and hardware control (~11,500 lines of C across 30 focused files) from the UI so display or control changes stay cleanly isolated.
+- **Modular headless architecture:** Separates real-time DSP and hardware control from the UI so display or control changes stay cleanly isolated.
 - **Native Linux kernel I/O:** Uses Linux kernel GPIO character devices and native I2C drivers for clean, deterministic hardware control.
 
 ### Receive & Transmit DSP
 - **All-mode transceiver pipeline:** Full support for **CW**, **USB**, **LSB**, and **DIGITAL** modes across all nine HF bands (80m–10m).
 - **Refined CW keying:** Supports straight keys and iambic paddles with proper element weighting, clean envelope shaping, no dropped leading/trailing elements, and ~5 W output across all bands.
-- CW keying passes ARRL's Clean Signal Initiative mask at 40 WPM
-- **Timing-adaptive CW decoding:** Fundamentally timing-based decoder that adapts to character/element timing variations and shifting signal conditions.
+- CW keying designed to pass ARRL's Clean Signal Initiative mask at 40 WPM
+- **Timing-adaptive CW decoding:**   Timing-based decoder that adapts to character/element timing variations and shifting signal conditions.
 - **Onboard demodulation & filtering:** Dedicated CW, USB, and LSB demodulators drive the speaker directly alongside audio routing for digital mode software.
 - **Verified voice & digital operation:** Proven on-air with SSB voice and two-way FT8 contacts via WSJT-X over the USB audio gadget.
 
