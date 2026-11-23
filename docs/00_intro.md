@@ -1634,7 +1634,13 @@ off and drops PTT, unless the local key is holding the transmitter.
 - **Remote PTT in CW sends no carrier** unless a test tone is on. CW from
   a computer goes as text instead; there is no remote keying of
   individual elements.
-- **The zBitx** has no microphone SSB yet.
+- **Linearity is unmeasured.** How hard the PA can be driven before
+  two-tone IMD spreads outside the channel, and so the board's honest
+  PEP rating, is still to be found
+  ([`tx_test_tones_and_alc.md`](dsp_design_notes/tx_test_tones_and_alc.md)).
+- **TCI's CW text** hasn't been tried on the air.
+- **The zBitx** has no microphone SSB yet, and its RP2040 front panel
+  isn't driven.
 
 ---
 
