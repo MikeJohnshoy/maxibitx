@@ -59,24 +59,25 @@ server (`test-tci-ws`, `test-tci`, over loopback) and the board layer
 
 ### Hardware & Architecture
 - **Multi-board support:** Runs natively on **sBitx** (DE, v2, v3) and **zBitx** hardware from a single codebase, configured via `data/hw_settings.ini`.
-- **Headless, decoupled design:** Separates real-time DSP and hardware control (~11,500 lines of modular C across 30 files) from the UI, preventing interface changes from impacting radio stability.
-- **Direct kernel interfaces:** Replaces legacy `wiringPi` and bit-banged I2C with Linux kernel GPIO character devices and native I2C drivers.
+- **Modular headless architecture:** Separates real-time DSP and hardware control (~11,500 lines of C across 30 focused files) from the UI so display or control changes stay cleanly isolated.
+- **Native Linux kernel I/O:** Uses Linux kernel GPIO character devices and native I2C drivers for clean, deterministic hardware control.
 
 ### Receive & Transmit DSP
 - **All-mode transceiver pipeline:** Full support for **CW**, **USB**, **LSB**, and **DIGITAL** modes across all nine HF bands (80m–10m).
-- **Onboard demodulation & filtering:** Built-in CW, USB, and LSB demodulators drive the radio's speaker directly alongside USB audio output for digital mode apps.
-- **Responsive CW keying:** Supports straight keys and iambic paddles with clean envelope shaping and ~5 W output across all bands.
-- **Verified digital & voice operation:** Proven on-air with SSB voice and two-way FT8 contacts via WSJT-X over the USB audio gadget.
+- **Refined CW keying:** Supports straight keys and iambic paddles with proper element weighting, clean envelope shaping, no dropped leading/trailing elements, and ~5 W output across all bands.
+- **Timing-adaptive CW decoding:** Fundamentally timing-based decoder that adapts to character/element timing variations and shifting signal conditions.
+- **Onboard demodulation & filtering:** Dedicated CW, USB, and LSB demodulators drive the speaker directly alongside audio routing for digital mode software.
+- **Verified voice & digital operation:** Proven on-air with SSB voice and two-way FT8 contacts via WSJT-X over the USB audio gadget.
 
 ### External Interfaces & Control
-- **HPSDR Protocol 1:** Streams wideband baseband I/Q over UDP to desktop SDR clients like **SDR Console** and **SparkSDR**.
-- **Transceiver Control Interface (TCI):** Built-in WebSocket server (port `50001`) carrying rig control, bidirectional audio, I/Q streams, and CW text over a single connection for **sdrOxide**, **JTDX**, **WSJT-X Improved**, loggers, and Hamlib's TCI backend.
+- **HPSDR Protocol 1:** Streams wideband baseband I/Q over UDP to desktop SDR clients such as **SDR Console** and **SparkSDR**.
+- **Transceiver Control Interface (TCI):** Built-in WebSocket server (port `50001`) carrying rig control, bidirectional audio, I/Q streams, and CW text over one connection for **sdrOxide**, **JTDX**, **WSJT-X Improved**, loggers, and Hamlib's TCI backend.
 - **Hamlib & Kenwood CAT:** Network rig control via `rigctld`-compatible TCP (port `4532`) plus Kenwood TS-480 CAT emulation over USB serial.
-- **USB Audio & Serial Gadget:** Presents the radio as a standard USB sound card and serial port to a connected host computer for single-cable digital mode operation.
-- **Standalone Touch Control Panel:** Includes `tools/rigctl_panel.py`, a lightweight external GUI providing tuning, mode/filter selection, volume/mic gain, and a live spectrum and waterfall display.
+- **USB Audio & Serial Gadget:** Presents the radio as a standard USB sound card and serial port to a host computer for single-cable digital operation.
+- **Standalone Touch Control Panel:** Includes `tools/rigctl_panel.py`, a lightweight external GUI offering tuning, mode/filter selection, volume/mic gain, and a live spectrum and waterfall display.
 
 ### Built-in Verification
-- **Hardware-free bench suite:** `make test` runs isolated unit and loopback tests across the DSP chains (`tx_pipeline`, `rx_filter`, `rx_audio`, CW/keyer), TCI WebSocket server, and stubbed board hardware layers without needing an attached radio.
+- **Hardware-free bench suite:** `make test` runs isolated unit and loopback tests across the DSP chains (`tx_pipeline`, `rx_filter`, `rx_audio`, CW/keyer), TCI WebSocket server, and stubbed board hardware layers with no radio attached.
 
 ## Building and running
 
