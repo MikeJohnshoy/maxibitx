@@ -22,8 +22,8 @@
 //   CW's tone at the frequency tx_pipeline.h's TX_IF_SHIFT_CW_BINS
 //   derivation predicts, and reports the rounding residual against the
 //   *old* direct-NCO scheme's fixed, much larger 700Hz one (cw.c's
-//   TX_IF_OFFSET_HZ comment / docs/03_tx_processing_pipeline.md's "Known
-//   limitations").
+//   TX_IF_OFFSET_HZ comment /
+//   docs/dsp_design_notes/tx_direct_to_dac_cw_history.md).
 // Case B - image rejection at the FFT-domain sideband-zero step: the
 //   central docs/ARCHITECTURE.md §4 claim, CW's own slice of it - same
 //   "without the zero, both sides survive; with it, one drops hard"
@@ -320,7 +320,7 @@ int main(void)
 	       TX_IF_SHIFT_SSB_HZ, TX_IF_SHIFT_SSB_BINS, TX_IF_SHIFT_SSB_BINS * TX_PIPELINE_BIN_HZ,
 	       TX_IF_SHIFT_SSB_BINS * TX_PIPELINE_BIN_HZ - TX_IF_SHIFT_SSB_HZ);
 	printf("(compare: the old direct-NCO scheme's fixed residual was %d Hz - cw.c's TX_IF_OFFSET_HZ,\n", CW_PITCH_HZ);
-	printf(" corrected for explicitly in radio_tx_apply()'s clk2 formula - see docs/03_tx_processing_pipeline.md)\n\n");
+	printf(" corrected for explicitly in radio_tx_apply()'s clk2 formula - see docs/dsp_design_notes/tx_direct_to_dac_cw_history.md)\n\n");
 
 	// --- Case A: IF placement accuracy --------------------------------
 	{
