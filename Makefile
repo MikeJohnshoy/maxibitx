@@ -9,7 +9,7 @@ CC      := gcc
 # (src/interfaces/: hpsdr_p1, usb_gadget, iq_stream, hamlib, tci) and the
 # core ones (src/) unqualified, wherever it sits. The split is where the
 # files sit, not an architectural boundary
-# (docs/04_remote_control_and_iq_output.md).
+# (docs/00_intro.md §3).
 # -lfftw3f: single-precision FFTW, for fft_filter.c's transmit and receive
 # filters (fft_filter.h says why single precision).
 # The CW keyer: keyer.c offers every mode (straight, bug, ultimatic, iambic
