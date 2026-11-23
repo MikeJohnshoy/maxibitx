@@ -83,7 +83,7 @@ int radio_tx_freq(void) {
 
 // 'Master' RIGHT channel level during TX - the exciter feed
 // (sound_set_tx_drive()); LEFT is the local speaker and is never touched
-// here. Why 95: docs/03_tx_processing_pipeline.md, TX_MASTER_VOL.
+// here. Why 95: docs/00_intro.md §7, "Setting power".
 #define TX_MASTER_VOL 95
 
 // The CW decoder learns one sender's timing. When the receiver moves far
@@ -322,7 +322,7 @@ int radio_get_clk1_divider(void) {
 
 // TX transitions run on this dedicated worker thread rather than
 // whatever thread calls radio_set_tx() - see
-// docs/05_process_and_threading_model.md for why (short version: cw.c
+// docs/dsp_design_notes/interfaces_and_codec_bringup_notes.md §5 (short version: cw.c
 // calls radio_set_tx() from the real-time audio thread, which must
 // never block on the ~20ms+ PTT/relay/ALSA sequence below).
 static pthread_mutex_t tx_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -485,7 +485,7 @@ int radio_set_tx(int tx_on) {
 
   in_tx = tx_on ? 1 : 0; // set synchronously so other threads' guards
                          // (cw_tx_active(), network MOX) see it at once -
-                         // docs/05_process_and_threading_model.md
+                         // interfaces_and_codec_bringup_notes.md §5
 
   pthread_mutex_lock(&tx_mutex);
   tx_pending_on = tx_on;
