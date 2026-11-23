@@ -569,8 +569,8 @@ static int handle_line(int fd, char *line)
         } else if (strcmp(func_name, "NARROW") == 0) {
             rx_audio_set_narrow_filter(val != 0);
             send_rprt(fd, 0);
-            // Logged from the readback, not from val: DIGITAL holds stage 3
-            // out of circuit whatever is requested (rx_audio.h), and a line
+            // Logged from the readback, not from val: every mode but CW and
+            // CWR holds stage 3 out of circuit whatever is requested (rx_audio.h), and a line
             // claiming "on" for a filter the operator cannot hear is the kind
             // of thing that costs an evening.
             printf("rigctl: U NARROW %d -> narrow filter %s%s\n", val,
