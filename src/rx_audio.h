@@ -79,8 +79,8 @@ int rx_audio_get_narrow_filter(void);
 // Suppress stage 3 regardless of the request above, for a mode where a
 // ~300Hz filter centered on the CW pitch is not a narrow choice but a
 // wrong one. radio.c's radio_set_mode() owns this: it is called on every
-// mode change with (mode == RADIO_MODE_DIGITAL), which is the only mode
-// that inhibits it today.
+// mode change, inhibiting in every mode but CW and CWR - USB and LSB,
+// whose voice a 300Hz slice makes unreadable, and DIGITAL.
 //
 // Why the daemon has to enforce this rather than the control panel greying
 // a checkbox: DIGITAL's whole point is uac_out (rx_audio_process() below),
