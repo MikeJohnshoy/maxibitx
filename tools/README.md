@@ -44,7 +44,10 @@ comparison; its speed and weighting; and, when it is strong enough, its
 rise and fall times and chirp. It records 30 s, takes the strongest
 keyed signal near the dial (or `--offset`), and prints each mask point,
 each side, as PASS, FAIL, "can't tell" (within 6 dB of the noise) or
-"another signal?" (something stronger than −20 dBc past 338 Hz). The
+"another signal?" (something stronger than −20 dBc past 338 Hz). A peak
+beyond 150 Hz standing 10 dB above the same offset on the carrier's
+other side is another station, whatever its level, since keying
+sidebands come in mirrored pairs: it is named and left out of the mask. The
 carrier's signal-to-noise and how far down the noise lets it see come
 first: the −60 dBc point needs a signal about 65 dB above the noise in
 2.5 kHz. `--plot` draws the spectrum with the masks and the noise level
