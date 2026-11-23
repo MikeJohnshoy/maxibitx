@@ -40,8 +40,8 @@
 // ordinary-priority threads, never the SCHED_FIFO audio thread - so a
 // plain mutex around it is fine here; it would not be fine around the
 // sample ring buffer, which the audio thread writes: a mutex shared with
-// it is a priority-inversion trap (docs/04_remote_control_and_iq_output.md,
-// "Outbound (I/Q)").
+// it is a priority-inversion trap
+// (docs/dsp_design_notes/interfaces_and_codec_bringup_notes.md §2).
 
 #include "iq_stream.h"
 #include <arpa/inet.h>
