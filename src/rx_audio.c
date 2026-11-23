@@ -402,8 +402,8 @@ static double rx_volume = 0.03;
 static int narrow_filter_enabled = 1;
 
 // Set by radio.c's radio_set_mode() for a mode where a ~300Hz filter
-// centered on the CW pitch is wrong rather than merely narrow - DIGITAL,
-// today the only one. Kept separate from the operator's request above so
+// centered on the CW pitch is wrong rather than merely narrow - every mode
+// but CW and CWR. Kept separate from the operator's request above so
 // that leaving such a mode restores whatever the operator had chosen,
 // instead of silently clearing it.
 //
