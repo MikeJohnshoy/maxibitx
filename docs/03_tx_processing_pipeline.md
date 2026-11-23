@@ -566,11 +566,11 @@ calibrated — that is still an open item — or about whether
 
 ## Known limitations
 
-- **Transmit frequency not yet measured since clk1's trims.** The trims
-  put the carrier on the dial by arithmetic, to within about a hertz;
-  the transmit measurements so far predate them, and
-  `cal` and `codec_rate` with them. A check against a GPS-locked
-  receiver (a KiwiSDR advertising GPS) would close it: see
+- **Transmit frequency checked on remote receivers, not to the hertz.**
+  The clk1 trims put the carrier on the dial by arithmetic, to within
+  about a hertz, and remote receivers show it on frequency; a GPS-locked
+  receiver (a KiwiSDR advertising GPS) would measure it to the hertz:
+  see
   [`dsp_design_notes/tx_test_tones_and_alc.md`](dsp_design_notes/tx_test_tones_and_alc.md),
   "Frequency calibration".
 - **Remote PTT in CW sends no carrier** (see "Keying and PTT") unless
