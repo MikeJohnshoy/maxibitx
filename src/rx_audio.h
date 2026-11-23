@@ -4,7 +4,7 @@
 // USB, LSB) through the wide image-reject filter, the narrow CW filter and
 // the AGC, to the local speaker and, before the volume, to WSJT-X and TCI.
 // Also the S-meter and SPOT's receive half. rx_audio.c's header has the
-// stages; docs/02_rx_processing_pipeline.md and
+// stages; docs/00_intro.md §6 and
 // docs/dsp_design_notes/rx_audio_demod_design.md the design.
 
 #ifndef RX_AUDIO_H
