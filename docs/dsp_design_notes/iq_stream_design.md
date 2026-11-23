@@ -10,7 +10,7 @@ localhost so far) or against real RF (only a synthetic tone).
 
 minibitx already exports baseband I/Q two ways - openHPSDR Protocol 1 UDP
 (`hpsdr_p1.c`) and USB Audio Class 2.0 (`usb_gadget.c`) - see
-[`../04_remote_control_and_iq_output.md`](../04_remote_control_and_iq_output.md).
+[`06_api.md`](../06_api.md).
 Both work fine for their intended audience (WSJT-X, Thetis, SDR Console,
 a UAC2 host), but neither is a good fit for `tools/rigctl_panel.py`
 wanting a live spectrum display:
