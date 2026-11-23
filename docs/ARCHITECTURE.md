@@ -1,6 +1,12 @@
 # maxibitx — architecture and design rationale
 
-Status: §10 steps 1-7 done. Step 1: this tree is minibitx's `src/`,
+**A historical record, not maintained.** This is how maxibitx was
+designed and built, step by step, from September 2026; later work is in
+the design notes. For how the system works now, read
+[`00_intro.md`](00_intro.md). Section references to this document from
+the code and the design notes remain valid.
+
+Status (at the time): §10 steps 1-7 done. Step 1: this tree is minibitx's `src/`,
 `docs/`, `data/`, and `tools/` carried over unchanged (only
 `src/maxibitx.c`'s filename and the Makefile's output binary name
 changed), confirmed building and running on real hardware. Step 2: the
