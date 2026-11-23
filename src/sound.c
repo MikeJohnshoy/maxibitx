@@ -83,10 +83,10 @@ static int rx_mute_by_switch = 1;
 #define LOCAL_SPEAKER_GAIN_PERCENT 100
 
 /* ------------------------------------------------------------------ */
-/*  TX sample scaling - see docs/03_tx_processing_pipeline.md          */
-/*  "Adjusting power levels" for what each constant means and the      */
-/*  bench data behind its value; hw_settings.h for the per-band        */
-/*  'scale' calibration table TX_SAMPLE_HEADROOM is anchored against   */
+/*  TX sample scaling - what each constant means, and the bench data  */
+/*  behind its value: docs/00_intro.md §7, "From the pipeline to the  */
+/*  exciter" and "Setting power"; hw_settings.h for the per-band      */
+/*  'scale' calibration table TX_SAMPLE_HEADROOM is anchored against  */
 /* ------------------------------------------------------------------ */
 #define TX_DRIVE 50
 #define TX_SAMPLE_HEADROOM (1000000000.0 / (TX_DRIVE * HW_DEFAULT_TX_SCALE))
@@ -94,7 +94,7 @@ static int rx_mute_by_switch = 1;
 #define TX_GAIN_CORRECTION 0.045
 // Fixed sidetone PCM peak (left channel only - never reaches the PA).
 // Deliberately independent of TX_GAIN_CORRECTION; see
-// docs/03_tx_processing_pipeline.md.
+// docs/00_intro.md §7, "Setting power".
 #define SIDETONE_PEAK_AMPLITUDE 10000000.0
 // The monitor's peak for a host's transmit audio (DIGITAL over the USB
 // gadget, or a TCI client's), 20 dB under SIDETONE_PEAK_AMPLITUDE: WSJT-X
