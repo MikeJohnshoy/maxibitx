@@ -845,7 +845,7 @@ int uac_is_active(void) { return uac_active; }
 /* =======================================================================
  * Kenwood TS-480-subset CAT over the gadget's CDC-ACM function
  * (acm.usb0). Command set and rationale:
- * docs/04_remote_control_and_iq_output.md; bench checklist:
+ * docs/06_api.md "Kenwood CAT", interfaces_and_codec_bringup_notes.md §3; bench checklist:
  * usb_gadget_OS_setup.md §13. A gadget serial port is one connection, so
  * this is one persistent reader thread that reopens the tty if it drops.
  * ======================================================================= */
@@ -912,8 +912,8 @@ static void cat_send(const char *s) {
 //
 // A get's console line only prints when the reply actually differs from
 // the last reply of the SAME kind, to avoid flooding the console with
-// FLRig's frequent status polling - see docs/04_remote_control_and_iq_output.md
-// "Kenwood-CAT emulation over USB" for why. Pass a `static char[]` local
+// FLRig's frequent status polling - see docs/06_api.md, "Kenwood CAT"
+// for the rule. Pass a `static char[]` local
 // to each call site (persists across calls, scoped to that command) as
 // `last`. Only used on the get side - a *set* always logs.
 static void cat_log_get(char *last, size_t last_size, const char *new_reply,
