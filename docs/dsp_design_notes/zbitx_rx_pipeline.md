@@ -9,7 +9,7 @@ from a numpy model of the code, not from the radio. Effects marked
 
 This follows the receive signal from the antenna to the speaker and to
 each external interface in the zBitx's own software, in the same way as
-[`../02_rx_processing_pipeline.md`](../02_rx_processing_pipeline.md) does
+[`00_intro.md`](../00_intro.md) §5 and §6 does
 for maxibitx. It then answers three questions: is the IF mixed to
 baseband to make I and Q, is the filtering right at each stage, and what
 in the chain costs performance.
