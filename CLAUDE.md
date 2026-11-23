@@ -23,20 +23,23 @@ Read `docs/code_comments.md` before editing comments. The short form:
 
 Every fix or feature that teaches something gets two parts: a short,
 current-tense comment in the code, and the story in the doc that covers
-that behavior. `docs/04_remote_control_and_iq_output.md`'s "Outbound
-status bytes" paragraph and the matching comment in `hpsdr_p1.c` are
-the model.
+that behavior. The "buzzsaw" status bytes in
+`docs/dsp_design_notes/interfaces_and_codec_bringup_notes.md` §2 and the
+matching comment in `hpsdr_p1.c` are the model.
 
 ## Where things are documented
 
 | Change touches | Update |
 |---|---|
-| RX signal chain, `rx_audio.c` | `docs/02_rx_processing_pipeline.md`, `docs/dsp_design_notes/` |
-| TX chain, `tx_pipeline.c`, `cw.c`, power | `docs/03_tx_processing_pipeline.md` |
-| rigctld, CAT, HPSDR, iq_stream, USB audio | `docs/06_api.md` (client view) and `docs/04_remote_control_and_iq_output.md` (implementation) |
-| Startup, threads, failure handling | `docs/05_process_and_threading_model.md` |
+| Hardware, GPIO, clocks, codec, knobs | `docs/00_intro.md` §4 (and `docs/08_troubleshooting_and_bringup.md` for what goes wrong) |
+| RX signal chain, `rx_audio.c` | `docs/00_intro.md` §5-§6 |
+| TX chain, `tx_pipeline.c`, `cw.c`, power | `docs/00_intro.md` §7 |
+| Files, startup, threads, failure handling | `docs/00_intro.md` §1 and §3 |
+| rigctld, CAT, HPSDR, iq_stream, USB audio, TCI | `docs/06_api.md` (client view) and `docs/00_intro.md` §3 |
+| Bench tests | `docs/00_intro.md` §8 |
+| The story behind a fix or a measurement | the design note that covers it, in `docs/dsp_design_notes/` |
 | Build, kernel, deployment | `README.md` ("Building and running"), `docs/dsp_design_notes/usb_gadget_OS_setup.md` |
-| A design decision or build-order step | `docs/ARCHITECTURE.md` §10 |
+| A new design study or decision | a note in `docs/dsp_design_notes/` (`ARCHITECTURE.md` is a closed record) |
 
 If a doc says something the code no longer does, fix the doc in the same
 change.
@@ -69,4 +72,4 @@ change.
   convert a file as a side effect of an edit.
 - The raw baseband I/Q is spectrally inverted (a station above the dial
   arrives at negative frequency). Consumers correct for it; `sound.c`
-  deliberately doesn't. See `docs/02_rx_processing_pipeline.md`.
+  deliberately doesn't. See `docs/00_intro.md` §5.
