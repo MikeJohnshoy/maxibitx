@@ -89,7 +89,7 @@ enum radio_tx_refusal radio_tx_refused(int *freq_hz);
 // a nonzero value, off for 0 (rigctld's j/J has no separate on/off - 0 Hz
 // is off). Applied immediately in RX; if called during TX, applied when RX
 // resumes. Reset to 0/off by radio_tune_to(). Reached via rigctld j/J
-// (docs/04_remote_control_and_iq_output.md).
+// (docs/06_api.md).
 void radio_set_rit(int hz);
 
 // The stored RIT offset (Hz), whether or not it's currently enabled - what
