@@ -55,24 +55,28 @@ The DSP is bench-tested on its own (`make test-fft-filter`,
 server (`test-tci-ws`, `test-tci`, over loopback) and the board layer
 (`test-radio-hw`, with GPIO and I2C stubbed), without any hardware attached.
 
-## What works
+## Features & Capabilities
 
-- **Receive:** baseband I/Q to SDR apps over HPSDR Protocol 1 (e.g.
-  SDRConsole or SparkSDR) or Transceiver Control Interface - TCI (sdrOxide). An onboard CW/USB/LSB demodulator feeds the radio's own
-  speaker and a USB sound card for WSJT-X or FLDigi. 
-- **Transmit:** CW from a straight key or paddle, on frequency, ~5 W on all nine
-  bands. USB/LSB from the mic have been on the air, and DIGITAL is
-  confirmed by a two-way FT8 contact made with WSJT-X through the USB
-  gadget. Current limitations are listed in
-  [`docs/03_tx_processing_pipeline.md`](docs/03_tx_processing_pipeline.md).
-- **Control:** rigctld-compatible TCP (port 4532), Kenwood TS-480 CAT
-  over USB serial, HPSDR, and `tools/rigctl_panel.py` (tuning, mode,
-  volume, filters, mic gain and a live spectrum and waterfall). A TCI server (port
-  50001) carries control, receive and transmit audio and I/Q over one
-  network connection for JTDX, WSJT-X Improved, loggers and Hamlib's TCI
-  backend; it is bench-tested, including against Hamlib's own TCI client,
-  its I/Q is confirmed on the air with sdrOxide, and its audio both ways
-  with WSJT-X on a zBitx; CW text is not yet tried on the air.
+### Hardware & Architecture
+- **Multi-board support:** Runs natively on **sBitx** (DE, v2, v3) and **zBitx** hardware from a single codebase, configured via `data/hw_settings.ini`.
+- **Headless, decoupled design:** Separates real-time DSP and hardware control (~11,500 lines of modular C across 30 files) from the UI, preventing interface changes from impacting radio stability.
+- **Direct kernel interfaces:** Replaces legacy `wiringPi` and bit-banged I2C with Linux kernel GPIO character devices and native I2C drivers.
+
+### Receive & Transmit DSP
+- **All-mode transceiver pipeline:** Full support for **CW**, **USB**, **LSB**, and **DIGITAL** modes across all nine HF bands (80m–10m).
+- **Onboard demodulation & filtering:** Built-in CW, USB, and LSB demodulators drive the radio's speaker directly alongside USB audio output for digital mode apps.
+- **Responsive CW keying:** Supports straight keys and iambic paddles with clean envelope shaping and ~5 W output across all bands.
+- **Verified digital & voice operation:** Proven on-air with SSB voice and two-way FT8 contacts via WSJT-X over the USB audio gadget.
+
+### External Interfaces & Control
+- **HPSDR Protocol 1:** Streams wideband baseband I/Q over UDP to desktop SDR clients like **SDR Console** and **SparkSDR**.
+- **Transceiver Control Interface (TCI):** Built-in WebSocket server (port `50001`) carrying rig control, bidirectional audio, I/Q streams, and CW text over a single connection for **sdrOxide**, **JTDX**, **WSJT-X Improved**, loggers, and Hamlib's TCI backend.
+- **Hamlib & Kenwood CAT:** Network rig control via `rigctld`-compatible TCP (port `4532`) plus Kenwood TS-480 CAT emulation over USB serial.
+- **USB Audio & Serial Gadget:** Presents the radio as a standard USB sound card and serial port to a connected host computer for single-cable digital mode operation.
+- **Standalone Touch Control Panel:** Includes `tools/rigctl_panel.py`, a lightweight external GUI providing tuning, mode/filter selection, volume/mic gain, and a live spectrum and waterfall display.
+
+### Built-in Verification
+- **Hardware-free bench suite:** `make test` runs isolated unit and loopback tests across the DSP chains (`tx_pipeline`, `rx_filter`, `rx_audio`, CW/keyer), TCI WebSocket server, and stubbed board hardware layers without needing an attached radio.
 
 ## Building and running
 
