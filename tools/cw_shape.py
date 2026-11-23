@@ -42,7 +42,10 @@ point says PASS, FAIL, "can't tell" when the level above the limit is
 within 6 dB of the noise (a sideband and the noise in the same bin add),
 or "another signal?" when something stronger
 than -20 dBc lies past 338 Hz - a neighbouring station, most likely;
-check the plot (--plot, needs matplotlib). Fading changes the carrier's
+check the plot (--plot, needs matplotlib). A peak beyond 150 Hz that
+stands 10 dB above the same offset on the carrier's other side is taken
+to be another station whatever its level - keying sidebands come in
+mirrored pairs - named, and left out of the mask. Fading changes the carrier's
 level between frames and smears the result; stronger and steadier is
 better. A measurement of real hardware ahead of ARRL's lab numbers, not
 in place of them.
@@ -57,7 +60,7 @@ splatter you are trying to measure.
 --simulate SHAPE makes a 96 kHz recording instead: bursts of dots at
 --wpm with gaps, 500 Hz above the dial, in noise --snr dB below the
 carrier in 2500 Hz, quantised as iq_stream.c sends it; --neighbour HZ
-adds a steady carrier that far from it, 6 dB weaker. SHAPE is dl1ycf
+adds a steady carrier that far from it, --neighbour-dbc (-6) dB from it. SHAPE is dl1ycf
 (cw.c's ramp, 9 ms), bh5 (cw.c's earlier ramp: the rising half of a
 Blackman-Harris window, 5 ms, with its 1.56 ms weighting hold) or hard
 (0.1 ms). docs/dsp_design_notes/tx_cw_keying_spectrum.md has the
@@ -91,6 +94,8 @@ NOISE_HZ = (1600, 2300)            # the noise is measured here, the quieter sid
 NOISE_PEAK_DB = 6                  # peak-held noise's peaks above its median
 CLEAR_DB = 6                       # a FAIL must stand this far above the noise
 NEIGHBOUR_DBC = -20                # stronger than this past 338 Hz: another station?
+ASYMMETRY_DB = 10                  # a peak this far above its mirror image: another station
+NEIGHBOUR_FROM_HZ = 150            # another station is looked for this far out and beyond
 MARK_HZ = 100                      # the envelope that finds the elements, either side
 TIMING_HZ = (1200, 600, 300, 150)  # rise and fall: the widest the noise allows
 TIMING_SNR_DB = 26                 # the 10% point is -20 dB, plus 6 dB of margin
@@ -119,7 +124,7 @@ def ramp(shape):
     return np.linspace(0, 1, 11), 0
 
 
-def simulate(shape, wpm, snr_db, seconds, neighbour_hz=None, seed=1):
+def simulate(shape, wpm, snr_db, seconds, neighbour_hz=None, neighbour_dbc=-6.0, seed=1):
     edge, hold = ramp(shape)
     dot = int(round(1.2 / wpm * IQ_RATE_HZ))
     key = np.zeros(int(seconds * IQ_RATE_HZ), dtype=bool)
@@ -144,8 +149,9 @@ def simulate(shape, wpm, snr_db, seconds, neighbour_hz=None, seed=1):
     n = np.arange(len(env))
     amp = 10 ** (-30 / 20)                      # carrier at -30 dBFS
     sig = amp * env * np.exp(2j * np.pi * 500.0 * n / IQ_RATE_HZ)
-    if neighbour_hz:                            # a steady carrier, 6 dB weaker
-        sig += 0.5 * amp * np.exp(2j * np.pi * (500.0 + neighbour_hz) * n / IQ_RATE_HZ)
+    if neighbour_hz:                            # a steady carrier, neighbour_dbc from it
+        sig += 10 ** (neighbour_dbc / 20) * amp * np.exp(
+            2j * np.pi * (500.0 + neighbour_hz) * n / IQ_RATE_HZ)
     rng = np.random.default_rng(seed)
     sigma = amp / math.sqrt(10 ** (snr_db / 10) * 2500.0 / IQ_RATE_HZ)
     sig += sigma / math.sqrt(2) * (rng.standard_normal(len(n)) + 1j * rng.standard_normal(len(n)))
@@ -258,7 +264,7 @@ def spectra(b):
         avg += p
         n += 1
     f = np.fft.fftshift(np.fft.fftfreq(FRAME, 1 / RATE))
-    ref = peak.max()
+    ref = peak[np.abs(f) <= RECENTRE_HZ].max()   # the carrier, not a stronger neighbour
     return f, 10 * np.log10(peak / ref + 1e-30), avg / max(n, 1), ref, float(np.sum(w * w))
 
 
@@ -274,10 +280,46 @@ def noise_estimate(f, held, avg):
     return best
 
 
-def beyond(f, v, hz, side):
+def neighbours(f, held, noise_peak):
+    """Other stations: a peak beyond NEIGHBOUR_FROM_HZ that stands
+    ASYMMETRY_DB above the strongest level at its mirror image, the same
+    offset on the carrier's other side, and clear of the noise. Keying
+    sidebands are an amplitude modulation, so they come in mirrored pairs,
+    lobes and nulls alike; a peak on one side only is something else.
+    Returns (excluded, peaks): a mask of the bins it covers - out to where
+    it is within 3 dB of its mirror - and each one's (offset, dBc)."""
+    n = len(f)
+    mirror = np.full(n, -np.inf)
+    for k in range(1, n):
+        m = n - k                                      # the bin at -f[k]
+        mirror[k] = held[max(m - 2, 1):min(m + 3, n)].max()
+    far = np.abs(f) >= NEIGHBOUR_FROM_HZ
+    lead = far & (held - mirror > 3)
+    excluded = np.zeros(n, dtype=bool)
+    peaks = []
+    k = 0
+    while k < n:
+        if not lead[k]:
+            k += 1
+            continue
+        end = k
+        while end + 1 < n and lead[end + 1]:
+            end += 1
+        span = np.arange(k, end + 1)
+        top = span[np.argmax(held[span])]
+        if held[top] - mirror[top] >= ASYMMETRY_DB and held[top] > noise_peak + CLEAR_DB:
+            excluded[span] = True
+            peaks.append((float(f[top]), float(held[top])))
+        k = end + 1
+    return excluded, peaks
+
+
+def beyond(f, v, hz, side, excluded=None):
     """The strongest level more than hz from the carrier on one side, within
-    SEARCH_HZ, and where it is."""
+    SEARCH_HZ and outside excluded, and where it is."""
     sel = (f > hz) & (f <= SEARCH_HZ) if side > 0 else (f < -hz) & (f >= -SEARCH_HZ)
+    if excluded is not None:
+        sel &= ~excluded
     i = np.flatnonzero(sel)[np.argmax(v[sel])]
     return float(v[i]), float(f[i])
 
@@ -425,13 +467,18 @@ def report(x, f0, dial, label):
     print(f"  carrier {snr(2500):.1f} dB above the noise in 2500 Hz; the noise, held at its "
           f"peak, reaches about {noise_peak:.1f} dBc, so nothing below that can be seen")
 
+    excluded, others_found = neighbours(f, held, noise_peak)
+    for at, v in others_found:
+        if abs(at) <= SEARCH_HZ:
+            print(f"  another signal at {at:+.0f} Hz ({v:.1f} dBc), with nothing like it the "
+                  f"other side of the carrier: left out of the mask (check the plot)")
     print(f"  keying sidebands, strongest beyond each offset, within {SEARCH_HZ} Hz:")
     print(f"  {'':22s}  {'below the carrier':>24s}   {'above the carrier':>24s}")
     for name, pts in (("CSI", CSI_MASK), ("DL1YCF", DL1YCF_EXTRA)):
         for hz, limit in pts:
             cols = []
             for side in (-1, 1):
-                v, at = beyond(f, held, hz, side)
+                v, at = beyond(f, held, hz, side, excluded)
                 cols.append(f"{v:6.1f} at {at:+6.0f} Hz {judge(v, at, limit, noise_peak):15s}")
             print(f"    {name:7s}{hz:5d} Hz {limit:5d} dBc   " + "  ".join(cols))
 
@@ -447,6 +494,7 @@ def report(x, f0, dial, label):
     # The widest band the noise allows, and that leaves out any other
     # station: its filter reaches to 1.25 times the width.
     others = np.abs(f[(np.abs(f) > 338) & (np.abs(f) <= KEEP_HZ) & (held > NEIGHBOUR_DBC)])
+    others = np.concatenate([others, [abs(at) for at, _ in others_found]])
     nearest = float(others.min()) if len(others) else None
     if nearest is not None:
         print(f"  another signal {nearest:.0f} Hz away: the timing below keeps clear of it")
@@ -531,6 +579,8 @@ def main():
                     help="--simulate's carrier to noise in 2500 Hz, dB")
     ap.add_argument("--neighbour", type=float,
                     help="--simulate: add a steady carrier this far from the signal, Hz")
+    ap.add_argument("--neighbour-dbc", type=float, default=-6.0,
+                    help="--simulate: the added carrier's level against the signal, dB")
     a = ap.parse_args()
 
     dial = None
@@ -542,12 +592,14 @@ def main():
         x = np.load(a.replay)
         label = os.path.basename(a.replay)
     else:
-        x = simulate(a.simulate, a.wpm, a.snr, a.seconds, a.neighbour)
+        x = simulate(a.simulate, a.wpm, a.snr, a.seconds, a.neighbour, a.neighbour_dbc)
         label = f"simulated {a.simulate}, {a.wpm:g} WPM, {a.snr:g} dB SNR"
     if a.save:
         np.save(a.save, x.astype(np.complex64))
         print(f"  recording saved to {a.save}")
-    f0 = locate(x, a.offset, a.search)
+    # A simulated signal is where simulate() put it, 500 Hz above the dial.
+    offset = a.offset if a.offset is not None or not a.simulate else 500.0
+    f0 = locate(x, offset, a.search)
     f, held, avg, noise_peak = report(x, f0, dial, label)
     if a.csv:
         write_csv(a.csv, f, held, avg)
