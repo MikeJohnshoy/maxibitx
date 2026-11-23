@@ -85,7 +85,8 @@ void cw_set_pitch(int hz) { (void)hz; }
 int rx_audio_set_narrow_pitch(int hz) { return hz; }
 int rx_audio_get_narrow_pitch(void) { return 700; }
 void rx_audio_set_demod(enum rx_demod d) { (void)d; }
-void rx_audio_inhibit_narrow_filter(int on) { (void)on; }
+static int narrow_inhibited = -1; // the last rx_audio_inhibit_narrow_filter()
+void rx_audio_inhibit_narrow_filter(int on) { narrow_inhibited = on; }
 static int decoder_resets = 0;
 void cw_decoder_reset(void) { decoder_resets++; }
 // SPOT's receive half: what the search "found" is set by each check.
@@ -254,6 +255,18 @@ int main(void) {
   tx(0);
   check(radio_set_clk1_divider(0) == 0 && radio_get_clk1_divider() == 18,
         "back in receive: automatic again");
+
+  printf("The narrow CW filter, by mode\n");
+  radio_set_mode(RADIO_MODE_CW);
+  check(narrow_inhibited == 0, "CW: in circuit");
+  radio_set_mode(RADIO_MODE_USB);
+  check(narrow_inhibited == 1, "USB: held out");
+  radio_set_mode(RADIO_MODE_CWR);
+  check(narrow_inhibited == 0, "CWR: in circuit");
+  radio_set_mode(RADIO_MODE_LSB);
+  check(narrow_inhibited == 1, "LSB: held out");
+  radio_set_mode(RADIO_MODE_DIGITAL);
+  check(narrow_inhibited == 1, "DIGITAL: held out");
 
   printf("clk1 and the codec's rate\n");
   radio_set_mode(RADIO_MODE_CW);
