@@ -3,7 +3,7 @@
 Status: historical - replaced by `tx_pipeline.c` in `ARCHITECTURE.md`
 §10 step 5. This is the previous `docs/03_tx_processing_pipeline.md`,
 kept below as it was, with only its links adjusted for the new location. The current TX chain is
-[`../03_tx_processing_pipeline.md`](../03_tx_processing_pipeline.md).
+[`00_intro.md`](../00_intro.md) §7.
 
 ---
 
@@ -33,7 +33,7 @@ image suppression (~40dB, confirmed on-air on two independent SDR
 displays) and dial-accurate TX frequency (confirmed on-air against an
 independent remote receiver — see "Known limitations" below for both).
 This document covers the signal chain the same way
-[`02_rx_processing_pipeline.md`](../02_rx_processing_pipeline.md) covers
+[`00_intro.md`](../00_intro.md) §5 and §6 covers
 receive.
 
 Note: [`dsp_design_notes/tx_power_calibration.md`](tx_power_calibration.md)
@@ -43,7 +43,7 @@ only; the other eight bands' `scale` values still need a bench session
 with a wattmeter to bisect.
 
 minibitx transmits CW only — a straight key wired into GPIO (see
-[`01_hardware_init_and_control.md`](../01_hardware_init_and_control.md)),
+[`00_intro.md`](../00_intro.md) §4),
 no voice, no digital modes, no keyer logic beyond a single on/off
 contact. That's a deliberate scope choice, not a missing feature: any
 richer TX mode is an external SDR app's job, same as demodulation is on
@@ -52,7 +52,7 @@ receive.
 ## The chain, end to end
 
 TX reuses the exact same two mixer stages and both si5351 clocks that
-[`02_rx_processing_pipeline.md`](../02_rx_processing_pipeline.md) covers
+[`00_intro.md`](../00_intro.md) §5 and §6 covers
 for RX — same hardware, signal flowing the opposite direction:
 
 ```
@@ -90,7 +90,7 @@ Everything from the DAC onward is analog hardware; minibitx's own code
 only ever touches the two endpoints — generating the baseband waveform
 at the top, and the GPIO/relay sequencing that turns the whole path on
 and off (`radio_set_tx()`, `radio.c` — covered in
-[`01_hardware_init_and_control.md`](../01_hardware_init_and_control.md),
+[`00_intro.md`](../00_intro.md) §4,
 not repeated here).
 
 ## Stage by stage
@@ -136,7 +136,7 @@ process; they now each have their own, and `radio_tx_apply()` (`radio.c`)
 retunes `clk1` from its RX value (`xtal_filter_center + RX_IF_FREQ_HZ`)
 to `bfo_freq` right before asserting PTT, and restores the RX value the
 moment TX ends — see
-[`02_rx_processing_pipeline.md`](../02_rx_processing_pipeline.md)'s "Mixer
+[`00_intro.md`](../00_intro.md) §5 and §6's "Mixer
 2" section for the RX side of this. While transmitting, the DAC's
 analog output drives a balanced modulator that mixes the ~23.3 kHz TX
 carrier onto `bfo_freq`, producing two products: `bfo_freq` − 23.3kHz
@@ -204,7 +204,7 @@ limitations" for the dial-accuracy story this is part of.
 digital gain control over the PA itself — `radio_set_tx()`
 (`radio.c`) only sequences *whether* it's active (PTT/relay
 timing, covered in
-[`01_hardware_init_and_control.md`](../01_hardware_init_and_control.md)).
+[`00_intro.md`](../00_intro.md) §4).
 Everything about *how much* power comes out was already decided
 upstream, at the DAC stage.
 
