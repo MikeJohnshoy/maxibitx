@@ -4,18 +4,19 @@ A headless, all-mode (CW, USB, LSB, DIGITAL) radio daemon for the
 Raspberry Pi inside an [sBitx](https://github.com/afarhan/sbitx). It
 brings up the radio hardware, runs the receive and transmit signal
 chains, and serves external software. There's no user interface in
-the process: SDR apps, WSJT-X, FLRig 
-provide the display and controls.
+the process: SDR apps, WSJT-X and FLRig provide the display and
+controls, over the network or USB.
 
-A small separate desktop control panel runs on the rpi, or on another machine on the network.
+A small separate control panel, `tools/rigctl_panel.py`, runs on the
+Pi's own screen or on another machine on the network.
 
-![maxibitx's control panel on 40 m CW](data/maxibitx_icon.png)
+![maxibitx's control panel on 40 m CW](docs/images/panel.png)
 
 ## Where it came from
 
 **sbitx** is Ashhar Farhan's (VU2ESE) software for his radio. His software was forked
 to https://github.com/drexjj/sbitx/tree/main and greatly refined and extended.  **sbitx**
-gained many new features, and the codebase and file size have grown. `sbitx.c` and 'sbitx_gtk.c`
+gained many new features, and the codebase and file size have grown. `sbitx.c` and `sbitx_gtk.c`
 alone are more than 3,000 and 12,000 lines respectively, with the GTK user interface, DSP and
 hardware initialization and control intertwined. 
 
@@ -32,9 +33,11 @@ and no UI runs in the process. Anything an external display or controller needs
 goes through a narrow, documented interface
 ([`docs/06_api.md`](docs/06_api.md)).
 
-The whole daemon is about 14,000 lines of C in 36 files; a big part of that is 
-in a collection of external interfaces. These provide a variety of ways to connect
-applications to maxibitx.
+The whole daemon is about 14,000 lines of C in 36 files; a big part of
+that is in a collection of external interfaces, which provide a variety
+of ways to connect applications to maxibitx.
+[`docs/00_intro.md` §3](docs/00_intro.md#3-the-code) maps every file to
+the job it does.
 
 ## Features & Capabilities
 
@@ -45,9 +48,10 @@ applications to maxibitx.
 
 ### Receive & Transmit DSP
 - **All-mode transceiver pipeline:** Full support for **CW**, **USB**, **LSB**, and **DIGITAL** modes across all nine HF bands (80m–10m).
-- **Refined CW keying:** Supports straight keys and iambic paddles with proper element weighting, clean envelope shaping, no dropped leading/trailing elements, and ~5 W output across all bands.
-- CW keying designed to pass ARRL's Clean Signal Initiative mask at 40 WPM
-- **Timing-adaptive CW decoding:**   Timing-based decoder that adapts to character/element timing variations and shifting signal conditions.
+- **Refined CW keying:** Supports straight keys, bugs and iambic paddles with proper element weighting, clean envelope shaping, no dropped leading/trailing elements, and per-band power calibration.
+- **Clean CW keying:** a 9 ms ramp at every speed, shaped to ARRL's Clean Signal Initiative mask; on the bench the radio's own keying passes it at 40 WPM, at full and reduced power (`make test-cw-shape`, [`tx_cw_keying_spectrum.md`](docs/dsp_design_notes/tx_cw_keying_spectrum.md)).
+- **On frequency:** the si5351's reference and the codec's sample rate are each calibrated (`cal`, `codec_rate`); WWV reads within 1 Hz from 10 to 20 MHz, and transmit lands on the dial ([frequency calibration](docs/dsp_design_notes/tx_test_tones_and_alc.md#frequency-calibration-the-si5351-reference-and-the-codecs-rate)).
+- **Timing-adaptive CW decoding:** Timing-based decoder that adapts to character/element timing variations and shifting signal conditions.
 - **Onboard demodulation & filtering:** Dedicated CW, USB, and LSB demodulators drive the speaker directly alongside audio routing for digital mode software.
 - **Verified voice & digital operation:** Proven on-air with SSB voice and two-way FT8 contacts via WSJT-X over the USB audio gadget.
 
@@ -59,26 +63,8 @@ applications to maxibitx.
 - **Standalone Touch Control Panel:** Includes `tools/rigctl_panel.py`, a lightweight external GUI offering tuning, mode/filter selection, volume/mic gain, and a live spectrum and waterfall display.
 
 ### Built-in Verification
-- **Hardware-free bench suite:** `make test` runs isolated unit and loopback tests across the DSP chains (`tx_pipeline`, `rx_filter`, `rx_audio`, CW/keyer), TCI WebSocket server, and stubbed board hardware layers with no radio attached.
-- **Measure your own radio** xtal_sweep, lpf_sweep, spur_survey, cw_shape and capture_check. Tools for characterising the hardware itself
-- `make test` runs every bench test below and says which, if any, failed.
-The DSP is bench-tested on its own (`make test-fft-filter`,
-`test-tx-pipeline`, `test-rx-filter`, `test-rx-audio`,
-`test-rx-audio-impulse`, `test-upsample48k`, `test-cw`, `test-key-input`,
-`test-keyer`, `test-keyer-straight`), and so are the TCI
-server (`test-tci-ws`, `test-tci`, over loopback) and the board layer
-(`test-radio-hw`, with GPIO and I2C stubbed), without any hardware attached.
-
-| Job | Files |
-|---|---|
-| Startup and shutdown | `maxibitx.c` |
-| Radio state: tuning, RIT, mode, T/R switching | `radio.c` |
-| Hardware: board profiles, GPIO, I2C, si5351 clocks, LPF relays, board calibration | `radio_hw.c`, `gpio.c`, `i2c.c`, `si5351v2.c`, `hw_settings.c` |
-| Real-time audio thread and WM8731 codec | `sound.c` |
-| RX: I/Q mixing, anti-aliasing, demodulation | `vfo.c`, `antialias.c`, `rx_audio.c`, `rx_filter.c` |
-| TX: CW keying, shared FFT TX pipeline | `cw.c`, `key_input.c`, `keyer.c`, `morse.c`, `tx_pipeline.c`, `fft_filter.c` |
-| USB audio rate conversion | `decim48k.c`, `upsample48k.c` |
-| External interfaces | `interfaces/hamlib.c` (rigctld), `interfaces/hpsdr_p1.c` (HPSDR Protocol 1), `interfaces/usb_gadget.c` (USB audio + Kenwood CAT), `interfaces/iq_stream.c` (I/Q for the control panel), `interfaces/tci.c`, `tci_cw.c`, `tci_stream.c`, `tci_ws.c` (TCI: control, audio, I/Q and CW text over a WebSocket) |
+- **Hardware-free bench suite:** `make test` builds and runs 22 bench tests and says which, if any, failed: the receive and transmit DSP chains, CW keying and its spectrum, the keyer, the CW decoder, the si5351's frequency arithmetic, the TCI server over loopback, and the radio and board layers with GPIO and I2C stubbed. No radio needs to be attached.
+- **Measure your own radio:** tools that characterise the hardware through the radio itself: [`xtal_sweep.py`](tools/README.md#xtal_sweeppy) (the 40 MHz crystal filter), [`lpf_sweep.py`](tools/README.md#lpf_sweeppy) (the band low-pass filters), [`spur_survey.py`](tools/README.md#spur_surveypy) (the receiver's own spurs), [`cw_shape.py`](tools/README.md#cw_shapepy) (a CW signal's keying against the Clean Signal Initiative mask) and [`capture_check.py`](tools/README.md#capture_checkpy) (the codec's raw captures). Results from one sBitx: [`sbitx_filter_measurements.md`](docs/dsp_design_notes/sbitx_filter_measurements.md).
 
 ## Building and running
 
