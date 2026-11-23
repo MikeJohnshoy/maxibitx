@@ -466,8 +466,7 @@ audio, report I/Q, or transmit a test tone.
 ## Using it with WSJT-X
 
 On-air confirmed on Windows 11: WSJT-X decodes FT8 on par with SparkSDR
-on the same I/Q. Transmitting FT8 hasn't been confirmed by another
-station yet.
+on the same I/Q, and a two-way FT8 contact confirmed transmit.
 
 1. **Rig control**, one of:
    - Direct: WSJT-X Settings → Radio → Rig "Kenwood TS-480", Serial Port
@@ -479,7 +478,7 @@ station yet.
    - rigctld (Rig "Hamlib NET rigctl", 127.0.0.1:4532 or the Pi's
      address) should also work, but hasn't been tried.
 2. **Select DIGITAL** with the control panel or rigctld (`M PKTUSB 0`),
-   not over CAT (see above). Turn the narrow filter off.
+   not over CAT (see above). DIGITAL holds the narrow CW filter out.
 3. **Audio:** Input "Microphone (Source/Sink)", Output "Speakers
    (Source/Sink)"; set WSJT-X's input channel to Mono. If Windows won't
    open the device by name after a firmware change altered its format,
