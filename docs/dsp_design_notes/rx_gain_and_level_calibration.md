@@ -28,7 +28,7 @@ little-endian bytes per sample - see
 [`usb_uac_decimation_design.md`](usb_uac_decimation_design.md) for the
 rest of that path). The natural question once real audio was flowing
 end-to-end (WSJT-X decoding FT8 - see
-[`../usb_gadget_os_setup.md`](../usb_gadget_os_setup.md) §9/§11) is
+[`usb_gadget_OS_setup.md`](usb_gadget_OS_setup.md) §9/§11) is
 whether that 24-bit range is being used well: not clipping on strong
 signals, not sitting so far under full-scale that real dynamic range is
 being thrown away.
@@ -259,7 +259,7 @@ untouched through every TX/RX transition - so it now does too, via
 into TX (before PTT/the relay/either clock even changes), restored last
 on the way back to RX (after the relay and clocks are already back).
 See
-[`03_tx_processing_pipeline.md`](../03_tx_processing_pipeline.md)
+[`00_intro.md`](../00_intro.md) §7
 for where that sits in the TX sequence. Pure safety measure - no effect
 on RX sensitivity or TX power.
 
