@@ -123,7 +123,7 @@ gain recovers during each space and has to come down again, over its
 ramp that hid behind the ramp's own sidebands; with DL1YCF's it cost
 almost 5 dB at 338 Hz at 20 dB below full power, enough to miss the
 mask. Now `tx_pipeline.c` scales CW's input by the ceiling, on the drive
-side of the limiter (`docs/03_tx_processing_pipeline.md`, "Setting
+side of the limiter (`docs/00_intro.md` §7, "Setting
 power"), so a key-down carrier sits exactly at the ceiling and the
 limiter never acts on CW; the spectrum is the same at every power. The
 drive follows a POWER change over 20 ms, so moving the slider during an
