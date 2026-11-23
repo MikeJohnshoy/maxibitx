@@ -189,7 +189,7 @@ int main(int argc, char **argv) {
   // not a hard failure if the port's unavailable, same as HPSDR/UAC2.
   // hamlib_init() reports its own success; we only report the failure
   // case here. Started before HPSDR purely so startup mirrors the
-  // shutdown order below - see docs/05_process_and_threading_model.md.
+  // shutdown order below - see docs/00_intro.md §1.
   if (hamlib_init(HAMLIB_PORT) < 0) {
     printf("init: Hamlib/rigctld unavailable on TCP %d, continuing without it\n",
            HAMLIB_PORT);
