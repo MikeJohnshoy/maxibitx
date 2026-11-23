@@ -1,8 +1,7 @@
 # 08 — troubleshooting and bring-up
 
-Status: has real content now (audio thread xruns, below) - no longer a
-candidate to fold back into
-[`01_hardware_init_and_control.md`](01_hardware_init_and_control.md).
+Status: current. How the hardware is brought up and what it does is
+in [`00_intro.md`](00_intro.md) §1 and §4; this is what goes wrong.
 
 ## Scope
 
@@ -14,8 +13,9 @@ Hardware bring-up gotchas that don't belong in the design docs proper:
   si5351 on its new bus and says so at start-up; `i2c_bus = N` in
   `hw_settings.ini` makes that the bus tried first. If no bus answers
   (`init: no si5351 answers at 0x60 on any I2C bus`), the overlay isn't
-  loaded: check `i2cdetect -l` and `config.txt`. See
-  [`01_hardware_init_and_control.md`](01_hardware_init_and_control.md).
+  loaded: check `i2cdetect -l` and `config.txt` (on the sBitx,
+  `i2cdetect -y 22` should show a device at `0x60`).
+- GPIO pin numbers on new hardware ([below](#gpio-pin-numbers)).
 - maxibitx refusing to start because `hw_settings.ini` doesn't name the
   board, and the zBitx's `RX_LINE` needing the UART off
   ([below](#the-radio-board-at-startup)).
@@ -69,10 +69,41 @@ must be off (`dtparam=spi=on` removed from `config.txt`, or
 `LPF_C` and `LPF_D` on SPI0's chip selects. The radio runs without the
 knobs.
 
-**A knob counts backwards, or two steps a click.** See
-[`01_hardware_init_and_control.md`](01_hardware_init_and_control.md),
-"The front-panel knobs": swap its A and B pins, or change its
-`edges_per_detent`, in `radio_hw.c`.
+**A knob counts backwards, or two steps a click.** Swap its `a_pin` and
+`b_pin`, or change its `edges_per_detent`, in `radio_hw.c`
+([`00_intro.md`](00_intro.md#the-front-panel-knobs)). Tests:
+`make test-encoder`.
+
+## GPIO pin numbers
+
+Every pin number in `radio_hw.c` and `radio_hw.h` is a BCM GPIO number,
+the kernel's. sbitx used wiringPi's own numbering, so its pin numbers
+don't carry over. The sBitx's were derived from a `gpio readall` capture
+on an sBitx v2 (Pi 4) with nothing running: it shows each pin's identity
+and direction (a pin a previous run left as `OUT` is one that gets
+driven), though not live levels.
+
+| Name | wiringPi (sbitx) | BCM (maxibitx) | Physical pin | Role |
+|---|---|---|---|---|
+| `TX_LINE` | 4 | 23 | 16 | T/R relay |
+| `TX_POWER` | 27 | 16 | 36 | set low at boot, purpose unconfirmed |
+| `EXT_PTT` | 26 | 12 | 32 | external PTT |
+| `LPF_A` | 5 | 24 | 18 | band filter |
+| `LPF_B` | 6 | 25 | 22 | band filter |
+| `LPF_C` | 10 | 8 | 24 | band filter (SPI0's CE0 pin, so SPI must be off) |
+| `LPF_D` | 11 | 7 | 26 | band filter (SPI0's CE1) |
+| key ring | 7 | 4 | 7 | dash, straight key, mic PTT |
+| key tip | 21 | 5 | 29 | dot, straight key |
+| `ENC1_A` | 13 | 9 | 21 | volume knob, read as its B (SPI0's MISO) |
+| `ENC1_B` | 12 | 10 | 19 | volume knob, read as its A (SPI0's MOSI) |
+| `ENC1_SW` | 14 | 11 | 23 | volume knob's push (SPI0's SCLK) |
+| `ENC2_A` | 0 | 17 | 11 | tuning knob |
+| `ENC2_B` | 2 | 27 | 13 | tuning knob |
+| `ENC2_SW` | 3 | 22 | 15 | tuning knob's push |
+
+Which encoder is which knob was found by turning them on a DE board. On
+different hardware (another Pi or board layout), re-derive the table the
+same way, from a `gpio readall` (or equivalent) on that board.
 
 ## Audio thread xruns (hw:0,0 capture/playback)
 
@@ -205,6 +236,18 @@ image at +1400 Hz is expected while transmitting.
 [`rx_gain_and_level_calibration.md`](dsp_design_notes/rx_gain_and_level_calibration.md) §8.
 
 ## The key jack
+
+To check the jack's wiring with maxibitx stopped (libgpiod 2.x; a mono
+plug in the jack, key open):
+
+```
+$ gpioget -c gpiochip0 -b pull-up 4 5
+"4"=inactive "5"=active
+```
+
+The mono plug's sleeve grounds the ring, so the line reading `inactive`
+is the ring. (libgpiod 1.x: `gpioget gpiochip0 4 5`, which prints
+`0 1`.)
 
 At start-up maxibitx prints which lines it keys from:
 
