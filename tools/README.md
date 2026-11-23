@@ -1,4 +1,3 @@
-[README.md](https://github.com/user-attachments/files/35301248/README.md)
 # tools/
 
 Client-side utilities that talk to a running maxibitx over the network -
@@ -48,7 +47,11 @@ each side, as PASS, FAIL, "can't tell" (within 6 dB of the noise) or
 "another signal?" (something stronger than −20 dBc past 338 Hz). A peak
 beyond 150 Hz standing 10 dB above the same offset on the carrier's
 other side is another station, whatever its level, since keying
-sidebands come in mirrored pairs: it is named and left out of the mask. The
+sidebands come in mirrored pairs: it is named and left out of the mask.
+A second check compares short frames inside long elements, on the
+edges, and in the gaps at 150, 338 and 600 Hz: keying sidebands are only
+on the edges, while phase noise or hum (the transmitter's or the
+receiver's) is there in steady key-down too. The
 carrier's signal-to-noise and how far down the noise lets it see come
 first: the −60 dBc point needs a signal about 65 dB above the noise in
 2.5 kHz. `--plot` draws the spectrum with the masks and the noise level
