@@ -1,7 +1,7 @@
 # RX Audio Demodulation: Local CW Monitor Design
 
 Status: implemented (`rx_audio.c`/`rx_audio.h`, wired into `sound.c` — see
-§6 and [`../02_rx_processing_pipeline.md`](../02_rx_processing_pipeline.md)).
+§6 and [`00_intro.md`](../00_intro.md) §5 and §6).
 First on-air confirmation (2026-09): copyable CW audio while tuning
 through FT8-band signals on 40m, after the AGC fix in §5. v1's
 symmetric-around-zero-beat limitation was fixed in v2 by a complex
@@ -39,12 +39,12 @@ session, the filter's edges and the AGC both "work very nice" — see
 §8.8). Not yet tested with two simultaneous signals in one buffer, on
 the bench or on air (§8.8, §10).
 Volume is remotely controllable via the rigctld server's `l`/`L AF`
-commands (`docs/04_remote_control_and_iq_output.md`).
+commands (`docs/06_api.md`).
 
 ## 1. Background
 
 minibitx's baseband I/Q (see
-[`../02_rx_processing_pipeline.md`](../02_rx_processing_pipeline.md)) has
+[`00_intro.md`](../00_intro.md) §5 and §6) has
 always had two consumers, both external: `hpsdr_p1.c` and `usb_gadget.c`'s
 UAC2 gadget, feeding a separate SDR application that does the actual
 demodulation. That means listening to the receiver has always required a
@@ -66,7 +66,7 @@ process specifically so minibitx's own scope doesn't grow to include a
 GUI, encoders, or a waterfall display. RX audio demod is the one
 exception kept inside minibitx itself, for a structural reason rather
 than a scope one: minibitx already owns the WM8731 codec exclusively
-(see [`01_hardware_init_and_control.md`](../01_hardware_init_and_control.md)),
+(see [`00_intro.md`](../00_intro.md) §4),
 and already has this exact block of I/Q sitting in memory, mid-callback,
 before it's even packaged for the network. A second process doing the
 same demodulation would need its own capture path into the same ALSA
@@ -85,7 +85,7 @@ some of these; see §7.6 for why v3 pulled them apart):
    `i_samples[]`/`q_samples[]` arrive centered on dial center (0 Hz
    offset) — whatever external control surface is tuning the radio
    (FLRig, for now; see
-   [`../04_remote_control_and_iq_output.md`](../04_remote_control_and_iq_output.md))
+   [`06_api.md`](../06_api.md))
    is expected to park the wanted signal there. This stage's only job is
    telling one side of dial center from the other (image rejection) —
    see §7 for the full design. It is deliberately wide, not narrow.
@@ -972,7 +972,7 @@ the debugging trail this caused.
   percent API, so they all get the new taper.
 - **Runtime control** — `rx_audio_set_volume()` is now reachable
   remotely via the rigctld server's `l`/`L AF` commands
-  (`docs/04_remote_control_and_iq_output.md`), and there's a standalone
+  (`docs/06_api.md`), and there's a standalone
   `tools/rigctl_panel.py` control panel that uses it. Stage 3's width is
   not a runtime knob at all (§8.2), so there is nothing left to wire up
   for it.
