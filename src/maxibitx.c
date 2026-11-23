@@ -57,9 +57,9 @@ static const char *startup_mode_name(enum radio_mode m) {
   switch (m) {
   case RADIO_MODE_CW:      return "CW";
   case RADIO_MODE_CWR:     return "CWR";
-  case RADIO_MODE_USB:     return "USB";
-  case RADIO_MODE_LSB:     return "LSB";
-  case RADIO_MODE_DIGITAL: return "DIGITAL (USB demodulation, narrow filter held out, "
+  case RADIO_MODE_USB:     return "USB (narrow CW filter held out)";
+  case RADIO_MODE_LSB:     return "LSB (narrow CW filter held out)";
+  case RADIO_MODE_DIGITAL: return "DIGITAL (USB demodulation, narrow CW filter held out, "
                                   "PTT from the computer only)";
   }
   return "?";
