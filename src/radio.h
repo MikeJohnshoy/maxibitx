@@ -126,10 +126,9 @@ int radio_tx_freq(void);
 // mode_to_kenwood_digit()/kenwood_digit_to_mode()). The mode selects TX's
 // audio source and sideband (sound.c) and RX's demodulator (rx_audio.c,
 // via radio_set_mode()). DIGITAL is external audio - WSJT-X etc. over the
-// USB audio gadget - transmitted and received as USB. It is also the one
-// mode that holds rx_audio.c's narrow CW filter out of circuit, because the
-// audio it exists to serve is taken downstream of that filter - see
-// radio_set_mode() below.
+// USB audio gadget - transmitted and received as USB. rx_audio.c's narrow
+// CW filter is in circuit only in CW and CWR; USB, LSB and DIGITAL hold it
+// out - see radio_set_mode() below.
 //
 // CWR is CW-reverse: the same key, hang timer and transmitted carrier as
 // CW, receiving the other side of the BFO. Transmit is identical because
