@@ -295,10 +295,21 @@ after the relay has settled. A test tone left on turns itself off after
 
 ## 3. The code
 
-The daemon is about 11,500 lines of C in 30 files, not counting the
-bench tests. The
-files are grouped below by the job they do. All are in `src/`, and the
-external interfaces are in `src/interfaces/`.
+The daemon is about 14,000 lines of C in 36 files, not counting the
+bench tests. All are in `src/`, and the external interfaces are in
+`src/interfaces/`. The map first; then the files, grouped by the job
+they do.
+
+| Job | Files |
+|---|---|
+| Startup and shutdown | `maxibitx.c` |
+| Radio state: tuning, RIT, XIT, mode, T/R switching | `radio.c` |
+| Hardware: board profiles, GPIO, I2C, si5351 clocks, LPF relays, board calibration, front-panel knobs | `radio_hw.c`, `gpio.c`, `i2c.c`, `si5351v2.c`, `hw_settings.c`, `encoder.c`, `knobs.c` |
+| Real-time audio thread and WM8731 codec | `sound.c`, `codec_check.c`, `capture_dump.c` |
+| RX: I/Q mixing, anti-aliasing, demodulation, CW decoding, SPOT | `vfo.c`, `antialias.c`, `rx_audio.c`, `rx_filter.c`, `cw_decoder.c`, `cw_spot.c` |
+| TX: CW keying, test tones, shared FFT TX pipeline | `cw.c`, `key_input.c`, `keyer.c` (or `keyer_straight.c`), `morse.c`, `tone_gen.c`, `tx_pipeline.c`, `fft_filter.c` |
+| USB audio rate conversion | `decim48k.c`, `upsample48k.c` |
+| External interfaces | `interfaces/hamlib.c` (rigctld), `interfaces/hpsdr_p1.c` (HPSDR Protocol 1), `interfaces/usb_gadget.c` (USB audio + Kenwood CAT), `interfaces/iq_stream.c` (I/Q for the control panel), `interfaces/tci.c`, `tci_cw.c`, `tci_stream.c`, `tci_ws.c` (TCI: control, audio, I/Q and CW text over a WebSocket) |
 
 ### Startup and shutdown
 
@@ -451,6 +462,12 @@ external interfaces are in `src/interfaces/`.
   mask, rise and fall times, speed, weighting and chirp.
 - **`tools/check_comments.py`**: the comment-policy checker run by
   `make check-comments`.
+- **`tools/xtal_sweep.py`**, **`tools/lpf_sweep.py`** and
+  **`tools/spur_survey.py`**: measure the radio's own hardware through
+  its I/Q stream - the crystal filter, the band low-pass filters, and the
+  receiver's own spurs (`tools/README.md`).
+- **`tools/capture_check.py`**: checks a raw codec capture
+  (`SIGUSR1`'s dump) for the codec's timing pattern and its ghosts.
 
 ---
 
