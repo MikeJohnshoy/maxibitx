@@ -25,7 +25,10 @@ measures:
     beyond 338; DL1YCF's own -80, -100 and -120 dBc beyond 600, 900 and
     1200 Hz are shown for comparison.
   - Speed and weighting, from the dots' length between the 50% points of
-    an envelope within 100 Hz of the carrier, which noise doesn't break up.
+    an envelope within 100 Hz of the carrier, which noise doesn't break up:
+    a mark starts at 60% and ends at 40% of the key-down level, so fading
+    doesn't split it, and the dots are found by clustering the marks'
+    lengths, so a stray fragment isn't taken for one.
   - Rise and fall times, 10% to 90% of the key-down level, the median over
     the elements, and chirp: the frequency in the first 3 ms after each
     element reaches 90%, against the rest of it. Measured on the widest
@@ -97,6 +100,7 @@ NEIGHBOUR_DBC = -20                # stronger than this past 338 Hz: another sta
 ASYMMETRY_DB = 10                  # a peak this far above its mirror image: another station
 NEIGHBOUR_FROM_HZ = 150            # another station is looked for this far out and beyond
 MARK_HZ = 100                      # the envelope that finds the elements, either side
+MARK_ON, MARK_OFF = 0.6, 0.4       # a mark starts above, and ends below, these of key-down
 TIMING_HZ = (1200, 600, 300, 150)  # rise and fall: the widest the noise allows
 TIMING_SNR_DB = 26                 # the 10% point is -20 dB, plus 6 dB of margin
 CHIRP_EARLY_MS = 3.0
@@ -341,41 +345,51 @@ def cross(env, i, level, step):
 
 def elements(env, level):
     """Marks between the 50% points, with their 10% and 90% points:
-    dicts of up50, down50, up10, up90, down90, down10 (fractional indices)."""
-    above = env > 0.5 * level
-    idx = np.flatnonzero(np.diff(above.astype(np.int8)))
+    dicts of up50, down50, up10, up90, down90, down10 (fractional indices).
+    A mark starts when env rises through MARK_ON of level and ends when it
+    falls through MARK_OFF: without that hysteresis a fading signal or the
+    noise hovering about 50% splits elements into fragments of a few ms."""
+    on, off = MARK_ON * level, MARK_OFF * level
+    pairs, start = [], None
+    for i in np.flatnonzero((env > on) | (env < off)):
+        if start is None and env[i] > on:
+            start = i
+        elif start is not None and env[i] < off:
+            pairs.append((start, i))
+            start = None
     marks = []
-    ups = idx[above[idx + 1]]
-    downs = idx[~above[idx + 1]]
-    di = 0
-    for u in ups:
-        while di < len(downs) and downs[di] <= u:
-            di += 1
-        if di >= len(downs):
-            break
-        d = downs[di]
-        if (d - u) / RATE < 0.003:
+    for u, d in pairs:
+        m = {"up50": cross(env, u, 0.5 * level, -1), "down50": cross(env, d, 0.5 * level, -1)}
+        if m["up50"] is None or m["down50"] is None or (m["down50"] - m["up50"]) / RATE < 0.003:
             continue
-        m = {"up50": cross(env, u, 0.5 * level, 1) or float(u),
-             "down50": cross(env, d, 0.5 * level, 1) or float(d)}
         m["up10"] = cross(env, u, 0.1 * level, -1)
         m["up90"] = cross(env, u, 0.9 * level, 1)
-        m["down90"] = cross(env, d + 1, 0.9 * level, -1)
+        m["down90"] = cross(env, d, 0.9 * level, -1)
         m["down10"] = cross(env, d, 0.1 * level, 1)
         marks.append(m)
     return marks
 
 
+def cluster(lens, centre, ratio):
+    """The lengths within ratio of centre, either way."""
+    return lens[np.abs(np.log(lens / centre)) < math.log(ratio)]
+
+
 def speed(marks):
     """(WPM from the dots, dot:space), either None when there aren't enough
-    marks."""
+    marks. The dot is found by clustering the marks' lengths, not from the
+    shortest: the most common length is the dots or the dashes, and if a
+    group about a third as long is there too, that is the dots. A stray
+    fragment of a few ms then can't be taken for one."""
     lens = np.array([(m["down50"] - m["up50"]) / RATE for m in marks])
     spaces = np.array([(b["up50"] - a["down50"]) / RATE for a, b in zip(marks, marks[1:])])
     if len(lens) < 5:
         return None, None
-    dots = lens[lens < 2 * np.percentile(lens, 20)]
-    dot = float(np.median(dots))
-    el_sp = spaces[spaces < 2 * dot]
+    counts = np.array([len(cluster(lens, v, 1.25)) for v in lens])
+    mode = float(np.median(cluster(lens, lens[np.argmax(counts)], 1.25)))
+    third = cluster(lens, mode / 3, 1.4)
+    dot = float(np.median(third)) if len(third) >= max(3, 0.2 * counts.max()) else mode
+    el_sp = spaces[(spaces > 0.5 * dot) & (spaces < 2 * dot)]
     return 1.2 / dot, (dot / float(np.median(el_sp)) if len(el_sp) else None)
 
 
