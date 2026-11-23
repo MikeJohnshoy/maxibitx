@@ -17,6 +17,11 @@ already used in `antialias_filter_design.md`.
   check a signal on the bench (`test-cw-shape`) and off the air
   (`tools/cw_shape.py`). Status: implemented; the sBitx's own RF still
   to be measured.
+- [`interfaces_and_codec_bringup_notes.md`](interfaces_and_codec_bringup_notes.md)
+  — why the interfaces and the codec bring-up are built as they are: the
+  HPSDR parser and pacer bugs, the "buzzsaw" status bytes, the USB
+  gadget's history and FLRig, the WM8731's mixer controls, the TX worker
+  thread. Status: record, gathered from the retired docs 01, 04 and 05.
 - [`sbitx_filter_measurements.md`](sbitx_filter_measurements.md) — the
   sBitx's 40 MHz crystal filter and its four low-pass filters, measured
   with a noise source (`tools/xtal_sweep.py`, `tools/lpf_sweep.py`):
@@ -49,7 +54,7 @@ already used in `antialias_filter_design.md`.
   — the original CW-only TX scheme (a second, IF-shifted oscillator in
   `cw.c` and a clk2 correction in `radio.c`), formerly
   `03_tx_processing_pipeline.md`. Status: historical - replaced by
-  `tx_pipeline.c`.
+  `tx_pipeline.c` ([`00_intro.md`](../00_intro.md) §7).
 - [`usb_uac_decimation_design.md`](usb_uac_decimation_design.md) — the
   96kHz->48kHz decimating lowpass that makes `usb_gadget.c`'s UAC2
   gadget actually deliver the 48kHz it advertises, cascaded after
