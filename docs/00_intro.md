@@ -8,13 +8,13 @@ serves external software over the network and over USB. It has no user
 interface of its own. SDR applications, WSJT-X, loggers, FLRig and a
 small desktop control panel provide the displays and the controls.
 
-This document describes the system as it is built today. It is meant to
-be read on its own: what maxibitx does, how a signal travels through it
+This document describes the system as it is built today, and is the
+one place that does: what maxibitx does, how a signal travels through it
 in each direction, and how its pieces fit together are all here. The
-other documents (listed in [§9](#9-further-documentation)) go deeper on
-each part, and the design notes record the measurements and derivations
-behind the numbers quoted here, but neither is needed to follow this
-one.
+other documents (listed in [§9](#9-further-documentation)) have other
+jobs: the reference for client software, bring-up and troubleshooting,
+and the design notes, which record the measurements and derivations
+behind the numbers quoted here. None is needed to follow this one.
 
 **Contents**
 
@@ -67,6 +67,15 @@ Around it sit ordinary threads that do everything slow:
 - The **key input** thread sleeps on the key jack's GPIO lines and
   queues each edge, timestamped by the kernel, for the audio thread. It
   runs at SCHED_FIFO, one step below the audio thread.
+- On the sBitx, the **knob** thread sleeps on the two front-panel
+  knobs' GPIO lines and acts on each click and press itself, at ordinary
+  priority.
+- Two threads exist for diagnosis: the **codec check**, which runs once
+  a second after the audio starts, scores a quarter of a second of
+  samples for the codec's bad sampling state and restarts the codec's
+  interface if it finds it, then exits; and the **capture dump** writer,
+  which sleeps until a SIGUSR1 asks for a second of raw codec samples
+  and writes them to a file.
 - The **TX worker** carries out the transmit/receive switching sequence
   (clock changes over I2C, relay and PTT lines, codec mixer settings).
   That takes tens of milliseconds, so it can never run on the audio
@@ -174,9 +183,29 @@ network.
    port.
 9. Configure the codec's mixer and start the audio thread.
 
-Shutdown runs roughly in reverse: drop PTT and the relay, stop the audio
-thread so nothing is producing samples, then stop CAT, the USB gadget,
-HPSDR, iq_stream, TCI and rigctld.
+GPIO comes before anything that could key the transmitter exists, and
+only once the board is known, so no line is ever driven with another
+board's meaning.
+
+Board selection, the GPIO lines, HPSDR's UDP port and audio capture must
+all come up, or maxibitx exits. Everything else is best effort: if
+rigctld, TCI, iq_stream, the USB gadget (or either of its audio
+directions), CAT, the INA260 or audio playback can't start, the log says
+so and maxibitx runs without it. Without playback there is no local
+audio and no transmit. A key `hw_settings.ini` leaves out takes its
+default, except `sbitx_version`.
+
+Shutdown, on SIGINT or SIGTERM, runs roughly in reverse: drop PTT and
+the relay and wait 50 ms for them, stop the audio thread first so no
+consumer is left racing a producer, then stop CAT, the USB gadget, HPSDR,
+iq_stream, TCI (disconnecting its clients) and rigctld. SIGKILL, or a
+crash, can't be caught; a USB gadget left bound by one is cleaned up at
+the next start
+([`usb_gadget_OS_setup.md`](dsp_design_notes/usb_gadget_OS_setup.md) §8).
+
+From then on the console reports what happens to the radio, not what
+clients ask about it
+([`08_troubleshooting_and_bringup.md`](08_troubleshooting_and_bringup.md#what-the-console-shows)).
 
 ---
 
@@ -265,6 +294,23 @@ inside ARRL's Clean Signal Initiative mask at every power setting, and
 each transmitted mark is as long as the key was down.
 The microphone is supported for voice, with the jack's ring contact as
 its push-to-talk in USB and LSB.
+
+### CW decoding and SPOT
+
+In CW and CWR an onboard decoder reads the received signal and learns
+the sender's timing from it, from 5 to about 50 WPM with no speed
+setting, and serves the text to clients. SPOT, one press, finds the
+strongest CW signal near the pitch and moves the dial so it is heard
+exactly on the pitch, which puts the transmitter on that station's
+frequency.
+
+### A check on the codec at every start
+
+About one start in 25, the WM8731 comes up with its sample timing
+modulated, which fills the spectrum with ghost copies of every signal.
+Its registers look normal when it happens. maxibitx measures the
+pattern a second after the audio starts and, if it is there, restarts
+the codec's digital interface until it is gone.
 
 ### A control panel that doubles as an example
 
@@ -362,6 +408,39 @@ they do.
   transmit pipeline, scales its output for the exciter, and writes the
   stereo playback block. It also recovers from ALSA overruns and
   underruns, and has optional timing reports for diagnosis.
+- **`codec_check.c`**: the start-up check for the codec's bad sampling
+  state. The audio thread only sums the mic channel into it; its own
+  thread scores the pattern and restarts the codec's interface if it is
+  there.
+- **`capture_dump.c`**: on SIGUSR1, writes a second of raw codec samples
+  to a WAV file, for `tools/capture_check.py`.
+
+### Reading `sound.c`
+
+`sound.c` is the second-largest file, and a third of it is ALSA plumbing
+and diagnostics the audio thread never runs. Banner comments divide it;
+search for the title rather than a line number.
+
+| Banner | What's there | Audio thread runs it? |
+|---|---|---|
+| Constants | Sample rate, block size, channel layout | — |
+| TX sample scaling | The amplitude constants ([§7](#setting-power)) | — |
+| Module state | The PCM handles, the TX pipeline, mic gain, TX power and ALC accessors | Reads only |
+| ALSA mixer helper | Find a mixer element and set it | No |
+| Codec hardware setup | `setup_audio_codec()`, the WM8731's bring-up | No |
+| ALSA PCM helpers | `open_pcm()`'s parameter negotiation, `xrun_recover()` | Recovery only |
+| xrun flood tracking | Rate-limiting, and the hint when `cap_sys_nice` is missing | Yes, cheaply |
+| IQ mixing | `sound_process()`: the receive path, the mix, the anti-alias filter, the hand-off to the demodulator and the I/Q consumers | Yes |
+| Per-block compute timing | Opt-in instrumentation (`MAXIBITX_LOOP_TIMING`) | Yes, cheaply |
+| Audio thread | `audio_loop()`: capture, process, the transmit branch, playback | Yes, all of it |
+| Public API | `sound_thread_start()`, `sound_thread_stop()` | No |
+
+The intricate part is `audio_loop()`, and in it the transmit branch:
+the choice among the four audio sources, the pipeline, the ceiling, the
+DAC scaling and the monitor. `sound.c` is also the one substantial file
+with no bench test, since it needs the codec, the GPIO and an antenna:
+after a change to it, a clean build is the start of testing, not the
+end.
 
 ### Receive
 
@@ -378,6 +457,10 @@ they do.
   `fft_filter.c`.
 - **`narrow_filter_bank.h`**: the elliptic implementation's 24
   pre-designed filters, generated by `tools/gen_narrow_filters.py`.
+- **`cw_decoder.c`**: the CW decoder: the tone's envelope, mark and gap
+  decisions, the sender's timing, and the text ([§6](#the-cw-decoder)).
+- **`cw_spot.c`**: SPOT's search for the strongest CW tone near the
+  pitch ([§6](#spot)).
 
 ### Transmit
 
@@ -495,13 +578,23 @@ the band, and strip harmonics from the transmitter. `radio_hw_tune()`
 in `radio_hw.c` selects one from the board's plan each time the radio is
 tuned:
 
-| Tuned frequency | Bands | Filter |
-|---|---|---|
-| below 5.5 MHz | 80, 60 m | LPF_D |
-| 5.5 to 10.5 MHz | 40, 30 m | LPF_C |
-| 10.5 to 18.5 MHz | 20, 17 m | LPF_B |
-| 18.5 to 30 MHz | 15, 12, 10 m | LPF_A |
-| 30 MHz and above | | none |
+| Frequency | Bands | sBitx | zBitx |
+|---|---|---|---|
+| below 5.5 MHz | 80, 60 m | LPF_D (BCM 7) | LPF_D |
+| 5.5 to 10.5 MHz | 40, 30 m | LPF_C (BCM 8) | LPF_C |
+| 10.5 to 18.5 MHz | 20, 17 m | LPF_B (BCM 25) | LPF_B |
+| 18.5 to 21.5 MHz | 15 m | LPF_A (BCM 24) | LPF_B |
+| 21.5 to 30 MHz | 12, 10 m | LPF_A (BCM 24) | LPF_A |
+| 30 MHz and above | | none | none |
+
+On the sBitx the filter follows the dial; on the zBitx, whose filters
+carry only the transmitter, the T/R sequence selects one for the
+transmit frequency at each transmission. A relay is only switched when
+the filter changes, so retuning within a band doesn't chatter. For
+measuring the filters through the receiver (`tools/lpf_sweep.py`), the
+sBitx can hold one filter, or none, in circuit whatever the dial
+(rigctld `L LPF`); a hold never carries a transmission, since the T/R
+sequence ends it and selects the transmit frequency's filter first.
 
 ### The two mixers and the si5351
 
@@ -517,7 +610,10 @@ both local oscillators:
   `xtal_filter_center + 24000` = 40,036,400 Hz, which puts the filter
   centre at a 24 kHz audio IF. While transmitting it is `bfo_freq` =
   40,035,000 Hz, deliberately about 22.6 kHz above the filter centre,
-  for reasons explained in [§7](#7-transmit-source-to-antenna).
+  for reasons explained in [§7](#7-transmit-source-to-antenna). Each is
+  trimmed by a few hertz: the receive value for the codec's actual
+  sample rate, the transmit value for the error of the transmit IF
+  (§7).
 
 Both mixers take the difference product, oscillator minus signal, so
 each one inverts the spectrum. The two inversions cancel. On receive, a
@@ -532,18 +628,30 @@ frequencies read and transmit true
 ([`tx_test_tones_and_alc.md`](dsp_design_notes/tx_test_tones_and_alc.md),
 "Frequency calibration", measures both). The si5351 sits at address 0x60 on the board's I2C bus: bus 22 on the sBitx, 3 on
 the zBitx, or whichever bus it answers on if Linux has numbered them
-differently. Every clock change is an
-I2C transaction, which is one reason clock changes stay off the audio
-thread.
+differently: if nothing answers at 0x60 on the expected bus, it tries
+every other `/dev/i2c-N` in number order (a read of register 0, which
+changes nothing on any device) and says which it found; `i2c_bus` in
+`hw_settings.ini` names the bus to try first. On the sBitx the bus is
+bit-banged by the kernel, so I2C traffic is CPU time: one clock setting
+is 17 transactions. That, and the time it takes, is why clock changes
+stay off the audio thread
+([`cw_breakin_and_i2c_costs.md`](dsp_design_notes/cw_breakin_and_i2c_costs.md)).
 
 ### The crystal filter
 
 After the band filters, the radio's only analog selectivity is a
-crystal filter at about 40.0124 MHz. Its measured −3 dB bandwidth is
-about 35 kHz: roughly ±17.4 kHz either side of centre, where it is 3 to
-4 dB down. On its upper skirt it falls to about −37 dB at +24 kHz
-(interpolated) and −61 dB at +28.5 kHz; the lower skirt falls more
-slowly. That width suits both
+crystal filter near 40.012 MHz. Measured in the author's sBitx with a
+noise source
+([`sbitx_filter_measurements.md`](dsp_design_notes/sbitx_filter_measurements.md)),
+it is 27.2 kHz wide at −6 dB (26.1 kHz at −3 dB, 32.8 kHz at −20 dB),
+centred on 40,011,300 Hz, with about 3 dB of ripple across its top. Its
+skirts fall to about −47 dB some 24 kHz above its centre and 31 kHz
+below; above, it then levels off at 48 to 49 dB. `xtal_filter_center`
+puts the dial on that centre; the example file's 40,012,400 Hz, used in
+the figures below, came from another filter's sweep and is 1.1 kHz
+high for this one. `tools/xtal_sweep.py` measures a radio's own filter
+through its receiver, by stepping `xtal_filter_center` with the dial
+held still. That width suits both
 directions. On receive it passes most of the 48 kHz-wide span a 96 kHz
 sampler can represent, so an SDR application gets a wide panadapter. On
 transmit it passes the wanted mixer product and rejects the unwanted
@@ -584,17 +692,71 @@ the log.
 ### Power amplifier and T/R switching
 
 The PA has a fixed gain: output power is set entirely by the level of
-the exciter feed from the codec. Two GPIO lines control the switching.
-**TX_LINE** (BCM 23) operates the T/R relay, and **EXT_PTT** (BCM 12)
-is the PTT line for an external amplifier or accessory. The INA260
-supply monitor is configured if present, but its readings are not used
-yet.
+the exciter feed from the codec. GPIO lines control the switching,
+claimed through the kernel's GPIO character device (`gpio.c`), each
+driven to its receive state in the same request that claims it, so no
+line ever holds its power-on default:
+
+| Line | sBitx (BCM) | zBitx (BCM) | Receive state | Role |
+|---|---|---|---|---|
+| TX_LINE | 23 | 23 | low | the T/R relay; on the zBitx it also powers the PA |
+| TX_POWER | 16 | 16 | low | set low as sbitx does; its purpose is unconfirmed |
+| EXT_PTT | 12 | — | low | PTT for an external amplifier |
+| RX_LINE | — | 15 | high | connects the receiver |
+| LPF relays | 24, 25, 8, 7 | 24, 25, 8, 7 | all off | the band filters |
+| unused | — | 12 | low | zbitx's LPF_E, with no filter behind it |
+
+The zBitx's RX_LINE is also the UART's RXD pin, so its serial console
+must be off
+([`08_troubleshooting_and_bringup.md`](08_troubleshooting_and_bringup.md#the-radio-board-at-startup)).
+Every pin number is BCM; on other hardware, re-derive them as `08`
+describes rather than assume these carry over. The INA260 supply
+monitor (I2C 0x40) is configured if present, but its readings are not
+used yet.
 
 ### The key jack
 
-The stereo key jack's tip is on BCM 5 (dot, or a straight key's
-contact) and its ring is on BCM 4 (dash, and the microphone's PTT
-switch). Both are inputs with pull-ups, so a closed contact reads low.
+The stereo key jack's tip is on BCM 5 and its ring on BCM 4, sleeve to
+ground. Both are inputs with pull-ups, so a closed contact reads low,
+read as kernel-timestamped edge events. What a contact means:
+
+| Mode | Tip (BCM 5) | Ring (BCM 4) |
+|---|---|---|
+| CW, CWR: straight key | the key | the key |
+| CW, CWR: bug | dots (automatic) | dashes (manual) |
+| CW, CWR: ultimatic, iambic A and B | dot | dash |
+| USB, LSB | — | mic PTT |
+| DIGITAL | — | — |
+
+The keyer and its speed are rigctld's `U KEYER` and `L KEYSPD` (or CAT
+`KS`); `U PADREV 1` swaps the paddles. Either contact keys a straight
+key, so a stereo plug wired either way works, and so does a mono plug,
+whose sleeve grounds the ring: a contact found closed at start-up is
+ignored, and if it stays closed for 250 ms the console says it is being
+treated as a mono plug. A mono plug inserted while maxibitx runs looks
+like a key held down, so restart after changing to one. Debounce is
+`key_debounce_ms` (3 ms).
+
+### The front-panel knobs
+
+The sBitx has two knobs, each a rotary encoder with a push switch: tuning
+(BCM 17 and 27, push on 22) and volume (BCM 10 and 9, push on 11). They
+are part of the board profile; the zBitx's knob and buttons belong to
+its RP2040 front panel, which maxibitx doesn't drive. `encoder.c` reads
+them as edge events on a thread of its own and counts each Gray-code
+edge up or down, so contact bounce nets to nothing; a press is taken on
+its first closing edge and the switch ignored for 20 ms. `knobs.c` acts
+on them:
+
+| Knob | Turn | Push |
+|---|---|---|
+| Tuning | the dial moves by the tuning step a click; below 1 kHz a fast turn multiplies it by 2, 5 or 10; nothing while transmitting | the next step: 10 Hz, 100 Hz, 1 kHz, 10 kHz, then 10 Hz again |
+| Volume | 1 dB a click, and unmutes | mutes or unmutes the speaker, keeping the volume |
+
+The tuning step is rigctld's `n`/`N` and the mute `u`/`U MUTE`, so a
+client can show and set both. A knob that counts the wrong way has its
+`a_pin` and `b_pin` swapped in `radio_hw.c`; one that moves two steps a
+click, or one every other click, has the wrong `edges_per_detent`.
 
 ---
 
@@ -610,7 +772,7 @@ flowchart TD
     ANT["Antenna"] --> LPF["Band LPF, one of four relays<br/>chosen by radio_hw_tune()"]
     LPF --> M1["Mixer 1"]
     CLK2["clk2 = dial + xtal_filter_center + RIT<br/>47,042,400 Hz at 7.030 MHz"] --> M1
-    M1 -->|"dial lands on 40,012,400 Hz<br/>spectrum inverted"| XF["Crystal filter<br/>about 35 kHz wide at -3 dB"]
+    M1 -->|"dial lands on 40,012,400 Hz<br/>spectrum inverted"| XF["Crystal filter<br/>about 27 kHz wide at -6 dB"]
     XF --> M2["Mixer 2"]
     CLK1["clk1 = xtal_filter_center + 24 kHz<br/>40,036,400 Hz"] --> M2
     M2 -->|"dial lands on 24 kHz<br/>spectrum upright again"| ADC["WM8731 ADC, line in left<br/>Capture 70%, about -3 dB<br/>96 kHz, 32-bit"]
@@ -649,12 +811,22 @@ to +200 Hz, clk2 is 47,042,600 Hz and the signal 200 Hz above the dial
 is the one that lands on the filter centre. RIT is cleared by the next
 retune, and is never applied while transmitting.
 
+**What a retune touches.** `radio_tune_to()` sets the dial, clears RIT
+and XIT, moves clk2, restarts the software oscillator (below) at its
+same fixed 24 kHz without losing its phase, selects the band's LPF on
+the sBitx, and tells the CW decoder and SPOT that the receiver has
+moved. It never moves clk1 or the software oscillator's frequency: once
+Mixer 1 has put the dial on the filter centre, everything after it is
+the same at every dial. Only the T/R sequence moves clk1, and rigctld's
+`L XTALCENTER`, for measuring the filter, moves both clocks together.
+
 ### The crystal filter
 
-The crystal filter passes about ±17.4 kHz around 40,012,400 Hz before
-it is 3 to 4 dB down, and is about 37 dB down by 24 kHz above it. Both example signals
-pass untouched. The filter defines the receiver's useful span: roughly
-35 kHz of spectrum, centred on the dial, reaches the converter. It is
+The crystal filter passes about ±13.6 kHz around its centre before it
+is 6 dB down. Both example signals pass untouched. The filter defines
+the receiver's useful span: roughly 27 kHz of spectrum, centred on the
+dial when `xtal_filter_center` is the filter's measured centre, reaches
+the converter. It is
 also the receiver's only analog selectivity: there is no narrower
 filter anywhere ahead of the ADC, so every signal in that span reaches
 the ADC together, and a strong one anywhere in it sets the level
@@ -673,7 +845,7 @@ output down to a low IF centred on 24 kHz:
 
 That is the second inversion, and it cancels the first: a station d Hz
 above the dial is at 24,000 + d Hz in the IF. The crystal filter's
-passband now occupies about 6.6 kHz to 41.4 kHz, all of it below the
+passband now occupies about 10 kHz to 38 kHz, all of it below the
 48 kHz Nyquist frequency of a 96 kHz sampler.
 
 ### The ADC
@@ -716,8 +888,14 @@ terms, each at half the amplitude (−6 dB) of the IF sample:
 The dial frequency is therefore at 0 Hz, and the 7,030,500 Hz example
 signal is at −500 Hz. The baseband spectrum is **inverted**: a station
 above the dial appears at a negative frequency. maxibitx deliberately
-does not correct this in the shared I/Q. Each consumer handles it in
-the way its client expects, as described under the consumers below.
+does not correct this in the shared I/Q: SparkSDR and SDR Console over
+HPSDR display and decode it as it is, and correcting it at the source
+would flip every consumer at once. Each consumer handles it in the way
+its client expects, as described under the consumers below. (An
+uncorrected inversion in the demodulator was once the cause of weak FT8
+decoding over the USB gadget:
+[`rx_uac_out_digital_mode_bandwidth.md`](dsp_design_notes/rx_uac_out_digital_mode_bandwidth.md)
+§10.)
 
 ### Anti-alias filter
 
@@ -730,15 +908,15 @@ linear-phase lowpass FIR in `antialias.c`. Its passband is flat to
 Its job is the sum term. For a signal near the dial the sum term lands
 at about ±48 kHz, in the FIR's stopband, and is removed. For signals
 further out the sum term moves inward, but even for a signal at the
-crystal filter's passband edge, ±17.4 kHz from the dial, it lands beyond
-±30.6 kHz, where the crystal filter passes no real signal to confuse it
-with. The wanted part of the spectrum, the crystal filter's ±17.4 kHz,
-is in the FIR's flat passband and is not touched.
+crystal filter's passband edge, about ±13.6 kHz from the dial, it lands
+beyond ±34 kHz, where the crystal filter passes no real signal to
+confuse it with. The wanted part of the spectrum, the crystal filter's
+±13.6 kHz, is in the FIR's flat passband and is not touched.
 
 ### The baseband I/Q and its consumers
 
 The result is 96 kHz complex baseband I/Q, dial at 0 Hz, spectrum
-inverted, with about 35 kHz of the band in it. A full-scale IF sinusoid
+inverted, with about 27 kHz of the band in it. A full-scale IF sinusoid
 produces a baseband component of amplitude 0.5. Every consumer gets its
 own copy of each block, and any subset may be active at once. None of
 them can delay the audio thread: each copies the block into its own
@@ -847,14 +1025,18 @@ transmitted carrier stays on the dial (see
 transmitting.
 
 The filter is switched in and out by the operator, and is on at
-startup. In DIGITAL it is held out whatever the setting, because the
-USB and TCI audio is taken after it and a digital decoder needs the
-whole 3 kHz; leaving DIGITAL restores the operator's choice. In USB and
-LSB it applies as set, so a narrow CW-style filter is available for
-listening there too.
+startup. It is a CW filter, in circuit only in CW and CWR: every other
+mode holds it out whatever the setting. In USB and LSB a 300 Hz slice
+around the pitch would make voice unreadable; in DIGITAL the USB and TCI
+audio is taken after it, and a digital decoder needs the whole 3 kHz.
+The daemon enforces this, not a control panel, because CAT and TCI
+clients set the mode too; returning to CW or CWR restores the
+operator's choice, and rigctld's `u NARROW` reports whether the filter
+is actually in circuit.
 
-There are two implementations, and both run on every block so that
-switching between them, or bypassing either, never clicks:
+There are two implementations. Only the one selected runs, and one
+coming back into circuit starts from silence, so switching never
+replays audio from the last time it ran:
 
 - **FFT filter (the default).** `rx_filter.c` runs `fft_filter.c`'s
   overlap-save convolution with a 4096-point FFT (23.4 Hz per bin) and
@@ -898,7 +1080,7 @@ Measuring the envelope before the filters makes it independent of
 frequency, so the AGC cannot undo the selectivity of stages 1 and 3.
 The consequence, as with a front-end AGC in an analog receiver, is
 desensitisation: a strong signal anywhere in the crystal filter's
-35 kHz lowers the gain for everything.
+27 kHz lowers the gain for everything.
 
 ### S-meter
 
@@ -910,6 +1092,32 @@ relative to S9, from S0 (−54 dB) to S9+60 dB; TCI reports the same
 reading as dBm, taking S9 as −73 dBm. It is
 relative only: S9 is placed at −40 dBFS of that envelope as a
 placeholder, not a calibration against a known signal.
+
+### The CW decoder
+
+In CW and CWR, stage 2's output also goes to `cw_decoder.c`, before
+stage 3, so what it decodes doesn't depend on the narrow filter. It
+mixes the tone down from the pitch, filters it to 100 Hz, decides mark
+or gap every millisecond, and learns the sender's timing from the
+signal itself, with no speed setting: 5 to 35 WPM on the bench, and
+about 50 WPM has been decoded on the air. Its text reaches clients
+through rigctld's `\get_cw_text`, and the control panel shows it under
+the waterfall. It starts afresh on entering CW or CWR, and when the
+receiver moves more than 300 Hz; a smaller move, tuning onto the same
+signal, keeps what it has learned
+([`rx_cw_decoder_study.md`](dsp_design_notes/rx_cw_decoder_study.md) §8).
+
+### SPOT
+
+The same stage 2 audio, summed down to 6 kHz, fills a 2.7 s ring for
+SPOT, auto zero-beat. On rigctld's `\spot` (the control panel's SPOT
+button), `rx_audio_spot()` searches the last 1.5 s for the strongest CW
+tone within the narrow filter's width of the pitch, and `radio_spot()`
+moves the dial so that station is heard exactly on the pitch, which
+puts the transmitter on its frequency. RIT is cleared and XIT kept. The
+search runs on rigctld's thread; the audio thread only fills the ring,
+and any retune, RIT, pitch or mode change empties it
+([`rx_cw_spot_design.md`](dsp_design_notes/rx_cw_spot_design.md)).
 
 ### Outputs and their levels
 
@@ -955,7 +1163,7 @@ flowchart TD
     ALC --> RE["2 x real part<br/>IF near 22.6 kHz"]
     RE --> DAC["Codec right: exciter feed<br/>x band scale x calibration<br/>Master right 95"]
     DAC --> M2["Mixer 2"]
-    BFO["clk1 = bfo_freq<br/>40,035,000 Hz"] --> M2
+    BFO["clk1 = bfo_freq + the mode's trim<br/>40,034,989 Hz, CW at 700 Hz"] --> M2
     M2 -->|"wanted product on the filter centre<br/>other 45 kHz above, rejected"| XF["Crystal filter"]
     XF --> M1["Mixer 1"]
     CLK2["clk2 = dial + XIT + xtal_filter_center<br/>no RIT"] --> M1
@@ -977,8 +1185,14 @@ Four rules apply to all of them:
 
 - **The band check.** `radio_set_tx()` refuses to transmit outside every
   `[tx_band]` range in `hw_settings.ini` (when it has any), and on a
-  board that may not transmit at all. The main thread logs a refusal at
-  most once a second.
+  board that may not transmit at all. That one check covers every
+  source. rigctld's `T` answers `RPRT -1`; the other interfaces have no
+  error reply, so the main thread logs the refusal at most once a
+  second (`tx: PTT refused - <freq> Hz is outside every calibrated
+  [tx_band] range`): the straight key's path runs on the audio thread,
+  which may not do I/O. A file with no `[tx_band]` entries at all means
+  nothing is calibrated, not that nothing is allowed, so nothing is
+  refused on that account.
 - **The local key wins.** While the key or the mic PTT holds the
   transmitter, PTT commands from every interface are ignored. Among TCI
   clients, the one that keyed the transmitter owns it until it
@@ -990,6 +1204,9 @@ Four rules apply to all of them:
 - **In DIGITAL the key jack is ignored.** PTT comes only from the
   computer.
 
+HPSDR's MOX first retunes to the client's transmit frequency if it
+differs from the dial. Returning to receive is never refused.
+
 ### The T/R sequence
 
 `radio_set_tx()` sets the transmit flag at once, so every thread sees
@@ -1000,8 +1217,9 @@ runs `radio_tx_apply()`.
 
 1. Mute the receive input (the codec's line-input mute, left channel),
    before any transmit RF exists.
-2. Set clk1 to `bfo_freq` (40,035,000 Hz), and clk2 to the dial plus
-   the crystal filter centre, without RIT and with XIT.
+2. Set clk1 to `bfo_freq` plus the mode's trim (40,034,989 Hz for CW
+   at the default pitch), and clk2 to the dial plus the crystal filter
+   centre, without RIT and with XIT.
 3. Raise EXT_PTT, for an external amplifier.
 4. Wait `ext_ptt_delay_ms` (20 ms by default, settable from 0 to 100 in
    `hw_settings.ini`), so an amplifier's relay has closed before RF
@@ -1014,14 +1232,25 @@ runs `radio_tx_apply()`.
 
 1. Set the exciter feed to 0.
 2. Drop EXT_PTT, wait 5 ms, then drop TX_LINE.
-3. Restore clk1 to its receive value (`xtal_filter_center + 24000`),
-   and clk2 to the dial plus RIT.
+3. Restore clk1 to its receive value (`xtal_filter_center + 24000`,
+   trimmed for the codec's rate), and clk2 to the dial plus RIT.
 4. Unmute the receive input, now that the relay has settled.
+
+That is the sBitx's relay half (`radio_hw_relays_tx()`). The zBitx has
+no EXT_PTT and ignores `ext_ptt_delay_ms`: going to transmit it drops
+RX_LINE (receiver off), selects the LPF for the transmit frequency,
+waits 10 ms for its relay and raises TX_LINE, which powers the PA; back
+to receive it drops TX_LINE, turns every LPF off, waits 5 ms and raises
+RX_LINE. At 30 MHz and above there is no LPF, so it refuses and
+switches nothing, and the radio stays in receive.
 
 Meanwhile, on the audio thread, the first block of any transmission
 resets the pipeline, so that block is filtered against silence rather
 than the end of the previous transmission, and the limiter starts with
-no gain reduction. While transmitting, the audio thread writes the
+no gain reduction. The limiter's gain is the part that matters: after a
+burst driven into limiting, a transmission without the reset would open
+still holding that reduction and take the full 250 ms release to
+recover (`tx_pipeline_test.c` Case G). While transmitting, the audio thread writes the
 transmit signal to the codec's right channel and the monitor to its
 left. While receiving, the right channel is silent.
 
@@ -1086,8 +1315,11 @@ The rotation is chosen so the right thing lands on the filter centre:
   bins = 22,593.75 Hz**.
 
 Both shifts are calculated from the values loaded from
-`hw_settings.ini` at startup, and the CW shift again whenever the pitch
-changes. Because the rotation moves whole bins, the IF it makes is off
+`hw_settings.ini` at startup, and again whenever the pitch or
+`xtal_filter_center` changes. A placement that isn't physical (a
+non-positive shift, or one past Nyquist) is refused and logged, and
+transmitting is refused until a usable one is set, since the shift in
+force would no longer match the clocks. Because the rotation moves whole bins, the IF it makes is off
 by up to half a bin: 6.25 Hz low for SSB, and 10.6 Hz low for CW at
 700 Hz. (The CW tone, like the receive BFO, comes from a `vfo.c`
 oscillator with 1.46 Hz steps, so a 700 Hz pitch is 698.7 Hz.) A codec
@@ -1183,6 +1415,53 @@ The left channel carries the monitor: the source audio itself, not the
 pipeline's output, at a fixed peak of 10⁷ (about 47 dB below full
 scale), to the local speaker. It never reaches the PA.
 
+### Setting power
+
+The chain divides at the limiter:
+
+```
+audio → mic gain → pipeline → LIMITER → band scale × calibration → DAC → PA
+        └──── how hard it's driven ────┘    └── fixed: amplitude into watts ──┘
+```
+
+Everything left of the limiter decides how hard the signal is driven;
+everything right of it is fixed calibration that turns an amplitude
+into watts. Nothing an operator or a client can change may sit on the
+right, or the ceiling would stop being a ceiling. That is why POWER
+moves the limiter's threshold rather than scaling its output, and why
+the codec's `Master` right control (`TX_MASTER_VOL`, 95) is only a mute
+around the relay sequence, never a level control.
+
+- **POWER** (rigctld `RFPOWER`, TCI `drive`) sets the ceiling, so the
+  ceiling is enforced at every setting and ALC is always measured
+  against the ceiling in force. For CW the drive follows a POWER change
+  over 20 ms, so moving the control mid-element doesn't click.
+- **Mic gain** (rigctld `MICGAIN`, 0 to 64) is the drive for the
+  microphone: how hard speech is pushed into the ceiling. Turning it up
+  raises the average relative to the peak, and moves the ALC reading
+  rather than the wattmeter. Set it by watching ALC: advance it until
+  speech peaks read a couple of dB. The limiter is not a compressor; it
+  never raises quiet audio.
+- **DIGITAL** has no radio-side drive. The drive is the host's output
+  level (WSJT-X's Pwr slider), set by watching ALC, as with any rig.
+- **ALC** (rigctld `l ALC`) reports the deepest gain reduction, held and
+  decaying at 20 dB a second, so it reads as a meter.
+- **`full_scale_power` and `max_power`** in `hw_settings.ini`: the first
+  is the board's measured rated output, the second the most the
+  operator allows. Equal values are the normal setting; a lower
+  `max_power` is the same as a lower POWER, kept across restarts.
+- **The monitor** to the local speaker is fixed: the sidetone, the mic
+  and the test tones at `SIDETONE_PEAK_AMPLITUDE`, and a host's
+  transmit audio 20 dB lower (`DIGITAL_MONITOR_PEAK_AMPLITUDE`), since
+  programs such as WSJT-X send near full scale throughout. Neither
+  follows the volume control.
+
+`TX_GAIN_CORRECTION` depends on where the wanted product sits on the
+crystal filter, so it is re-measured with a wattmeter on a board whose
+filter centre or `bfo_freq` differ; the per-band scales are re-derived
+as [`tx_power_calibration.md`](dsp_design_notes/tx_power_calibration.md)
+describes.
+
 ### The analog chain
 
 From the codec, the IF goes to Mixer 2 with clk1 at `bfo_freq`, through
@@ -1228,7 +1507,8 @@ from rigctld, CAT, TCI or the panel is translated by `morse.c` into one
 internal form (letters, figures, punctuation, prosigns, and TCI's
 in-text speed changes) and sent by the same keyer, with three units
 between characters and seven between words. Using a paddle interrupts
-text.
+text. TCI's terminal mode holds the transmitter on after its text ends,
+until it is turned off.
 
 **The tone.** For each sample, `cw_get_sample()` multiplies a sine at
 the CW pitch by an envelope. The envelope is DL1YCF's ramp: 864 samples
@@ -1281,8 +1561,8 @@ to ±1.0 full scale (× 2⁻³¹) and multiplied by the mic gain, 0 to 64
 **Through the pipeline.** The 300 to 3000 Hz bandpass sets the
 transmitted bandwidth. The sideband zero keeps the positive frequencies
 for USB or the negative ones for LSB, so the opposite sideband is
-removed before any mixing, and the SSB shift places the suppressed
-carrier 6.25 Hz below the dial. Speech, unlike CW, has a varying
+removed before any mixing, and the SSB shift, with clk1's trim, places
+the suppressed carrier on the dial. Speech, unlike CW, has a varying
 envelope. Peaks driven past the ceiling by a high mic gain are pulled
 back smoothly by the limiter, and ALC shows by how much. Raising the
 mic gain raises the average level until the limiter is working on most
@@ -1311,7 +1591,7 @@ silence is used instead, so the filter's state stays continuous.
 
 **Through the pipeline.** Digital audio goes through the pipeline
 exactly as USB does, with the SSB shift: audio at 1500 Hz goes out
-1500 Hz above the dial (less 6.25 Hz). The bandpass passes the whole
+1500 Hz above the dial. The bandpass passes the whole
 300 to 3000 Hz range WSJT-X uses. A single-tone digital signal has a
 constant envelope, so with the host's audio below full scale the
 limiter is idle and the output power follows the audio level; driven
@@ -1342,6 +1622,20 @@ and in CW and CWR with CW's placement. Any PTT source keys them. After
 30 seconds of continuous transmission the main thread turns the tone
 off and drops PTT, unless the local key is holding the transmitter.
 
+### Known limitations
+
+- **Transmit frequency** is checked on remote receivers, not yet to the
+  hertz on a GPS-locked one.
+- **Voice levels are uncalibrated.** The limiter holds the peak, but
+  speech hasn't been checked on a wattmeter, and the best default for
+  mic gain isn't settled.
+- **POWER and ALC at reduced power** are bench-tested (`test-tx-pipeline`
+  Case F); a wattmeter check at reduced POWER is still to do.
+- **Remote PTT in CW sends no carrier** unless a test tone is on. CW from
+  a computer goes as text instead; there is no remote keying of
+  individual elements.
+- **The zBitx** has no microphone SSB yet.
+
 ---
 
 ## 8. Testing
@@ -1364,22 +1658,27 @@ real time. Run it before uploading a change.
 | Target | What it checks |
 |---|---|
 | `make test-fft-filter` | `fft_filter.c`: synthetic tones through the overlap-save filter, against passband and stopband targets in dB |
-| `make test-tx-pipeline` | `tx_pipeline.c`: carrier placement for CW and SSB, opposite-sideband suppression, unity gain, phase continuity across blocks, LSB, the limiter and ceiling, placement at other pitches and board values |
+| `make test-tx-pipeline` | `tx_pipeline.c`: carrier placement for CW and SSB, opposite-sideband suppression, unity gain, phase continuity across blocks, LSB, the limiter and ceiling, placement at other pitches and board values, and the carrier error clk1's trim takes out |
 | `make test-rx-filter` | `rx_filter.c`: the narrow filter's passband, stopband and retuning, linear and minimum phase |
 | `make test-rx-audio` | `rx_audio.c`'s wiring: the two-pass buffering, switching between the narrow filter implementations, and the fallback for odd block sizes |
 | `make test-rx-audio-impulse` | the narrow filter and the AGC together through the real demodulator: how a keyed signal's attack comes out of each filter with the AGC acting on the undelayed input |
 | `make test-upsample48k` | `upsample48k.c`: passband gain and rejection of the image the zero-stuffing creates |
 | `make test-cw` | `cw.c`: the keying envelope and its weighting, with key edges arriving through `key_input.c` at their own timestamps, including late capture reads and a codec clock 300 ppm off |
 | `make test-key-input` | `key_input.c`: debounce, bounce trains and glitches, mono-plug detection, paddle reversal, and placing edges in blocks |
-| `make test-radio` | `radio.c`'s RIT and XIT: the receive and transmit clocks each moves, a change mid-transmission, a retune clearing both, and the band check at the transmit frequency |
+| `make test-radio` | `radio.c`: the receive and transmit clocks RIT and XIT each move, a change mid-transmission, a retune clearing both, the band check at the transmit frequency, SPOT, the narrow filter held out by mode, and clk1 with the codec's rate and each mode's transmit trim |
 | `make test-encoder` | `encoder.c` and `knobs.c`: clicks each way through contact bounce, presses and their debounce, the tuning step, speed-up and push, no tuning in TX, volume and mute |
 | `make test-keyer` | `keyer.c`: exact element timing in samples for golden cases, and random paddle input in every mode checked against a sample-by-sample specification model; text, spacing and speed changes |
 | `make test-keyer-straight` | the same tests against `keyer_straight.c`, which must refuse what it does not offer |
 | `make test-tci-ws` | `tci_ws.c` over loopback: the WebSocket handshake and its refusals, every frame length encoding, fragmentation, close, oversize and malformed frames, the client limit, and the send queue's drop policy |
 | `make test-tci` | the TCI server over loopback, with the radio stubbed: a JTDX-style start-up, state echoes, PTT rules, receive audio in every format and rate, I/Q at both rates, transmit audio paced by `TX_CHRONO`, and CW text read back from what the real keyer keys |
-| `make test-radio-hw` | `hw_settings.c`'s `sbitx_version` and `i2c_bus` keys and `radio_hw.c`'s board profiles, with GPIO and I2C stubbed: the pins each board claims and their levels, LPF selection, the order of the T/R relay sequence, the zBitx's LPF chosen at the transmit frequency and no transmit where there is no LPF, and each board's knob pins, clear of every other pin in use |
+| `make test-radio-hw` | `hw_settings.c`'s `sbitx_version`, `i2c_bus` and `codec_rate` keys and `radio_hw.c`'s board profiles, with GPIO and I2C stubbed: the pins each board claims and their levels, LPF selection, the order of the T/R relay sequence, the zBitx's LPF chosen at the transmit frequency and no transmit where there is no LPF, and each board's knob pins, clear of every other pin in use |
 | `make test-i2c` | `i2c.c`'s search for the si5351's bus, with the device nodes faked: the usual bus first, then the others in number order, and none found |
 | `make test-cw-shape` | the transmitted CW's keying sidebands: a held dot paddle keyed through `cw.c` into `tx_pipeline.c`, checked against ARRL's Clean Signal Initiative mask at 40 WPM, at full power and 10 and 20 dB below |
+| `make test-cw-decoder` | `cw_decoder.c` on synthetic keyed CW in noise: machine and hand-sent fists from 5 to 35 WPM, Farnsworth, 6 dB SNR, noise alone, a second station after a pause, and the text reader |
+| `make test-cw-spot` | `cw_spot.c`, SPOT's tone finder: steady and keyed tones, weak ones, two at once, one just outside the band, noise alone, and what a search costs |
+| `make test-codec-check` | `codec_check.c` against a simulated codec: the score and the harmonic it names, a clean start left alone, a bad start restarted until clean in both shapes seen, giving up after three tries, no measurement while transmitting, and starting over after lost frames |
+| `make test-capture-dump` | `capture_dump.c`: SIGUSR1 to the process, and a second of fed samples read back from the WAV file |
+| `make test-si5351` | `si5351v2.c`'s frequency arithmetic: every clk1 and clk2 setting within half a step, AN619's register values exact, and what `si5351bx_setfreq()` writes |
 
 `make check-comments` runs `tools/check_comments.py` over the sources,
 enforcing the comment policy: comments state what the code does now,
@@ -1388,25 +1687,20 @@ and history belongs in the documentation.
 On the radio itself, maxibitx has been checked on the air: receive
 through SparkSDR, sdrOxide and the control panel; CW on frequency with
 the opposite sideband inaudible and about 5 W on all nine bands; USB and
-LSB from the microphone; and DIGITAL in a two-way FT8 contact through
-the USB gadget. The TCI server has also been tested against Hamlib's
+LSB from the microphone; DIGITAL in a two-way FT8 contact through the
+USB gadget, which proves every link of that path at once but not the
+carrier's placement to a few hertz; receive frequency within a hertz of
+WWV from 10 to 20 MHz; and transmit on frequency on remote receivers. The TCI server has also been tested against Hamlib's
 own TCI client, and its I/Q confirmed on the air with sdrOxide.
 
 ---
 
 ## 9. Further documentation
 
-The `docs/` folder holds the rest of the documentation. Documents
-numbered 01 to 09 describe how the code works; 10 and up describe how
-to use it.
+The `docs/` folder holds the rest of the documentation.
 
 | Document | Content |
 |---|---|
-| [`01_hardware_init_and_control.md`](01_hardware_init_and_control.md) | GPIO, si5351 and I2C, and the WM8731 codec's bring-up |
-| [`02_rx_processing_pipeline.md`](02_rx_processing_pipeline.md) | the receive chain, stage by stage |
-| [`03_tx_processing_pipeline.md`](03_tx_processing_pipeline.md) | the transmit chain: sources, keying and PTT, the pipeline, power calibration, known limitations |
-| [`04_remote_control_and_iq_output.md`](04_remote_control_and_iq_output.md) | how each external interface is implemented |
-| [`05_process_and_threading_model.md`](05_process_and_threading_model.md) | startup, the threads, and a map for reading `sound.c` |
 | [`06_api.md`](06_api.md) | the reference for external software: every interface's commands and formats, the radio model, WSJT-X setup, what is not available yet |
 | [`08_troubleshooting_and_bringup.md`](08_troubleshooting_and_bringup.md) | hardware bring-up and troubleshooting |
 | [`09_faq.md`](09_faq.md) | common questions, each pointing to the document with the full story |
