@@ -119,8 +119,8 @@ onboard demodulator and the transmit source:
 |---|---|---|---|
 | CW | upper side, mixed to the CW pitch | keyed tone, from the key jack or text | carrier on the dial |
 | CWR | lower side, mixed to the CW pitch | as CW | as CW |
-| USB | upper side, audio = RF − dial | microphone, or a TCI client's audio | upper sideband |
-| LSB | lower side, audio = dial − RF | microphone, or a TCI client's audio | lower sideband |
+| USB | upper side, audio = RF − dial, narrow filter held out | microphone, or a TCI client's audio | upper sideband |
+| LSB | lower side, audio = dial − RF, narrow filter held out | microphone, or a TCI client's audio | lower sideband |
 | DIGITAL | as USB, narrow filter held out | the USB sound card's audio, or a TCI client's | upper sideband |
 
 Transmitting is permitted only inside the frequency ranges listed as
@@ -312,7 +312,8 @@ external interfaces are in `src/interfaces/`.
 - **`radio.c`**: the single owner of radio state: frequency, mode, RIT,
   XIT, CW pitch and the transmit flag. `radio_tune_to()` sets the first
   oscillator and the band filter. `radio_set_mode()` points the
-  demodulator at the mode, and holds the narrow filter out in DIGITAL.
+  demodulator at the mode, and holds the narrow CW filter out in every
+  mode but CW and CWR.
   `radio_set_tx()` checks that the board may transmit and that the dial
   is in a transmit band, then hands the change to the TX worker thread, which runs the T/R sequence described in
   [§7](#7-transmit-source-to-antenna).
@@ -757,7 +758,7 @@ flowchart TD
     S1 --> S2{"Stage 2: demodulate"}
     S2 -->|"USB, LSB, DIGITAL:<br/>real part"| A["Audio, Hz = |RF - dial|"]
     S2 -->|"CW, CWR: mix with<br/>BFO at the pitch"| A
-    A --> S3{"Stage 3: narrow filter<br/>on by choice, held out in DIGITAL"}
+    A --> S3{"Stage 3: narrow filter<br/>on by choice in CW and CWR,<br/>held out in USB, LSB, DIGITAL"}
     S3 -->|"default"| FFT["FFT filter, rx_filter.c<br/>minimum phase, 4.5 ms delay"]
     S3 -->|"alternative"| ELL["Elliptic, 8 poles<br/>24-filter bank"]
     S3 -->|"bypassed"| G
