@@ -5,7 +5,7 @@
 // Streams receive I/Q to one client at 96kHz as a Hermes Lite 2 would
 // (EP6), and reads its commands (EP2): MOX, and the RX1 and TX
 // frequencies. Transmit I/Q from the client is ignored.
-// docs/04_remote_control_and_iq_output.md "HPSDR Protocol 1", and
+// docs/dsp_design_notes/interfaces_and_codec_bringup_notes.md §2, and
 // docs/06_api.md for what a client sees.
 
 #include "cw.h"
@@ -31,7 +31,7 @@
 // block the other: the producer always advances (dropping samples
 // rather than waiting), the consumer drains whatever is available. No
 // sleeping and no mutex on the audio thread: both caused continuous
-// xruns (docs/04_remote_control_and_iq_output.md, "Outbound (I/Q)").
+// xruns (docs/dsp_design_notes/interfaces_and_codec_bringup_notes.md §2).
 // IQ_QUEUE_CAP is a power of two so wraparound is a cheap bitmask instead
 // of a modulo.
 #define IQ_QUEUE_CAP                                                                              \
