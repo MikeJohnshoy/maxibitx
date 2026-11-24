@@ -213,3 +213,36 @@ doesn't need re-hitting exactly for the new pipeline to be considered
 good. If a tighter, flatter target across bands is ever wanted later,
 these numbers are the starting point for a fresh bisection; not treated
 as necessary now.
+
+## 9. Re-check, November 2026: `bfo_freq`
+
+Re-measured with the same power meter and dummy load, CW key-down, the
+same `scale` values, POWER at 100%. Every band read low, by 0.9 to
+1.7 dB except 60 m (0.2 dB): even across the bands, so something every
+band shares rather than the PA or an LPF.
+
+The cause was `bfo_freq`. It had gone from 40,035,000 to 40,048,000 (the
+zBitx's default) in `data/hw_settings.ini` on 4 October, after this
+calibration. The crystal filter is still hit in the centre, since the
+transmit IF follows `bfo_freq`, but the IF the codec makes moves from
+about 21.9 kHz to 34.9 kHz for CW at a 700 Hz pitch, and the board's
+output is lower up there: somewhere in the codec's output filter or
+the analog stage feeding Mixer 2. Put back to 40,035,000, the power
+came back with no `scale` changed:
+
+| Band | `bfo_freq` 40,048,000 | 40,035,000 |
+|---|---|---|
+| 80m | 4.4 W | 5.6 W |
+| 60m | 5.2 W | 5.2 W |
+| 40m | 3.8 W | 5.6 W |
+| 30m | 3.9 W | 5.3 W |
+| 20m | 3.8 W | 5.3 W |
+| 17m | 4.2 W | 5.8 W |
+| 15m | 3.9 W | 5.5 W |
+| 12m | 4.1 W | 5.6 W |
+| 10m | 4.2 W | 5.4 W |
+
+Accepted as they are. `data/hw_settings_sbitx.ini` is back to
+40,035,000; the zBitx's file keeps 40,048,000, which its own scales
+were calibrated at. The `scale` values depend on `bfo_freq`, so a change
+to either means re-checking the other.
