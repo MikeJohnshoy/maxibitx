@@ -398,9 +398,9 @@ static struct vfo bfo;
 // Local speaker volume, 0-100%, log (audio) taper: 1..100% maps evenly
 // onto -RX_VOLUME_RANGE_DB..0dB relative to RX_VOLUME_MAX, so every 1% is
 // 0.5dB; 0% is a true mute. RX_VOLUME_MAX is the loudest the local
-// speaker needs on this hardware. The default, 67%, is 0.03 linear -
-// comfortable copy. Affects out[] only; uac_out is tapped before
-// rx_volume.
+// speaker needs on this hardware. The default, 40%, is 0.0063 linear.
+// Affects out[], and sound.c's transmit monitor (rx_audio_volume_gain()),
+// only; uac_out is tapped before rx_volume.
 #define RX_VOLUME_MAX 0.20
 #define RX_VOLUME_RANGE_DB 50.0
 #define RX_VOLUME_DEFAULT_PERCENT 40
@@ -591,6 +591,10 @@ void rx_audio_set_mute(int on) {
 
 int rx_audio_get_mute(void) {
     return rx_muted;
+}
+
+double rx_audio_volume_gain(void) {
+    return rx_volume;
 }
 
 void rx_audio_set_narrow_filter(int enable) {
