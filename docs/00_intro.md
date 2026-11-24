@@ -1587,7 +1587,8 @@ and is sampled together with the receive IF. In USB and LSB the key
 jack's ring is the push-to-talk: closing it keys the transmitter and
 selects the microphone as the source. Each 32-bit mic sample is scaled
 to ±1.0 full scale (× 2⁻³¹) and multiplied by the mic gain, 0 to 64
-(rigctld `MICGAIN`, 1 by default).
+(rigctld `MICGAIN`, 2 at startup, which with the author's mic puts
+speech peaks about 3 dB into the limiter).
 
 **Through the pipeline.** The 300 to 3000 Hz bandpass sets the
 transmitted bandwidth. The sideband zero keeps the positive frequencies
@@ -1657,17 +1658,15 @@ off and drops PTT, unless the local key is holding the transmitter.
 
 - **Transmit frequency** is checked on remote receivers, not yet to the
   hertz on a GPS-locked one.
-- **Voice levels are uncalibrated.** The limiter holds the peak, but
-  speech hasn't been checked on a wattmeter, and the best default for
-  mic gain isn't settled.
-- **POWER and ALC at reduced power** are bench-tested (`test-tx-pipeline`
-  Case F); a wattmeter check at reduced POWER is still to do.
+- **Voice PEP** is shown by the ALC reading, not yet on a PEP-reading
+  meter: the author's meter reads part way between average and peak.
+  The mic gain's starting value suits one mic and voice.
 - **Remote PTT in CW sends no carrier** unless a test tone is on. CW from
   a computer goes as text instead; there is no remote keying of
   individual elements.
-- **Linearity is unmeasured.** How hard the PA can be driven before
-  two-tone IMD spreads outside the channel, and so the board's honest
-  PEP rating, is still to be found
+- **IMD is unmeasured.** A two-tone check on a wattmeter shows no sign
+  of the PA compressing up to 5 W, but the intermodulation products
+  themselves haven't been looked at on a spectrum
   ([`tx_test_tones_and_alc.md`](dsp_design_notes/tx_test_tones_and_alc.md)).
 - **TCI's CW text** hasn't been tried on the air.
 - **The zBitx** has no microphone SSB yet, and its RP2040 front panel
