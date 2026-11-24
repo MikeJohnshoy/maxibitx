@@ -208,6 +208,15 @@ field's value, and a macro naming a field with no value isn't sent, so a
 CQ never goes out without your call. Settings, the last host and the
 band memory are kept in `~/.maxibitx_panel.json`.
 
+Along the bottom of Settings, under every tab: **Close panel**; **Stop
+radio**, which stops maxibitx (rigctld `\shutdown_maxibitx`, its clean
+shutdown) and then closes the panel; and **Shut down Pi**, shown only
+when the panel's host is the machine it runs on, which stops maxibitx
+if connected, waits 2 s, and powers off with `systemctl poweroff`.
+Raspberry Pi OS lets the desktop's user do that without a password;
+if it fails, the reason shows beside the buttons. Stop radio and Shut
+down Pi each want a second tap within 3 s.
+
 **Tune** keys the transmitter with the single test tone at the power set
 beside it. In CW and CWR the carrier is on the dial (plus XIT), where a
 key-down goes; in USB and DIGI it is 1 kHz above the dial, in LSB 1 kHz
