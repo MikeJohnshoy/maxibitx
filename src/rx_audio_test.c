@@ -60,6 +60,8 @@
 //   how far the gain climbs in a gap between syllables and in a pause,
 //   for each of fast, medium and slow, and that the hang doesn't hold the
 //   gain down on noise alone.
+// Case N: the volume's gain, which sound.c's transmit monitor follows:
+//   the default, full volume, 0% and mute.
 
 #include <stdio.h>
 #include <math.h>
@@ -826,6 +828,27 @@ int main(void)
 		rx_audio_set_agc(RX_AGC_FAST);
 		rx_audio_set_demod(RX_DEMOD_CW);
 		rx_audio_set_narrow_filter(1);
+	}
+
+	// --- Case N: the volume's gain, for the transmit monitor --------------
+	{
+		printf("\nN. The volume's gain (sound.c's transmit monitor follows it)\n");
+		double at_default = rx_audio_volume_gain();
+		rx_audio_set_volume(100);
+		double full = rx_audio_volume_gain();
+		rx_audio_set_mute(1);
+		double muted = rx_audio_volume_gain();
+		rx_audio_set_mute(0);
+		double unmuted = rx_audio_volume_gain();
+		rx_audio_set_volume(0);
+		double zero = rx_audio_volume_gain();
+		rx_audio_set_volume(40);
+		int ok = fabs(at_default - 0.2 * pow(10.0, -30.0 / 20.0)) < 1e-9 &&
+		         fabs(full - 0.2) < 1e-12 && muted == 0.0 && unmuted == full && zero == 0.0;
+		printf("   %s default %.5f, 100%% %.3f, muted %.0f, unmuted %.3f, 0%% %.0f\n",
+		       ok ? "ok  " : "FAIL", at_default, full, muted, unmuted, zero);
+		if (!ok)
+			return 1;
 	}
 
 	printf("\nAll cases completed without a crash or out-of-range sample.\n");
