@@ -7,7 +7,7 @@
 //   make test-rx-audio-impulse && ./test-rx-audio-impulse
 //
 // What it can see that the others cannot: rx_audio.c computes its AGC gain
-// from the RAW undelayed I/Q and applies it to stage 3's output, which carries
+// from stage 1's output and applies it to stage 3's output, which carries
 // input from one group delay earlier - 3.6ms for the elliptic bank, 4.5ms for
 // the minimum-phase FFT filter, 16.0ms for the linear-phase one. The gain
 // therefore runs ahead of the audio it modulates, by a different amount per
@@ -16,14 +16,15 @@
 // circuit can measure what their interaction costs.
 //
 // Case A - an interferer the filter removes: a steady wanted tone on the dial
-//   plus strong bursts 2kHz off, deep in every stopband. The filter takes the
-//   burst out of the audio, the AGC still sees it. Measures how far a signal
+//   plus strong bursts 2kHz off, inside stage 1's 3 kHz but deep in every
+//   narrow filter's stopband. The filter takes the burst out of the audio,
+//   the AGC still sees it. Measures how far a signal
 //   that cannot be heard ducks one that can, and asserts the duck is equal
 //   for every filter: the AGC sits upstream of the selection, so it cannot
 //   depend on which filter is chosen, and the assertion is what keeps that
 //   true.
 // Case B - the wanted signal IS the transient: keyed CW at 20 WPM. The AGC
-//   sees each element rise undelayed and starts ducking before the element's
+//   sees each element rise a group delay early and starts ducking before the element's
 //   audio emerges. Measures how much of its onset transient survives, which
 //   is where the realizations differ.
 //
@@ -261,7 +262,7 @@ int main(void)
 	rx_audio_init();
 
 	printf("rx_audio.c stage 3 + stage 4 interaction - the narrow filter and the AGC together\n");
-	printf("(the AGC's gain comes from the RAW undelayed I/Q; see this file's header)\n\n");
+	printf("(the AGC's gain comes from stage 1's output, ahead of stage 3; see this file's header)\n\n");
 
 	for (int c = 0; c < n_cfg; c++) {
 		srand(20260926); // same noise for every configuration
@@ -297,8 +298,8 @@ int main(void)
 		printf("   %-11s %8.1f ms   %8.2f dB\n", configs[c].name, configs[c].gd_ms, duck[c]);
 	printf("   The duck must be the same for all three: the AGC is upstream of the filter\n"
 	       "   selection, so it cannot depend on which filter is chosen. A signal you\n"
-	       "   cannot hear still sets your volume - that is the design's accepted cost\n"
-	       "   (rx_audio_demod_design.md 8.8), not a defect.\n");
+	       "   cannot hear, inside stage 1's 3 kHz, still sets your volume - the cost of\n"
+	       "   an AGC ahead of the narrowest filter (rx_audio_demod_design.md 8.9).\n");
 
 	double duck_spread = 0;
 	for (int c = 1; c < n_cfg; c++) {
