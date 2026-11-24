@@ -135,7 +135,9 @@ The screen, top to bottom:
   group says so, and the setting comes back with CW. While it is on, a
   shaded band behind the trace and a bar on the scale show what it
   passes: its width, centred on the dial, moved with RIT.
-- **Spectrum:** span (5, 10 or 25 kHz), a status line, the S-meter, then
+- **Spectrum:** span (5, 10 or 25 kHz), the AGC (fast, medium or slow:
+  maxibitx keeps one for CW and CWR, one for USB and LSB and one for
+  DIGI, so the menu shows the current mode's), a status line, the S-meter, then
   the trace, a frequency scale and the waterfall under it. The FFT is
   longer at the narrower spans (bins of 23, 11.7 and 5.9 Hz at 25, 10
   and 5 kHz), so a narrow span resolves finer - a CW signal's keying
