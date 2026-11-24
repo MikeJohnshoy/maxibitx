@@ -83,6 +83,9 @@ void radio_set_mode(enum radio_mode m) {
     printf("radio: mode %d\n", m);
 }
 enum radio_mode radio_get_mode(void) { return stub_mode; }
+static enum rx_agc stub_agc = RX_AGC_SLOW;
+void radio_set_agc(enum rx_agc speed) { stub_agc = speed; }
+enum rx_agc radio_get_agc(void) { return stub_agc; }
 int radio_tx_allowed(int f) {
   (void)f;
   return stub_tx_allowed;
@@ -377,6 +380,20 @@ static void test_control(void) {
   gather(a, 200, got, sizeof(got));
   CHECK(strstr(got, "cw_macros_speed:25;") && strstr(got, "cw_keyer_speed:25;") && keyer_get_wpm() == 25,
         "speed 25 WPM, both speeds echoed");
+  send_text(a, "agc_mode:0;");
+  CHECK(expect(a, "agc_mode:0,normal;", 600), "agc_mode: slow reads normal");
+  send_text(a, "agc_mode:0,normal;");
+  CHECK(expect(a, "agc_mode:0,normal;", 1000) && stub_agc == RX_AGC_SLOW,
+        "agc_mode normal leaves slow alone, and is echoed");
+  send_text(a, "agc_mode:0,fast;");
+  CHECK(expect(a, "agc_mode:0,fast;", 1000) && stub_agc == RX_AGC_FAST, "agc_mode fast");
+  send_text(a, "agc_mode:0,normal;");
+  CHECK(expect(a, "agc_mode:0,normal;", 1000) && stub_agc == RX_AGC_MEDIUM,
+        "agc_mode normal from fast: medium");
+  stub_agc = RX_AGC_FAST;
+  CHECK(expect(a, "agc_mode:0,fast;", 1000), "a change made elsewhere is pushed");
+  stub_agc = RX_AGC_SLOW;
+  CHECK(expect(a, "agc_mode:0,normal;", 1000), "... and back");
 
   send_text(a, "split_enable:false;");
   CHECK(expect(a, "split_enable:0,false;", 600), "WSJT-X Improved's bare split_enable:false;");
