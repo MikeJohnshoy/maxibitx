@@ -37,7 +37,10 @@ exaggerating it — bench-verified, and on-air confirmed for the
 single-signal case (2026-09: tuning across a W1AW code practice
 session, the filter's edges and the AGC both "work very nice" — see
 §8.8). Not yet tested with two simultaneous signals in one buffer, on
-the bench or on air (§8.8, §10).
+the bench or on air (§8.8, §10). In November 2026 the envelope moved
+once more, to stage 1's output, so a strong station outside the 3 kHz
+no longer sets the gain, and the AGC gained three speeds, kept per mode
+(§8.9); two simultaneous signals are now on the bench.
 Volume is remotely controllable via the rigctld server's `l`/`L AF`
 commands (`docs/06_api.md`).
 
@@ -850,6 +853,115 @@ was about) - the real value of a W1AW-style test signal here. The
 two-signals/busy-band case (Case F, and the "AGC desense from an
 unrelated signal" behavior described just above) is still bench-only.
 
+### 8.9 Measuring after stage 1, and three speeds (November 2026)
+
+Two things about §8.8's AGC showed up in use. Its envelope covered
+everything the ADC delivers, the crystal filter's 27 kHz and the codec's
+noise across the whole 96 kHz, so a strong station 8 kHz away set the
+gain for the one being heard. And it had one speed, 5 ms attack and
+300 ms release with no hang, right for CW but not for voice, where the
+gain climbed back up in every pause and the noise swelled with the
+speaker's rhythm. Mike asked for an AGC setting the operator chooses,
+kept for each mode, and for the AGC to measure after stage 1.
+
+**Why stage 1 is safe now.** §8.7's trouble came from sampling stage 2:
+real audio, after the folding §8.4 describes, so a heavily attenuated
+image could come out near the centre of stage 3's passband with the
+AGC's makeup gain behind it, 58 dB louder than the wanted side. Stage
+1's output is complex and unfolded. Its magnitude rises with what stage
+1 passes and falls with what it rejects, and what comes after it, stage
+2's mixing and stage 3's narrow filter, doesn't touch the envelope, so
+stage 3's selectivity reaches the speaker whole, as in §8.8.
+
+**Measured.** A scratch harness first, through the real
+`rx_audio_process()` in USB with the narrow filter out: Gaussian noise
+at the codec's measured floor (about −66 dBFS, flat across the 96 kHz),
+a wanted tone 20 dB above the noise in 3 kHz, and other stations as
+listed. Levels are dB relative to the AGC's target.
+
+| | Raw input (§8.8) | Stage 1's output |
+|---|---|---|
+| Wanted tone alone | −4.1 | −0.9 |
+| Noise alone: the band's hiss | −22.4 | −7.7 |
+| Wanted tone, a station 40 dB stronger 4, 8 or 15 kHz away | down 35.5 | down 3.2 to 4.5 |
+| ... the same on the other sideband, 1.5 or 5 kHz away | down 35.5 | down 4.5 |
+| ... the same 2 kHz away, inside the 3 kHz | down 35.5 | down 38.6 |
+| The tone on the other sideband instead, alone | 41.0 dB below the wanted tone alone | 24.4 dB below |
+| ... its level above an empty bin beside it | 23.5 dB | 22.9 dB |
+
+- **Outside the passband**, a station 40 dB up now costs 3 to 4.5 dB
+  instead of 35. What remains is what stage 1's −40 dB stopband lets
+  into the envelope; a station 60 dB up would still cost about 20 dB.
+- **Inside the passband**, nothing changes, as it shouldn't: that
+  station is part of what is heard.
+- **The image.** On its own, a tone on the rejected side now plays
+  louder, because the AGC raises it together with the noise around it.
+  Its level above the noise is the same, 23 dB either way, so it is no
+  easier to hear, and with the wanted station present both sit exactly
+  as far apart as before.
+- **The hiss.** On a quiet band the AGC now brings the noise up toward
+  its target, about 15 dB louder than before, as a conventional
+  receiver's AGC does at full gain. §8.8's envelope saw about 30 times
+  the bandwidth of noise that is heard, and kept the hiss down by that
+  much. A signal plays as loud as before and its SNR is unchanged.
+  Mike chose to accept this rather than cap the gain.
+
+The existing tests all passed unchanged, with levels up by under 1 dB.
+`test-rx-audio-impulse` Case A's burst, 2 kHz off and so inside stage
+1's passband, ducks the wanted signal 15.4 dB instead of 14.6. Case E of
+`test-rx-audio` read the sideband rejection 2 to 4 dB lower: it measured
+each side alone for 85 ms, before the AGC had settled, and with the
+envelope after stage 1 a lone tone on the rejected side is raised with
+the noise, so that reading could only get worse as it settled. It now
+has both stations present together and measures each by its own audio
+tone: 39.6 dB in CW and in CWR.
+
+**Three speeds.** All attack in 5 ms, so nothing changes for a signal
+keying up. Fast is §8.8's 300 ms release with no hang. Medium holds the
+gain for 0.5 s after the signal drops, then releases over 300 ms; slow
+holds 1 s and releases over 1 s. The hang restarts while the signal's
+level, averaged over 5 ms, is within 6 dB of the envelope. Restarting it
+whenever a single sample rose above the envelope, the obvious rule,
+would hold the gain down on noise alone: every noise peak would restart
+it, and the envelope could only climb, by a rough estimate to about 4.6
+times the noise's standard deviation per rail, where a peak comes too
+seldom to restart it.
+
+Measured (now `test-rx-audio` Case M): a station 20 dB above the noise
+keyed like speech, 180 ms syllables 300 ms apart in groups of four, then
+a 700 ms pause.
+
+| Speed | Gain rise in a 120 ms gap | In a 700 ms pause | Gain on noise alone, against fast | Back within 3 dB after a 100 ms burst 40 dB up |
+|---|---|---|---|---|
+| fast | 2.9 dB | 15.9 dB | 0 | 1.7 s |
+| medium | 0.1 dB | 7.7 dB | −2.1 dB | 1.8 s |
+| slow | 0.1 dB | 0.1 dB | −5.7 dB | 5.1 s |
+
+Medium bridges syllables and lets the gain start back in a long pause;
+slow holds through the pause, and pays for it after a crash. The slower
+release also sits the envelope nearer the noise's peaks, so noise alone
+plays a few dB quieter. The values are a starting point, to be tuned by
+ear on the air.
+
+**Decisions.**
+
+- **A user setting, kept per mode** (Mike). Three groups: CW and CWR,
+  USB and LSB, DIGITAL. Each starts at fast, medium and slow
+  respectively (the defaults offered; Mike didn't pick others). Not kept
+  across restarts.
+- **No AGC off.** maxibitx has no RF gain control to go with it, so
+  with the AGC off the volume would be the only level control.
+- **Measure after stage 1** (Mike), and **accept the louder hiss**
+  (Mike), rather than cap the gain at the old level.
+- **The S-meter** keeps its own 5 ms and 300 ms, so its reading doesn't
+  change with the AGC's speed.
+- **Interfaces.** rigctld `l`/`L AGC` uses Hamlib's numbers (2 fast,
+  5 medium, 3 slow) and is advertised in `dump_state`. TCI's `agc_mode`
+  has only `fast` and `normal`, so medium and slow both read `normal`,
+  and setting `normal` moves fast to medium and leaves slow alone. The
+  control panel has an AGC menu beside the span. Kenwood CAT's `GT` isn't
+  implemented.
+
 ## 9. Master output split (L/R independence)
 
 Related fix, landed alongside the AGC work: the WM8731's `Master`
@@ -881,10 +993,11 @@ the debugging trail this caused.
   USB/LSB. CW was left keeping positive baseband at first -
   effectively CW-reverse - and later switched to the upper side, same
   conjugation as USB (same note, §10, "CW's own sideband").
-- **`AGC_TARGET_AMPLITUDE`/`AGC_ATTACK_MS`/`AGC_RELEASE_MS`** are
-  reasonable-looking starting points, not yet tuned against extended
-  listening — particularly whether 300ms release feels right between
-  CW characters, or pumps/lags noticeably.
+- **`AGC_TARGET_AMPLITUDE`, `AGC_ATTACK_MS` and the three speeds'
+  hang and release** (§8.9) are reasonable-looking starting points, not
+  yet tuned against extended listening — whether fast's 300 ms feels
+  right between CW characters, and whether medium and slow suit voice
+  and DIGITAL on the air.
 - **Stage 1's design point** (`Fpass=1500`/`Fstop=1900`, 327 taps, -40dB
   stopband) and **stage 3's elliptic design point** (order 4, 0.5dB
   ripple, 50dB stopband target, 300Hz -3dB width, §8.2) are reasonable
