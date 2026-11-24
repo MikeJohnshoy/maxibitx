@@ -92,14 +92,17 @@ static int rx_mute_by_switch = 1;
 #define TX_SAMPLE_HEADROOM (1000000000.0 / (TX_DRIVE * HW_DEFAULT_TX_SCALE))
 #define TX_SAMPLE_CLAMP 2000000000.0 // stay well inside int32 range
 #define TX_GAIN_CORRECTION 0.045
-// Fixed sidetone PCM peak (left channel only - never reaches the PA).
-// Deliberately independent of TX_GAIN_CORRECTION; see
-// docs/00_intro.md §7, "Setting power".
-#define SIDETONE_PEAK_AMPLITUDE 10000000.0
-// The monitor's peak for a host's transmit audio (DIGITAL over the USB
-// gadget, or a TCI client's), 20 dB under SIDETONE_PEAK_AMPLITUDE: WSJT-X
-// and JTDX send their tones near full scale for the whole transmission.
-#define DIGITAL_MONITOR_PEAK_AMPLITUDE (SIDETONE_PEAK_AMPLITUDE * 0.100)
+// The transmit monitor on the left channel (never reaches the PA),
+// deliberately independent of TX_GAIN_CORRECTION; see docs/00_intro.md
+// §7, "Setting power". A full-scale sidetone or test tone plays as loud
+// as a received signal held at the AGC's level - rx_audio.c's
+// AGC_TARGET_AMPLITUDE, change them together - times the volume control
+// (rx_audio_volume_gain()), so the volume and mute set both.
+#define MONITOR_PEAK_AMPLITUDE 500000000.0
+// A host's transmit audio (DIGITAL over the USB gadget, or a TCI
+// client's) 20 dB under that: WSJT-X and JTDX send their tones near full
+// scale for the whole transmission.
+#define DIGITAL_MONITOR_RELATIVE 0.100
 
 // Fixed unit conversion: a raw S32_LE mic sample (full int32 range) to
 // tx_pipeline.c's ~[-1,1] input, full scale = 1.0 - the mic counterpart to
@@ -1054,7 +1057,8 @@ static void *audio_loop(void *arg) {
 
         enum radio_mode tx_mode = mode_now;
         enum tx_pipeline_signal signal = TX_PIPELINE_CW;
-        double monitor_peak = SIDETONE_PEAK_AMPLITUDE; // the local speaker's level
+        // The local speaker's level for this source, before the volume.
+        double monitor_peak = MONITOR_PEAK_AMPLITUDE;
 
         if (tone_on) {
           // Test tones replace the mode's own source; the sideband still
@@ -1099,7 +1103,7 @@ static void *audio_loop(void *arg) {
           // DIGITAL is always USB (the FT8/digital convention); TCI audio
           // in USB or LSB follows the mode.
           signal = (tx_mode == RADIO_MODE_LSB) ? TX_PIPELINE_LSB : TX_PIPELINE_USB;
-          monitor_peak = DIGITAL_MONITOR_PEAK_AMPLITUDE;
+          monitor_peak = MONITOR_PEAK_AMPLITUDE * DIGITAL_MONITOR_RELATIVE;
         } else {
           // USB/LSB: mic audio, through the fixed unit conversion and the
           // live mic gain. (cw_poll_key() only asserts TX for CW, USB and
@@ -1108,7 +1112,11 @@ static void *audio_loop(void *arg) {
           for (int i = 0; i < n; i++)
             tx_audio_buf[i] = mic_buf[i] * mic_gain;
           signal = (tx_mode == RADIO_MODE_LSB) ? TX_PIPELINE_LSB : TX_PIPELINE_USB;
+          // No monitor of the mic: with the speaker near an open mic it
+          // feeds back, as on most rigs with their monitor off.
+          monitor_peak = 0.0;
         }
+        monitor_peak *= rx_audio_volume_gain();
 
         if (n == TX_PIPELINE_BLOCK_LEN) {
           for (int i = 0; i < TX_PIPELINE_BLOCK_LEN; i++)
@@ -1146,9 +1154,9 @@ static void *audio_loop(void *arg) {
           if (raw_tx < -TX_SAMPLE_CLAMP)
             raw_tx = -TX_SAMPLE_CLAMP;
 
-          // L: local monitor - CW sidetone, a copy of the mic audio, or
-          // the host's transmit audio, at a fixed level (monitor_peak).
-          // Never reaches the PA.
+          // L: local monitor - CW sidetone, a test tone or the host's
+          // transmit audio, at monitor_peak (silent for the mic). Never
+          // reaches the PA.
           double raw_side = tx_audio_buf[i] * monitor_peak;
           if (raw_side > TX_SAMPLE_CLAMP)
             raw_side = TX_SAMPLE_CLAMP;
