@@ -3,9 +3,9 @@
 Status: implemented 2 November 2026. `cw.c` keys with DL1YCF's 9 ms ramp,
 `tx_pipeline.c` drives CW at the power ceiling instead of limiting it,
 `make test-cw-shape` checks the transmitted spectrum against the mask on
-the bench, and `tools/cw_shape.py` measures a CW signal off the air. Not
-yet measured on the air: the sBitx's real RF, through its power amplifier
-(§7).
+the bench, and `tools/cw_shape.py` measures a CW signal off the air; §8
+is a worked example on W1AW. Not yet measured on the air: the sBitx's
+real RF, through its power amplifier (§7).
 
 ## 1. The goal
 
@@ -195,10 +195,25 @@ where it is, with a verdict:
   338 Hz, which is most likely a neighbouring station;
 - FAIL otherwise.
 
+Before that, it looks for other stations by symmetry. Keying sidebands
+come in mirrored pairs, so a peak beyond 150 Hz that stands 10 dB above
+the same offset on the carrier's other side, and 6 dB above the noise,
+is another station whatever its level: it is named and left out of the
+mask. The carrier the levels are referred to is the strongest peak
+within 150 Hz, not the strongest in view, which can be a neighbour.
+
 It also reports:
 
 - the carrier's signal-to-noise and how far down the noise lets it see;
-- speed and weighting, from an envelope within 100 Hz of the carrier;
+- speed and weighting, from an envelope within 100 Hz of the carrier. A
+  mark starts at 60% and ends at 40% of the key-down level, so a fade
+  doesn't split it, and the dot length is found by clustering the marks'
+  lengths, so a stray fragment isn't taken for a dot;
+- where the sidebands come from: 43 ms frames inside long elements (kept
+  10 ms clear of the edges), on the edges, and in the gaps, compared by
+  their medians at 150, 338 and 600 Hz. Keying sidebands are only on the
+  edges; phase noise or hum, the transmitter's or the receiver's, is
+  there in steady key-down too;
 - rise and fall times, 10–90%, and chirp, from the widest envelope (up to
   1200 Hz) that is 26 dB above the noise and clear of other stations,
   with that filter's own rise time beside them, or left out when the
@@ -238,7 +253,135 @@ can't hear itself, since receive is muted in transmit. The plan:
 A power amplifier that compresses, or a supply that sags, reshapes the
 envelope and shows here as wider sidebands than §5's. The same
 measurement on other stations' signals, from the panel's spectrum, is a
-way to compare.
+way to compare. §8 does that for one.
+
+## 8. A worked example: W1AW off the air
+
+W1AW was strong on 23 November 2026, and is a station many operators
+know, so it made a good first real signal for `cw_shape.py`. Mike ran
+the tool four times between about 15:40 and 16:15 local time. The first
+run, before the changes below, wasn't saved; the other three were, and
+the figures here are those recordings replayed with the tool as it now
+stands (`--replay`).
+
+### What it measured
+
+The worst level beyond each mask point, either side of the carrier, in
+dBc. A bold figure fails; "?" is "can't tell", within 6 dB of the
+noise.
+
+| Run | SNR in 2.5 kHz | Noise reaches | >90 Hz (−20) | >150 Hz (−40) | >338 Hz (−60) | Speed | Rise / fall, 10–90% |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 15:54 | 31.3 dB | −44.1 dBc | −26.9 | **−30.6** | −38.7 ? | 17.2 WPM | 3.29 / 2.68 ms |
+| 16:02 | 41.2 dB | −51.2 dBc | −27.8 | **−34.1** | **−41.9** | 16.3 WPM | 2.28 / 2.23 ms |
+| 16:13 | 34.3 dB | −46.5 dBc | −31.5 | **−37.5** | −44.4 ? | 16.3 WPM | 2.55 / 2.42 ms |
+
+- **90 Hz passes** in every run, by 7 to 12 dB.
+- **150 Hz fails** in every run, on both sides, by 2.5 to 9.4 dB, and
+  each failing figure stands about 9 to 17 dB above the noise, so it is
+  the signal and not the noise.
+- **338 Hz fails by 18 dB** in the one run strong enough to see it
+  (16:02, 9 dB above the noise there). In the other two the noise is
+  higher than anything a clean signal would show, so the tool can't tell.
+- Nothing beyond 600 Hz stands clear of the noise in any run.
+
+The tool named and set aside two other stations, at −1494 Hz and
++885 Hz, each with nothing like it on the other side of the carrier.
+Chirp was within a hertz.
+
+### Keying, not phase noise
+
+The steady-against-edges check at 150, 338 and 600 Hz. Its figures are
+medians of 43 ms frames in 23 Hz bins, a different measure from the
+peak-held mask figures above, so they compare with each other, not with
+the mask:
+
+| Run | | 150 Hz | 338 Hz | 600 Hz |
+| --- | --- | --- | --- | --- |
+| 15:54 | steady / edges / gaps | −47.9 / **−26.1** / −48.9 | −48.8 / −45.9 / −47.4 | −47.8 / −47.4 / −49.3 |
+| 16:02 | steady / edges / gaps | −52.4 / **−25.8** / −58.6 | −58.8 / **−49.2** / −58.2 | −58.3 / −55.0 / −59.0 |
+| 16:13 | steady / edges / gaps | −49.8 / **−25.6** / −52.6 | −52.4 / **−47.6** / −52.8 | −53.0 / −51.4 / −53.0 |
+
+At 150 Hz the edges are 22 to 27 dB above steady key-down, and steady
+key-down is within 1 to 6 dB of the gaps. At 338 Hz the edges stand
+10 dB (16:02) and 5 dB (16:13) above steady key-down, which matches the
+gaps. The sidebands are on the edges only: they are W1AW's keying, not
+phase noise or hum at either end, and not this receiver.
+
+### The edge
+
+Averaging each run's edges (elements over 35 ms long, aligned on their
+50% point, the median in the envelope the tool timed them in: 600 Hz,
+or 1200 Hz at 16:13) gives the strongest run's rise as:
+
+- 2% to 85% of full in about 3 ms (−1.5 to +1.5 ms about the 50% point);
+- then a slow creep: 86% at +2 ms, 93% at +8 ms, 95–96% from +12 ms on.
+
+Its fall goes from 90% to 2% in under 4 ms, with no tail. So the shape
+is a fast edge with a corner at the top, and the corner, more than the
+2–3 ms rise, is the likely source of the energy at 338 Hz. The 16:13
+run shows the same fast edge, reaching full in about 8 ms. The 15:54
+run's elements were fading, and its averaged rise never settles above
+90%; its 150 Hz figure, the worst of the three, is likely inflated by
+that.
+
+For scale, the tool's own synthetic signals at W1AW's speed (16.3 WPM,
+90 dB SNR):
+
+| Ramp | Rise, 10–90% | >150 Hz | >338 Hz |
+| --- | --- | --- | --- |
+| maxibitx's old 5 ms Blackman-Harris ramp | 2.34 ms | −37.4 | −57.1 |
+| DL1YCF's 9 ms ramp, `cw.c` now | 4.94 ms | −54.7 | −72.5 |
+| W1AW, 16:02 | 2.28 ms | −34.1 | −41.9 |
+
+W1AW's rise time is about that of the ramp maxibitx replaced, and its
+150 Hz figures are within 3 dB of it. Its 338 Hz figure is 15 dB worse,
+which fits the corner at the top of its edge. DL1YCF's ramp
+passes at this speed with about 15 and 12 dB to spare.
+
+### How far to trust it
+
+- **It is one off-air path.** Fading moves the level of a whole element
+  over tens of milliseconds, which puts energy within a few hertz of the
+  carrier, not at 150 Hz, and multipath smears an edge, which would make
+  it look softer, not harder. Neither explains a 150 Hz failure. A fade
+  during an edge can still raise a figure, as in the 15:54 run.
+- **It isn't ARRL's measurement.** The tool holds 5.9 Hz bins at their
+  peak; ARRL's resolution bandwidth and detector are not stated in what
+  was read (§2). The comparison with the synthetic ramps uses the same
+  tool, so that part holds whatever the measurement's offset.
+- **It is at 16–17 WPM, not ARRL's 40.** At 40 WPM there are more than
+  twice as many edges a second, so the same edges would put more energy
+  into the sidebands, not less.
+- **The noise limits what it can show.** The peak-held noise sits at
+  about −(SNR + 10 to 13) dBc, with SNR the carrier's in 2.5 kHz. So
+  seeing −60 dBc at all takes about 50 dB SNR, and seeing a clean
+  signal's sidebands below the mask, with room for a PASS, 60 to 65 dB. W1AW at
+  31 to 41 dB could show a failure at 338 Hz only where it was gross,
+  and in one run it was.
+
+So, as received here, W1AW's CW misses the CSI mask at 150 Hz in every
+run, and at 338 Hz by 18 dB where the signal was strong enough to tell.
+The sidebands are its keying edges.
+
+### What it taught the tool
+
+The first runs found three faults in `cw_shape.py`, each fixed before
+the figures above were taken:
+
+- **Neighbours.** Its first rule took a valley between the carrier and
+  a peak as the sign of another station, which also flagged a clean
+  signal's own sidelobes. Another station is now a peak with no mirror
+  image on the carrier's other side, and levels are referred to the
+  carrier within 150 Hz rather than to the strongest peak in view.
+- **Speed.** A fading signal read 248 WPM: noise hovering about the 50%
+  point split elements into fragments a few milliseconds long, and the
+  shortest was taken for a dot. Hysteresis (60% on, 40% off) and finding
+  the dot by clustering the marks' lengths read the same recording as
+  17.2 WPM.
+- **Where the sidebands come from.** Nothing told keying sidebands from
+  phase noise or the receiver's own floor; the steady-against-edges check
+  was added for that, using medians so one stray frame can't skew it.
 
 ## References
 
