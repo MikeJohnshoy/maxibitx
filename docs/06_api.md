@@ -162,7 +162,7 @@ unless `MAXIBITX_RIGCTL_TRACE=1` is in maxibitx's environment.
 | `J <Hz>` | `RPRT 0` | −9999 to 9999; `J 0` turns RIT off. Out of range: `RPRT -1`. |
 | `z` | `-300` | XIT offset, Hz. The stored value: CAT `XT0;` and TCI `xit_enable` can switch XIT off without zeroing it. |
 | `Z <Hz>` | `RPRT 0` | −9999 to 9999; `Z 0` turns XIT off. The transmitter goes out at the dial plus the offset; the receiver stays on the dial. Takes effect at the next transmission. Out of range: `RPRT -1`. |
-| `l AF` | `0.670000` | Volume, 0.0-1.0 |
+| `l AF` | `0.670000` | Volume, 0.0-1.0: the local speaker in receive, and the transmit monitor (sidetone, test tones, DIGITAL audio; never the mic) |
 | `L AF <0.0-1.0>` | `RPRT 0` | |
 | `u MUTE` / `U MUTE <0\|1>` | `0` / `RPRT 0` | The local speaker muted; the volume is kept and returns on unmute. A push of the volume knob toggles it, and turning that knob unmutes. A real Hamlib function, not advertised in `dump_state` |
 | `l STRENGTH` | `-12` | S-meter, integer dB relative to S9 (−54 to +60). Uncalibrated - relative readings only. |
