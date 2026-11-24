@@ -169,7 +169,9 @@ The screen, top to bottom:
 - **By mode:** in CW, ten macro buttons; in USB/LSB, mic gain and the ALC
   meter; in DIGI, a note that the digital-mode program has the audio.
 - **Bottom row:** keyer type, WPM, the CW text field, Send and Stop,
-  power, and Tune.
+  power, and Tune. Volume, power and WPM are number boxes: an arrow
+  steps volume by 2% (1 dB), power by 5% and WPM by 1, and a typed value
+  is sent on Return or on leaving the box.
 
 **Tuning digit by digit.** Tap a digit of the frequency to make it the
 tuning step (it turns amber and underlined). Then the mouse wheel over a
@@ -192,7 +194,7 @@ and a push of the knob, which moves the step on, moves the underline
 too. The panel reads the frequency four times a second, so a turn of the
 knob shows at once. A push of the volume knob mutes the speaker and the
 VOL caption reads MUTE in amber; tap the caption to mute or unmute from
-the panel, and moving the volume slider unmutes, as turning the knob
+the panel, and changing the volume unmutes, as turning the knob
 does. A maxibitx without knob support simply doesn't answer `n` or
 `u MUTE`, and the panel carries on without them.
 
