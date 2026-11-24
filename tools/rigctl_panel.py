@@ -638,16 +638,21 @@ def setup_style(root):
     # higher dpi (the 7-inch one can say ~130) would otherwise grow every
     # font and push the top row past the screen's edge.
     root.tk.call("tk", "scaling", 96.0 / 72.0)
-    # Condensed faces first: the top row is sized for one. Piboto
-    # Condensed comes with Raspberry Pi OS.
-    ui = pick_family(("IBM Plex Sans Condensed", "Barlow Semi Condensed",
-                      "Piboto Condensed", "DejaVu Sans Condensed",
-                      "Liberation Sans Narrow", "Nimbus Sans Narrow"), "TkDefaultFont")
+    # Condensed faces first: the top row is sized for one. The shortest
+    # lines first of those: at 12 points bold, Liberation Sans Narrow's are
+    # 16 px against IBM Plex Sans Condensed's 22, and every row on the
+    # 480-line screen is that much shorter (Settings ran off the bottom in
+    # Plex). Raspberry Pi OS has both.
+    ui = pick_family(("Liberation Sans Narrow", "IBM Plex Sans Condensed",
+                      "Barlow Semi Condensed", "Piboto Condensed",
+                      "DejaVu Sans Condensed", "Nimbus Sans Narrow"), "TkDefaultFont")
     # A wider face than the layout was drawn with gets its sizes scaled
     # down to match, so the top row still fits 800 px.
     global UI_SIZE_SCALE
     wide = tkfont.Font(family=ui, size=12, weight="bold").measure(UI_SIZE_SAMPLE)
     UI_SIZE_SCALE = min(1.0, UI_SIZE_SAMPLE_PX / wide) if wide > 0 else 1.0
+    print(f"rigctl_panel: font {tkfont.Font(family=ui, size=12).actual('family')}, "
+          f"sizes x{UI_SIZE_SCALE:.2f}")
     s = ttk.Style(root)
     s.theme_use("clam")
     root.option_add("*TCombobox*Listbox.font", (ui, usz(14)))
