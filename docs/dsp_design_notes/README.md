@@ -15,8 +15,9 @@ already used in `antialias_filter_design.md`.
   how it is read, DL1YCF's 9 ms ramp, the old and new ramps compared,
   what the transmit path did to the keying at reduced power, and how to
   check a signal on the bench (`test-cw-shape`) and off the air
-  (`tools/cw_shape.py`). Status: implemented; the sBitx's own RF still
-  to be measured.
+  (`tools/cw_shape.py`), with W1AW measured off the air as a worked
+  example. Status: implemented; the sBitx's own RF still to be
+  measured.
 - [`interfaces_and_codec_bringup_notes.md`](interfaces_and_codec_bringup_notes.md)
   — why the interfaces and the codec bring-up are built as they are: the
   HPSDR parser and pacer bugs, the "buzzsaw" status bytes, the USB
