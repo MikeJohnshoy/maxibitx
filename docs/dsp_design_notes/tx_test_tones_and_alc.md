@@ -375,10 +375,47 @@ The middle two rows answer "will it clip my CW?": the limiter's
 departure from a pure gain is 76 dB smaller than a clipper's would be.
 Re-run with `make test-tx-pipeline && ./test-tx-pipeline`.
 
-**Not yet radio-tested.** The rigctld `RFPOWER`/`ALC` commands and the
-panel's slider and meter are written but haven't been exercised against
-a running daemon — the bench harness links `tx_pipeline.c` without any
-of the hardware code.
+**On the radio** (November 2026), POWER, the ALC reading and mic gain
+were checked into a dummy load: see the next section.
+
+## On the bench, November 2026
+
+Mike's sBitx on 40 m into a dummy load, measured with the power meter in
+an ATU-10 tuner. Its scatter from session to session is ±0.5 to 0.8 W
+(`tx_power_calibration.md`), so the useful readings are ratios taken in
+one session.
+
+**The meter.** At POWER 25%, where the PA is surely linear, the two-tone
+read 0.70 of the single tone; an averaging meter reads 0.50 and a PEP
+meter 1.0. The ATU-10's diode detector reads part way between, always
+below the true PEP.
+
+| POWER | Single tone, USB | Two-tone | Ratio |
+|---|---|---|---|
+| 25% | 1.0 W | 0.7 W | 0.70 |
+| 50% | 2.1 W | 1.3 W | 0.62 |
+| 100% | 5.0 W | 3.2 W | 0.64 |
+
+- **POWER tracks.** 50% should read half of 100% and 25% a quarter; the
+  readings are 0.75 and 1 dB lower than that. POWER scales the drive
+  digitally, and a PA problem would show at high power, not low, so this
+  is the detector under-reading at low power.
+- **No sign of compression.** A PA flattening its peaks raises the
+  two-tone's reading relative to the single tone's. From 50% to 100% the
+  ratio moves 0.62 to 0.64, about 0.1 dB. (The 25% ratio is the
+  detector's least accurate reading.) The products themselves need a
+  spectrum: the plan below.
+- **SSB against CW.** The single tone, 5.0 W, against a CW key-down of
+  5.6 W on the same band: within the meter's scatter. The tone's IF is
+  23.6 kHz against CW's 21.9 kHz, and the board's output falls a little
+  as the IF rises (`tx_power_calibration.md` §9).
+- **Voice.** With mic gain 2.5× the ALC read about 5 dB on speech peaks,
+  and the meter under 3 W. The ALC is the evidence the meter can't give:
+  the limiter acts only when the envelope reaches the ceiling, 5 W PEP at
+  POWER 100%, so 5 dB on peaks means speech peaks are at 5 W and held
+  there. The meter, part-peak, reads speech's brief peaks lower still
+  than the two-tone. About 3 dB on peaks is the guideline for natural
+  speech, about 2× here, so mic gain now starts at 2.0×.
 
 ## Doing the measurements
 
