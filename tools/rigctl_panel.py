@@ -1097,7 +1097,7 @@ class Panel(tk.Tk):
         self.width_var = tk.StringVar(value="300")
         self.span_var = tk.StringVar(value=self.span_label(SPECTRUM_DEFAULT_HALF_SPAN_HZ))
         self.agc_var = tk.StringVar(value="")
-        self.micgain_var = tk.DoubleVar(value=1.0)
+        self.micgain_var = tk.DoubleVar(value=2.0)
         self.keyer_var = tk.StringVar(value=KEYER_MODES[4])
         self.wpm_var = tk.StringVar(value="20")
         self.wpm_focused = False
