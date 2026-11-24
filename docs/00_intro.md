@@ -195,7 +195,8 @@ so and maxibitx runs without it. Without playback there is no local
 audio and no transmit. A key `hw_settings.ini` leaves out takes its
 default, except `sbitx_version`.
 
-Shutdown, on SIGINT or SIGTERM, runs roughly in reverse: drop PTT and
+Shutdown, on SIGINT or SIGTERM (which rigctld's `\shutdown_maxibitx`
+sends, for the control panel's Stop radio), runs roughly in reverse: drop PTT and
 the relay and wait 50 ms for them, stop the audio thread first so no
 consumer is left racing a producer, then stop CAT, the USB gadget, HPSDR,
 iq_stream, TCI (disconnecting its clients) and rigctld. SIGKILL, or a
