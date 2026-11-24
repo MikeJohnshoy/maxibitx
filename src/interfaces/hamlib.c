@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <pthread.h>
+#include <signal.h>   // \shutdown_maxibitx below
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -786,6 +787,18 @@ static int handle_line(int fd, char *line)
         keyer_stop_text();
         send_rprt(fd, 0);
         printf("rigctl: \\stop_morse -> text stopped\n");
+        return 0;
+    }
+
+    if (strcmp(cmd, "\\shutdown_maxibitx") == 0) {
+        // Extension: stops maxibitx as SIGTERM or Ctrl-C does, by sending
+        // itself one: maxibitx.c's shutdown drops PTT and the relays first.
+        // The reply goes out before that starts, and the connection then
+        // closes with the server. A name no Hamlib client sends.
+        send_rprt(fd, 0);
+        printf("rigctl: \\shutdown_maxibitx -> stopping maxibitx\n");
+        fflush(stdout);
+        kill(getpid(), SIGTERM);
         return 0;
     }
 
