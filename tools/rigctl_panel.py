@@ -13,7 +13,7 @@ The screen, top to bottom:
 
     band menu, frequency, mode (CW CWR USB LSB DIGI), RX/TX, volume, gear
     RIT and its steps          |  CW FILTER: on, width, centre, SPOT
-    span                                   status              S-meter
+    span, AGC                              status              S-meter
     spectrum, frequency scale, waterfall
     CW: ten macros  |  USB/LSB: mic gain and ALC  |  DIGI: a note
     key type, WPM, CW text, Send, Stop, power, Tune
@@ -77,6 +77,10 @@ exactly on the pitch, and clears RIT, so the next transmission lands on
 its frequency; XIT is kept. The status line says how far it moved, or
 why it didn't (\\spot).
 
+AGC is fast, medium or slow. maxibitx remembers one for CW and CWR, one
+for USB and LSB, and one for DIGI (fast, medium and slow to start with),
+so the menu shows the current mode's and a change applies to its group.
+
 TUNE keys the transmitter with the single test tone (u TONE 1, then T
 1): in CW and CWR the carrier is on the dial (plus XIT), in the other
 modes 1 kHz from it; maxibitx drops it after 30 s.
@@ -90,6 +94,7 @@ rigctld commands used:
     t / T <0|1>             PTT
     l AF / L AF             volume, 0.0-1.0
     l STRENGTH              S-meter, dB relative to S9
+    l AGC / L AGC           AGC speed, Hamlib's numbers: 2 fast, 5 medium, 3 slow
     l RFPOWER / L RFPOWER   TX power, 0.0-1.0 of max_power
     l ALC                   limiter gain reduction, dB
     l MICGAIN / L MICGAIN   mic gain multiplier, USB/LSB
@@ -166,6 +171,8 @@ WIN_W, WIN_H = 800, 480
 KEYER_MODES = ("Straight", "Bug", "Ultimatic", "Iambic A", "Iambic B")
 MODES = ("CW", "CWR", "USB", "LSB", "DIGI")   # DIGI is rigctld's DIGITAL
 CW_PITCHES = ("500", "600", "700", "800", "900", "1000")
+# The AGC menu, and rigctld's numbers for each (Hamlib's).
+AGC_SPEEDS = (("FAST", 2), ("MED", 5), ("SLOW", 3))
 CW_WIDTHS = ("150", "300", "450", "600")
 # Full scale for the ALC bar. Correctly set mic gain reads a couple of dB
 # on speech peaks, so the useful part of the scale is its bottom third.
@@ -1089,6 +1096,7 @@ class Panel(tk.Tk):
         self.pitch_var = tk.StringVar(value="700")
         self.width_var = tk.StringVar(value="300")
         self.span_var = tk.StringVar(value=self.span_label(SPECTRUM_DEFAULT_HALF_SPAN_HZ))
+        self.agc_var = tk.StringVar(value="")
         self.micgain_var = tk.DoubleVar(value=1.0)
         self.keyer_var = tk.StringVar(value=KEYER_MODES[4])
         self.wpm_var = tk.StringVar(value="20")
@@ -1210,21 +1218,27 @@ class Panel(tk.Tk):
         spec.rowconfigure(1, weight=1)
         bar = ttk.Frame(spec)
         bar.grid(row=0, column=0, sticky="ew", pady=(0, 4))
-        bar.columnconfigure(2, weight=1)
+        bar.columnconfigure(4, weight=1)
         ttk.Label(bar, text="SPAN", style="Muted.TLabel").grid(row=0, column=0, padx=(0, 4))
         self.span_combo = ttk.Combobox(bar, textvariable=self.span_var, width=6, state="readonly",
                                        values=[self.span_label(h) for h in SPECTRUM_SPAN_CHOICES_HZ],
                                        font=(self.ui, usz(12), "bold"))
         self.span_combo.grid(row=0, column=1)
         self.span_combo.bind("<<ComboboxSelected>>", lambda e: self.clear_waterfall())
+        ttk.Label(bar, text="AGC", style="Muted.TLabel").grid(row=0, column=2, padx=(10, 4))
+        self.agc_combo = ttk.Combobox(bar, textvariable=self.agc_var, width=5, state="readonly",
+                                      values=[name for name, _ in AGC_SPEEDS],
+                                      font=(self.ui, usz(12), "bold"))
+        self.agc_combo.grid(row=0, column=3)
+        self.agc_combo.bind("<<ComboboxSelected>>", self.on_agc_selected)
         self.status_label = ttk.Label(bar, text="", style="Status.TLabel", anchor="center",
                                       width=1)
-        self.status_label.grid(row=0, column=2, sticky="ew", padx=8)
-        ttk.Label(bar, text="SIGNAL", style="Muted.TLabel").grid(row=0, column=3)
+        self.status_label.grid(row=0, column=4, sticky="ew", padx=8)
+        ttk.Label(bar, text="SIGNAL", style="Muted.TLabel").grid(row=0, column=5)
         self.smeter = tk.Canvas(bar, width=152, height=14, bg=GROUND, highlightthickness=0)
-        self.smeter.grid(row=0, column=4, padx=6)
+        self.smeter.grid(row=0, column=6, padx=6)
         self.smeter_label = ttk.Label(bar, text="--", style="Readout.TLabel", width=6, anchor="e")
-        self.smeter_label.grid(row=0, column=5)
+        self.smeter_label.grid(row=0, column=7)
         self.draw_smeter(None)
 
         self.canvas = tk.Canvas(spec, bg="#08131C", highlightthickness=0, height=120)
@@ -1527,7 +1541,7 @@ class Panel(tk.Tk):
 
     POLL_COMMANDS = ("f", "j", "z", "l AF", "l MICGAIN", "m", "u NARROW", "l CWPITCH",
                      "l CWWIDTH", "l STRENGTH", "u TONE", "t", "l RFPOWER", "l ALC", "u KEYER",
-                     "l KEYSPD", "u PADREV", "u MORSE", "n", "u MUTE")
+                     "l KEYSPD", "u PADREV", "u MORSE", "n", "u MUTE", "l AGC")
 
     def poll_loop(self):
         every = max(1, round(POLL_INTERVAL_S / FREQ_POLL_INTERVAL_S))
@@ -1576,6 +1590,7 @@ class Panel(tk.Tk):
             self.apply_choice(r["l CWPITCH"], self.pitch_combo, self.pitch_var)
             self.apply_choice(r["l CWWIDTH"], self.width_combo, self.width_var)
             self.apply_int(r["l STRENGTH"], self.draw_smeter)
+            self.apply_int(r["l AGC"], self.show_agc)
             tone = self.apply_int(r["u TONE"], self.tone_var.set)
             ptt = self.apply_int(r["t"], lambda v: self.ptt_var.set(v != 0))
             self.apply_tx(ptt, tone)
@@ -1923,6 +1938,16 @@ class Panel(tk.Tk):
 
     def on_width_selected(self, _event=None):
         self.query_async(f"L CWWIDTH {self.width_var.get()}")
+
+    def on_agc_selected(self, _event=None):
+        number = dict(AGC_SPEEDS).get(self.agc_var.get())
+        if number is not None:
+            self.query_async(f"L AGC {number}")
+
+    def show_agc(self, number):
+        """The current mode's AGC speed, from l AGC; a number this panel
+        doesn't know leaves the menu blank."""
+        self.agc_var.set(next((name for name, n in AGC_SPEEDS if n == number), ""))
 
     def on_keyer_selected(self, _event=None):
         self.query_async(f"U KEYER {KEYER_MODES.index(self.keyer_var.get())}")
