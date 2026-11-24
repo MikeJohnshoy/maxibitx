@@ -169,9 +169,9 @@ The screen, top to bottom:
 - **By mode:** in CW, ten macro buttons; in USB/LSB, mic gain and the ALC
   meter; in DIGI, a note that the digital-mode program has the audio.
 - **Bottom row:** keyer type, WPM, the CW text field, Send and Stop,
-  power, and Tune. Volume, power and WPM are number boxes: an arrow
-  steps volume by 2% (1 dB), power by 5% and WPM by 1, and a typed value
-  is sent on Return or on leaving the box.
+  power, and Tune. Volume, power, WPM and mic gain are number boxes: an
+  arrow steps volume by 2% (1 dB), power by 5%, WPM by 1 and mic gain by
+  0.5×, and a typed value is sent on Return or on leaving the box.
 
 **Tuning digit by digit.** Tap a digit of the frequency to make it the
 tuning step (it turns amber and underlined). Then the mouse wheel over a
