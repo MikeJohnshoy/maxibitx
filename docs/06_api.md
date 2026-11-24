@@ -168,7 +168,7 @@ unless `MAXIBITX_RIGCTL_TRACE=1` is in maxibitx's environment.
 | `l STRENGTH` | `-12` | S-meter, integer dB relative to S9 (−54 to +60). Uncalibrated - relative readings only. |
 | `l AGC` | `5` | AGC speed, in Hamlib's numbers: `2` fast, `5` medium, `3` slow. The current mode's: one is kept for CW and CWR, one for USB and LSB, one for DIGITAL. |
 | `L AGC <2\|5\|3>` | `RPRT 0` | Sets the current mode's group; the name (`FAST`, `MEDIUM`, `SLOW`) works too. Hamlib's other values (off, superfast, user, auto): `RPRT -1`. |
-| `l MICGAIN` | `1.000000` | Mic gain - the TX drive control, USB/LSB only (extension) |
+| `l MICGAIN` | `2.000000` | Mic gain - the TX drive control, USB/LSB only (extension). 2 at startup. |
 | `L MICGAIN <value>` | `RPRT 0` | Clamped to 0-64 (extension) |
 | `l RFPOWER` | `1.000000` | TX power, 0.0-1.0 of `max_power` in `data/hw_settings.ini` |
 | `L RFPOWER <0.0-1.0>` | `RPRT 0` | Moves the ALC limiter's ceiling. Clamped; it cannot exceed `max_power`. |
