@@ -253,23 +253,35 @@ void rx_audio_spot_reset(void);
 void rx_audio_process(const double *i_samples, const double *q_samples,
                        int n, int32_t *out, double *uac_out);
 
+// AGC speed (stage 4). Every speed attacks in 5 ms. FAST releases at
+// once, over 300 ms: the CW setting. MEDIUM holds the gain for 0.5 s after
+// the signal drops, then releases over 300 ms: for voice. SLOW holds for
+// 1 s, then releases over 1 s. radio.c keeps one per mode
+// (radio_set_agc()). FAST until set, which is what the bench harnesses
+// expect. A change takes effect at the next block; an out-of-range value
+// is ignored.
+enum rx_agc {
+    RX_AGC_FAST = 0,
+    RX_AGC_MEDIUM,
+    RX_AGC_SLOW,
+};
+void rx_audio_set_agc(enum rx_agc speed);
+enum rx_agc rx_audio_get_agc(void);
+
 // Debug/test only - the AGC's current smoothed envelope estimate. It
-// tracks the RAW input I/Q's magnitude, sampled before stage 1, so the
-// AGC's gain doesn't depend on (and so doesn't cancel) any frequency-
-// selective stage (rx_audio_demod_design.md §8.7-8.8). It is therefore
-// frequency-independent - a steady tone reads the same whatever its
-// frequency or side of the dial - and says nothing about stage 1's image
-// rejection or stage 3's selectivity: measure rx_audio_process()'s out[]
-// for those. Useful for checking the AGC's own gain math against a known
-// input amplitude. Not needed by normal callers.
+// tracks the magnitude of stage 1's output, the 3 kHz of the selected
+// sideband, so it follows stage 1's image rejection but not stage 3's
+// selectivity, which comes after it and so isn't cancelled by the gain
+// (rx_audio_demod_design.md §8.7-8.9). Useful for checking the AGC's own
+// gain math against a known input amplitude. Not needed by normal callers.
 double rx_audio_debug_agc_envelope(void);
 
 // Debug/test only - the METER envelope's current smoothed estimate (see
 // rx_audio.c's signal-strength comment above rx_audio_get_strength_db()).
 // Unlike rx_audio_debug_agc_envelope() above, this one DOES track stage
-// 1's image rejection and stage 3's selectivity/bypass state, by design -
-// it's tapped from narrowed (post-stage-3-or-bypass, pre-AGC-gain), not
-// the raw input - so rx_audio_test.c can check that directly rather than
+// 3's selectivity/bypass state, by design - it's tapped from narrowed
+// (post-stage-3-or-bypass, pre-AGC-gain), not stage 1's output - so
+// rx_audio_test.c can check that directly rather than
 // through rx_audio_get_strength_db()'s rounded dB. Not needed by normal
 // callers.
 double rx_audio_debug_meter_envelope(void);
@@ -282,8 +294,8 @@ double rx_audio_debug_meter_envelope(void);
 // METER envelope (rx_audio_debug_meter_envelope() above), NOT the AGC's
 // own agc_env - deliberately: this reads what's actually reaching the
 // speaker (post image-rejection, post narrow-filter-or-bypass), not "how
-// much energy is anywhere in the whole captured band" the way an
-// agc_env-based reading would. Read-only and NOT wattmeter/signal-
+// much energy is anywhere in stage 1's 3 kHz" the way an agc_env-based
+// reading would. Read-only and NOT wattmeter/signal-
 // generator calibrated either way - see rx_audio.c and
 // docs/dsp_design_notes/rx_gain_and_level_calibration.md §9 for what the
 // reference point does and doesn't mean. No set_level equivalent, same as
