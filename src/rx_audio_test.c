@@ -32,7 +32,9 @@
 // Case D: rx_audio_set_narrow_filter(0) (bypass) still produces finite
 //   output and doesn't crash regardless of which implementation was
 //   selected.
-// Case E: CW vs CWR favour opposite sides of the dial.
+// Case E: CW vs CWR favour opposite sides of the dial: two equal
+//   stations, one each side, measured by their own audio tones, so the
+//   reading is the sideband rejection and not the AGC's response to it.
 // Case F: the filter bank's pitch/width selection - that a request snaps to
 //   the nearest value the bank carries, that the setter reports back what it
 //   actually chose rather than what it was asked for, and that the advertised
@@ -53,6 +55,11 @@
 //   when it lifts. The partial failure is the dangerous one - an inhibit
 //   that bypasses but doesn't restore silently costs the operator their
 //   CW filter on every trip through DIGITAL.
+// Case M: the AGC. Its measuring point - a station 40 dB up outside stage
+//   1's 3 kHz barely moves the gain, one inside it does - and its speeds:
+//   how far the gain climbs in a gap between syllables and in a pause,
+//   for each of fast, medium and slow, and that the hang doesn't hold the
+//   gain down on noise alone.
 
 #include <stdio.h>
 #include <math.h>
@@ -93,6 +100,78 @@ static double rms(const int32_t *out, int n) {
 // blocks - Case H needs the peak, not the settled RMS, since a switching
 // transient is by definition brief.
 static double last_peak;
+
+// The amplitude of a tone at f Hz in out[0..n), from a Hann-windowed
+// single-bin DFT.
+static double tone_amp(const int32_t *out, int n, double f) {
+	double re = 0, im = 0, wsum = 0;
+	for (int i = 0; i < n; i++) {
+		double w = 0.5 - 0.5 * cos(2.0 * M_PI * i / (n - 1));
+		re += w * out[i] * cos(2.0 * M_PI * f * i / TEST_FS);
+		im += w * out[i] * sin(2.0 * M_PI * f * i / TEST_FS);
+		wsum += w;
+	}
+	return 2.0 * sqrt(re * re + im * im) / wsum;
+}
+
+// Case M's signals: Gaussian noise, a station on +700 Hz (above the dial),
+// keyed by the speech-like pattern below or steady, and an optional second
+// station other_hz above the dial (below it if negative), keyed
+// other_on_s on and the same off from the start of the run. A station d
+// Hz above the dial sits at -d in the I/Q (rx_audio.h).
+static unsigned long long agc_rng = 88172645463325252ull;
+static double agc_gauss(void) {
+	double u, v;
+	agc_rng ^= agc_rng << 13; agc_rng ^= agc_rng >> 7; agc_rng ^= agc_rng << 17;
+	u = (agc_rng >> 11) * (1.0 / 9007199254740992.0) + 1e-12;
+	agc_rng ^= agc_rng << 13; agc_rng ^= agc_rng >> 7; agc_rng ^= agc_rng << 17;
+	v = (agc_rng >> 11) * (1.0 / 9007199254740992.0);
+	return sqrt(-2.0 * log(u)) * cos(2.0 * M_PI * v);
+}
+
+// Four 180 ms syllables 300 ms apart, then a 700 ms pause.
+#define SPEECH_PERIOD_S 1.9
+static int speech_on(double ts) {
+	double x = fmod(ts, SPEECH_PERIOD_S);
+	return x < 1.2 && fmod(x, 0.3) < 0.18;
+}
+
+#define AGC_NOISE_SIGMA 7.07e5   // the codec's floor, about -66 dBFS
+#define AGC_WANTED      1.77e6   // 20 dB above the noise in 3 kHz
+#define AGC_MAX_BLOCKS  1000
+
+// Runs `seconds` through rx_audio_process() and records the AGC's gain, in
+// dB, at the end of each block into gain_db[]; returns the block count. If
+// tone_db is non-NULL, the wanted tone's level in each block goes there.
+static double gain_db[AGC_MAX_BLOCKS], tone_db_buf[AGC_MAX_BLOCKS];
+static long agc_t;
+static int agc_run(double seconds, int speech, double wanted, double other_hz,
+                   double other_amp, double other_on_s) {
+	double i_s[RX_FILTER_BLOCK_LEN], q_s[RX_FILTER_BLOCK_LEN];
+	int32_t out[RX_FILTER_BLOCK_LEN];
+	int blocks = (int)(seconds * TEST_FS / RX_FILTER_BLOCK_LEN);
+	if (blocks > AGC_MAX_BLOCKS)
+		blocks = AGC_MAX_BLOCKS;
+	long start = agc_t;
+	for (int b = 0; b < blocks; b++) {
+		for (int k = 0; k < RX_FILTER_BLOCK_LEN; k++, agc_t++) {
+			double ts = agc_t / TEST_FS;
+			double a = speech ? (speech_on(ts) ? wanted : 0.0) : wanted;
+			double ph = -2.0 * M_PI * 700.0 * agc_t / TEST_FS;
+			i_s[k] = AGC_NOISE_SIGMA * agc_gauss() + a * cos(ph);
+			q_s[k] = AGC_NOISE_SIGMA * agc_gauss() + a * sin(ph);
+			if (other_amp > 0 && fmod((agc_t - start) / TEST_FS, 2.0 * other_on_s) < other_on_s) {
+				double po = -2.0 * M_PI * other_hz * agc_t / TEST_FS;
+				i_s[k] += other_amp * cos(po);
+				q_s[k] += other_amp * sin(po);
+			}
+		}
+		rx_audio_process(i_s, q_s, RX_FILTER_BLOCK_LEN, out, NULL);
+		gain_db[b] = 20.0 * log10(500000000.0 / rx_audio_debug_agc_envelope());
+		tone_db_buf[b] = 20.0 * log10(tone_amp(out, RX_FILTER_BLOCK_LEN, 700.0) + 1e-9);
+	}
+	return blocks;
+}
 
 // Case L: dots at 20 WPM on a carrier d_hz from the dial (+ above it),
 // with 5 ms edges, through rx_audio_process() for the given seconds, then
@@ -237,30 +316,40 @@ int main(void)
 	// raw I/Q is spectrally inverted (rx_audio.c's
 	// RX_IQ_SPECTRUM_INVERTED), so a station d Hz ABOVE the dial arrives
 	// at baseband -d and one BELOW at +d. CW should hear the first and
-	// reject the second; CWR the reverse. Run in bypass (Case D left it
-	// there) so this measures the sideband choice rather than stage 3's
-	// 700 Hz-tuned response - a 500 Hz offset reaches it as 1200 Hz audio,
-	// well off that peak.
+	// reject the second; CWR the reverse. Two equal stations, 500 Hz above
+	// and below, are present together, so the AGC rides both alike and
+	// each is measured by its own audio tone: the kept one at the pitch +
+	// 500 (1200 Hz), what leaks of the other at |pitch - 500| (200 Hz). Run
+	// in bypass (Case D left it there), so this measures the sideband
+	// choice rather than stage 3's response.
 	{
 		const double offset = 500.0;
-		double cw_above, cw_below, cwr_above, cwr_below;
-
-		rx_audio_set_demod(RX_DEMOD_CW);
-		cw_above = run_tone(RX_FILTER_BLOCK_LEN, 8, -offset);
-		cw_below = run_tone(RX_FILTER_BLOCK_LEN, 8, offset);
-
-		rx_audio_set_demod(RX_DEMOD_CWR);
-		cwr_above = run_tone(RX_FILTER_BLOCK_LEN, 8, -offset);
-		cwr_below = run_tone(RX_FILTER_BLOCK_LEN, 8, offset);
-
-		printf("\nE. CW vs CWR sideband, a station %.0f Hz off the dial (bypass)\n", offset);
-		printf("   CW : above dial RMS=%.1f, below dial RMS=%.1f (want above >> below)\n",
-		       cw_above, cw_below);
-		printf("   CWR: above dial RMS=%.1f, below dial RMS=%.1f (want below >> above)\n",
-		       cwr_above, cwr_below);
-		printf("   Unwanted side rejected by: CW %.1f dB, CWR %.1f dB\n",
-		       -20.0 * log10(cw_below / cw_above), -20.0 * log10(cwr_above / cwr_below));
-		if (!(cw_above > cw_below) || !(cwr_below > cwr_above)) {
+		double i_s[RX_FILTER_BLOCK_LEN], q_s[RX_FILTER_BLOCK_LEN];
+		static int32_t out[RX_FILTER_BLOCK_LEN * 4];
+		double kept[2], leak[2];
+		for (int m = 0; m < 2; m++) {
+			rx_audio_set_demod(m ? RX_DEMOD_CWR : RX_DEMOD_CW);
+			for (int b = 0; b < 20; b++) {
+				for (int k = 0; k < RX_FILTER_BLOCK_LEN; k++) {
+					long t = (long)b * RX_FILTER_BLOCK_LEN + k;
+					double p = 2.0 * M_PI * offset * t / TEST_FS;
+					// one at -offset (above the dial), one at +offset (below)
+					i_s[k] = cos(p) + cos(p);
+					q_s[k] = -sin(p) + sin(p);
+				}
+				rx_audio_process(i_s, q_s, RX_FILTER_BLOCK_LEN,
+				                 out + (b >= 16 ? (b - 16) * RX_FILTER_BLOCK_LEN : 0), NULL);
+			}
+			kept[m] = tone_amp(out, RX_FILTER_BLOCK_LEN * 4, CW_PITCH_HZ + offset);
+			leak[m] = tone_amp(out, RX_FILTER_BLOCK_LEN * 4, fabs(CW_PITCH_HZ - offset));
+		}
+		double rej_cw = 20.0 * log10(kept[0] / leak[0]);
+		double rej_cwr = 20.0 * log10(kept[1] / leak[1]);
+		printf("\nE. CW vs CWR sideband: equal stations %.0f Hz above and below the dial (bypass)\n",
+		       offset);
+		printf("   CW keeps the one above, CWR the one below; the other is rejected by:\n");
+		printf("   CW %.1f dB, CWR %.1f dB (want over 30)\n", rej_cw, rej_cwr);
+		if (!(rej_cw > 30.0) || !(rej_cwr > 30.0)) {
 			fprintf(stderr, "   FAIL: CW and CWR don't favour opposite sides of the dial\n");
 			return 1;
 		}
@@ -422,8 +511,8 @@ int main(void)
 		}
 		if (fails)
 			return 1;
-		printf("   (rejection grows as the width narrows - the AGC rides the raw\n"
-		       "    input, so these are absolute levels, not normalized)\n");
+		printf("   (rejection grows as the width narrows - the AGC rides stage 1's\n"
+		       "    output, ahead of stage 3, so these are absolute levels, not normalized)\n");
 	}
 
 	// --- Case H: live coefficient swap stays bounded ----------------------
@@ -473,8 +562,8 @@ int main(void)
 	// Measured on a tone 900 Hz off dial center, which reaches stage 3 as
 	// 1600 Hz audio - well into the stopband, so bypassing the filter is a
 	// large, unambiguous change. The AGC can't confuse the comparison: its
-	// gain comes from the RAW I/Q magnitude, identical in all three runs
-	// (rx_narrow_filter_fft_vs_elliptic.md §15).
+	// gain comes from stage 1's output, ahead of stage 3 and so identical in
+	// all three runs (rx_narrow_filter_fft_vs_elliptic.md §15).
 	{
 		const double off_pitch = -900.0;
 		printf("\nI. Mode-level inhibit (DIGITAL), tone %.0f Hz off dial center\n", off_pitch);
@@ -648,6 +737,94 @@ int main(void)
 		rx_audio_set_demod(RX_DEMOD_CW);
 		rx_audio_set_narrow_pitch(CW_PITCH_HZ);
 		rx_audio_set_narrow_width(300);
+		rx_audio_set_narrow_filter(1);
+	}
+
+	// --- Case M: the AGC -------------------------------------------------
+	// USB, bypass, noise at the codec's floor and a station on +700 Hz 20 dB
+	// above it in 3 kHz.
+	{
+		rx_audio_set_demod(RX_DEMOD_USB);
+		rx_audio_set_narrow_filter(0);
+		int fails = 0;
+		const double per_block = RX_FILTER_BLOCK_LEN / TEST_FS;
+
+		printf("\nM. The AGC\n");
+		// Its measuring point: a station 40 dB above the wanted one, keyed
+		// 1 s on and 1 s off, outside stage 1's 3 kHz and inside it. The
+		// wanted tone while it's on, against the wanted tone alone.
+		rx_audio_set_agc(RX_AGC_FAST);
+		int nb = agc_run(3.0, 0, AGC_WANTED, 0, 0, 1.0);
+		double alone = 0;
+		for (int b = nb - 20; b < nb; b++)
+			alone += tone_db_buf[b] / 20.0;
+		const double others[] = {8000.0, -1500.0, 2000.0};
+		const double max_duck[] = {6.0, 6.0, 99.0}, min_duck[] = {0.0, 0.0, 30.0};
+		for (int i = 0; i < 3; i++) {
+			nb = agc_run(4.0, 0, AGC_WANTED, others[i], AGC_WANTED * 100.0, 1.0);
+			// the other station is on in [2, 3) s of the run
+			double on = 0;
+			int n_on = 0;
+			for (int b = 0; b < nb; b++) {
+				double ts = (b + 0.5) * per_block;
+				if (ts > 2.3 && ts < 2.9) {
+					on += tone_db_buf[b];
+					n_on++;
+				}
+			}
+			double duck = alone - on / n_on;
+			int ok = duck <= max_duck[i] && duck >= min_duck[i];
+			printf("   %s a station 40 dB up, %+5.0f Hz from the dial (%s): "
+			       "the wanted one down %.1f dB\n", ok ? "ok  " : "FAIL", others[i],
+			       i < 2 ? "outside the 3 kHz" : "inside it", duck);
+			fails += !ok;
+		}
+
+		// Its speeds, on the speech-like pattern: the gain's rise, from its
+		// average inside the syllables, at its highest in the 120 ms gaps
+		// and in the 700 ms pauses; and its average on noise alone, which
+		// a slower release sits a few dB lower, nearer the noise's peaks.
+		const char *names[] = {"fast", "medium", "slow"};
+		const double gap_max[] = {99, 1.0, 1.0}, pause_min[] = {10, 3, -99}, pause_max[] = {99, 12, 1.0};
+		double noise_gain[3];
+		for (int sp = 0; sp < 3; sp++) {
+			rx_audio_set_agc((enum rx_agc)sp);
+			nb = agc_run(3.0, 0, 0.0, 0, 0, 1.0);
+			noise_gain[sp] = 0;
+			for (int b = nb - 100; b < nb; b++)
+				noise_gain[sp] += gain_db[b] / 100.0;
+			long t0 = agc_t;
+			nb = agc_run(4 * SPEECH_PERIOD_S, 1, AGC_WANTED, 0, 0, 1.0);
+			double syl = 0, gap = -1e9, pause = -1e9;
+			int n_syl = 0;
+			for (int b = 0; b < nb; b++) {
+				double ts = (t0 + (b + 1.0) * RX_FILTER_BLOCK_LEN) / TEST_FS;
+				if (ts - t0 / TEST_FS < SPEECH_PERIOD_S)
+					continue; // the first phrase settles it
+				double x = fmod(ts, SPEECH_PERIOD_S), y = fmod(x, 0.3);
+				if (x < 1.2 && y > 0.02 && y < 0.17) {
+					syl += gain_db[b];
+					n_syl++;
+				} else if (x < 1.2 && y > 0.28 && gain_db[b] > gap) {
+					gap = gain_db[b];
+				} else if (x > 1.85 && gain_db[b] > pause) {
+					pause = gain_db[b];
+				}
+			}
+			syl /= n_syl;
+			int ok = gap - syl <= gap_max[sp] && pause - syl >= pause_min[sp] &&
+			         pause - syl <= pause_max[sp] && noise_gain[sp] > noise_gain[0] - 6.0;
+			printf("   %s %-6s the gain climbs %+5.1f dB in a gap between syllables, %+5.1f dB in "
+			       "a pause; on noise alone %+.1f dB from fast's\n", ok ? "ok  " : "FAIL",
+			       names[sp], gap - syl, pause - syl, noise_gain[sp] - noise_gain[0]);
+			fails += !ok;
+		}
+		if (fails) {
+			fprintf(stderr, "   FAIL: %d AGC case(s) out of range\n", fails);
+			return 1;
+		}
+		rx_audio_set_agc(RX_AGC_FAST);
+		rx_audio_set_demod(RX_DEMOD_CW);
 		rx_audio_set_narrow_filter(1);
 	}
 
