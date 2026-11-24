@@ -56,6 +56,12 @@ change.
 - A comments-only change must leave the machine code identical: compare
   `objdump -d` and `.rodata`/`.data` before and after, as described in
   `docs/code_comments.md`.
+- A change to `tools/rigctl_panel.py`'s layout: check it at 800x480 full
+  screen, headless (`xvfb-run -s "-screen 0 800x480x24"`), in the font the
+  sBitx's Pi uses - the panel's startup line must read `font Liberation
+  Sans Narrow`. Fonts differ in line height (IBM Plex Sans Condensed is a
+  third taller), so a layout checked in another font can fit there and
+  run off the Pi's screen. Look at Settings too, not only the main screen.
 - Say what was verified and how. "Bench-checked" and "confirmed on air"
   are different claims; only the operator can make the second.
 
