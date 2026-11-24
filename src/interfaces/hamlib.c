@@ -72,6 +72,49 @@ static int name_to_mode(const char *name, enum radio_mode *out)
     return 0;
 }
 
+// The AGC speeds as Hamlib numbers them (rig.h's enum agc_level_e): FAST
+// 2, SLOW 3, MEDIUM 5. Its other values (OFF, SUPERFAST, USER, AUTO) have
+// no equivalent here.
+static const struct { enum rx_agc speed; int hamlib; const char *name; } agc_names[] = {
+    { RX_AGC_FAST,   2, "FAST"   },
+    { RX_AGC_MEDIUM, 5, "MEDIUM" },
+    { RX_AGC_SLOW,   3, "SLOW"   },
+};
+#define AGC_NAMES_COUNT (sizeof(agc_names) / sizeof(agc_names[0]))
+
+static int agc_index(enum rx_agc speed)
+{
+    for (size_t i = 0; i < AGC_NAMES_COUNT; i++)
+        if (agc_names[i].speed == speed)
+            return (int)i;
+    return 0;
+}
+
+// L AGC's argument, Hamlib's number or the name, to an index into
+// agc_names[], or -1.
+static int agc_from_arg(const char *arg)
+{
+    char *end;
+    long v = strtol(arg, &end, 10);
+    for (size_t i = 0; i < AGC_NAMES_COUNT; i++) {
+        if ((*end == '\0' && end != arg && v == agc_names[i].hamlib) ||
+            strcasecmp(arg, agc_names[i].name) == 0)
+            return (int)i;
+    }
+    return -1;
+}
+
+// Which modes an AGC setting applies to, for the log (radio.h).
+static const char *agc_modes(enum radio_mode m)
+{
+    switch (m) {
+    case RADIO_MODE_USB:
+    case RADIO_MODE_LSB:     return "USB and LSB";
+    case RADIO_MODE_DIGITAL: return "DIGITAL";
+    default:                 return "CW and CWR";
+    }
+}
+
 // Accepted by M and echoed back by m, but not applied - the RX passband
 // is fixed (rx_audio.c).
 static int current_passband = 2400;
@@ -295,8 +338,8 @@ static int handle_line(int fd, char *line)
     }
 
     if (cmd[0] == 'l' && (cmd[1] == '\0' || cmd[1] == ' ')) {
-        // get_level <name>. AF, CWPITCH, KEYSPD, RFPOWER and STRENGTH are real
-        // Hamlib levels (see dump_state); MICGAIN, ALC, CWWIDTH and
+        // get_level <name>. AF, AGC, CWPITCH, KEYSPD, RFPOWER and STRENGTH are
+        // real Hamlib levels (see dump_state); MICGAIN, ALC, CWWIDTH and
         // XTALCENTER are this server's extensions, in their own units.
         // Anything else (SQL, preamp, ...) has no equivalent here.
         char level_name[32] = "";
@@ -306,6 +349,14 @@ static int handle_line(int fd, char *line)
             snprintf(buf, sizeof(buf), "%.6f\n", rx_audio_get_volume() / 100.0);
             send_line(fd, buf);
             get_log("rigctl: l AF -> %d%%\n", rx_audio_get_volume());
+        } else if (strcmp(level_name, "AGC") == 0) {
+            // A real Hamlib RIG_LEVEL, in Hamlib's numbers (agc_names[]):
+            // the current mode's setting (radio.h).
+            int i = agc_index(radio_get_agc());
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%d\n", agc_names[i].hamlib);
+            send_line(fd, buf);
+            get_log("rigctl: l AGC -> %d (%s)\n", agc_names[i].hamlib, agc_names[i].name);
         } else if (strcmp(level_name, "STRENGTH") == 0) {
             int db = rx_audio_get_strength_db();
             char buf[16];
@@ -406,9 +457,23 @@ static int handle_line(int fd, char *line)
     if (cmd[0] == 'L' && cmd[1] == ' ') {
         // set_level <name> <value>. STRENGTH is read-only, like a real
         // S-meter, so "L STRENGTH" falls through to the error reply.
-        char level_name[32] = "";
+        char level_name[32] = "", arg[32] = "";
         double val = 0.0;
-        if (sscanf(cmd + 1, "%31s %lf", level_name, &val) == 2 &&
+        if (sscanf(cmd + 1, "%31s %31s", level_name, arg) == 2 &&
+            strcmp(level_name, "AGC") == 0) {
+            // Hamlib's number or the name (agc_names[]); sets the current
+            // mode's group, which it comes back with (radio.h).
+            int i = agc_from_arg(arg);
+            if (i < 0) {
+                send_rprt(fd, -1);
+                printf("rigctl: L AGC %s -> refused (2 FAST, 5 MEDIUM, 3 SLOW)\n", arg);
+            } else {
+                radio_set_agc(agc_names[i].speed);
+                send_rprt(fd, 0);
+                printf("rigctl: L AGC %s -> %s for %s\n", arg, agc_names[i].name,
+                       agc_modes(radio_get_mode()));
+            }
+        } else if (sscanf(cmd + 1, "%31s %lf", level_name, &val) == 2 &&
             strcmp(level_name, "AF") == 0) {
             int percent = (int)(val * 100.0 + 0.5);
             rx_audio_set_volume(percent);
@@ -738,9 +803,9 @@ static int handle_line(int fd, char *line)
         // preamp/attenuator, no filter list; max_rit and max_xit are real.
         // has_get_level = RIG_LEVEL_AF (1<<3) | RIG_LEVEL_CWPITCH (1<<11) |
         // RIG_LEVEL_RFPOWER (1<<12) | RIG_LEVEL_KEYSPD (1<<14) |
-        // RIG_LEVEL_STRENGTH (1<<30) = 0x40005808 (bit numbers from Hamlib
-        // 4.5's rig.h); has_set_level drops STRENGTH (an S-meter can't be
-        // set) = 0x5808. ALC isn't advertised: this server reports it in dB
+        // RIG_LEVEL_AGC (1<<17) | RIG_LEVEL_STRENGTH (1<<30) = 0x40025808
+        // (bit numbers from Hamlib 4.5's rig.h); has_set_level drops STRENGTH
+        // (an S-meter can't be set) = 0x25808. ALC isn't advertised: this server reports it in dB
         // rather than Hamlib's 0.0-1.0, so it's an extension like MICGAIN.
         // Nor is CWWIDTH, which isn't a RIG_LEVEL at all. CWPITCH is, though
         // quantized here: a client's set is honored to the nearest pitch, as
@@ -796,8 +861,8 @@ static int handle_line(int fd, char *line)
         send_line(fd, "\n");                          // attenuator list (empty)
         send_line(fd, "0x0\n");                       // has_get_func
         send_line(fd, "0x0\n");                       // has_set_func
-        send_line(fd, "0x40005808\n");                // has_get_level (AF | CWPITCH | RFPOWER | KEYSPD | STRENGTH)
-        send_line(fd, "0x5808\n");                    // has_set_level (AF | CWPITCH | RFPOWER | KEYSPD)
+        send_line(fd, "0x40025808\n");                // has_get_level (AF | CWPITCH | RFPOWER | KEYSPD | AGC | STRENGTH)
+        send_line(fd, "0x25808\n");                   // has_set_level (AF | CWPITCH | RFPOWER | KEYSPD | AGC)
         send_line(fd, "0x0\n");                       // has_get_parm
         send_line(fd, "0x0\n");                       // has_set_parm
         get_log("rigctl: dump_state -> sent\n");
