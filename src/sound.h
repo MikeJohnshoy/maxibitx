@@ -49,7 +49,7 @@ void sound_set_tx_drive(int percent);
 /* Live TX mic gain for USB/LSB, on top of MIC_TX_INPUT_SCALE's fixed
    int32->float conversion (sound.c). Runtime-adjustable because mic level
    depends on the mic, preamp and operator, and setting it against a
-   wattmeter takes many quick trials. Starts at 1.0; clamped to
+   wattmeter takes many quick trials. Starts at 2.0; clamped to
    [0, SOUND_MIC_TX_GAIN_MAX]. Reached via rigctld's l/L MICGAIN
    (hamlib.c) and tools/rigctl_panel.py's Mic Gain slider. */
 void sound_set_mic_tx_gain(double gain);
