@@ -173,6 +173,10 @@ MODES = ("CW", "CWR", "USB", "LSB", "DIGI")   # DIGI is rigctld's DIGITAL
 CW_PITCHES = ("500", "600", "700", "800", "900", "1000")
 # The AGC menu, and rigctld's numbers for each (Hamlib's).
 AGC_SPEEDS = (("FAST", 2), ("MED", 5), ("SLOW", 3))
+# What an arrow on the VOL and PWR boxes moves them by, percent: 2% of
+# volume is 1 dB. A typed value can be anything from 0 to 100.
+VOL_STEP = 2
+PWR_STEP = 5
 CW_WIDTHS = ("150", "300", "450", "600")
 # Full scale for the ALC bar. Correctly set mic gain reads a couple of dB
 # on speech peaks, so the useful part of the scale is its bottom third.
@@ -1091,7 +1095,7 @@ class Panel(tk.Tk):
 
         self.mode_var = tk.StringVar(value="CW")
         self.ritmode_var = tk.StringVar(value="RIT")
-        self.vol_var = tk.DoubleVar(value=50)
+        self.vol_var = tk.StringVar(value="--")
         self.narrow_var = tk.BooleanVar(value=True)
         self.pitch_var = tk.StringVar(value="700")
         self.width_var = tk.StringVar(value="300")
@@ -1102,7 +1106,8 @@ class Panel(tk.Tk):
         self.wpm_var = tk.StringVar(value="20")
         self.wpm_focused = False
         self.cw_text_var = tk.StringVar(value="")
-        self.power_var = tk.DoubleVar(value=100.0)
+        self.power_var = tk.StringVar(value="--")
+        self.spin_editing = set()   # a VOL/PWR box being typed in, which the poll leaves alone
         self.tune_var = tk.BooleanVar(value=False)
         self.tone_var = tk.IntVar(value=0)
         self.ptt_var = tk.BooleanVar(value=False)
@@ -1157,13 +1162,8 @@ class Panel(tk.Tk):
                                      cursor="hand2")
         self.vol_caption.grid(row=0, column=0, padx=(0, 4))
         self.vol_caption.bind("<Button-1>", lambda e: self.send_mute(not self.muted))
-        self.vol_scale = ttk.Scale(vol, from_=0, to=100, variable=self.vol_var, length=50,
-                                   command=lambda v: self.vol_label.configure(
-                                       text=f"{round(float(v))}"))
-        self.vol_scale.grid(row=0, column=1)
-        self.vol_scale.bind("<ButtonRelease-1>", self.on_volume_released)
-        self.vol_label = ttk.Label(vol, text="--", style="Readout.TLabel", width=3)
-        self.vol_label.grid(row=0, column=2, padx=(4, 0))
+        self.vol_spin = self.percent_spin(vol, self.vol_var, VOL_STEP, self.on_volume_changed)
+        self.vol_spin.grid(row=0, column=1)
         GearButton(top, self.open_settings).grid(row=0, column=5, padx=(4, 0))
 
     def build_controls(self):
@@ -1369,22 +1369,46 @@ class Panel(tk.Tk):
         self.stop_button = ttk.Button(b, text="STOP", width=5, command=self.on_cw_stop)
         self.stop_button.grid(row=0, column=5, padx=(4, 6))
         ttk.Label(b, text="PWR", style="Muted.TLabel").grid(row=0, column=6)
-        self.power_scale = ttk.Scale(b, from_=0, to=100, variable=self.power_var, length=64,
-                                     command=lambda v: self.power_label.configure(
-                                         text=f"{round(float(v))}"))
-        self.power_scale.grid(row=0, column=7, padx=3)
-        self.power_scale.bind("<ButtonRelease-1>", self.on_power_released)
-        self.power_label = ttk.Label(b, text="--", style="Readout.TLabel", width=3)
-        self.power_label.grid(row=0, column=8, padx=(0, 6))
+        self.power_spin = self.percent_spin(b, self.power_var, PWR_STEP, self.on_power_changed)
+        self.power_spin.grid(row=0, column=7, padx=(3, 6))
         ttk.Checkbutton(b, text="TUNE", variable=self.tune_var, style="Toolbutton", width=-5,
-                        command=self.on_tune_toggled).grid(row=0, column=9)
+                        command=self.on_tune_toggled).grid(row=0, column=8)
+
+    def percent_spin(self, parent, var, step, command):
+        """A 0-100 box with arrows, as the WPM box: an arrow steps it and
+        sends at once, and a typed value is sent on Return or on leaving
+        the box. The poll leaves it alone only while a value is being
+        typed, so after an arrow it still follows the radio's knob."""
+        def send(_event=None):
+            self.spin_editing.discard(spin)
+            command()
+        spin = ttk.Spinbox(parent, from_=0, to=100, increment=step, width=3, textvariable=var,
+                           font=(self.ui, usz(13), "bold"), command=send)
+        spin.bind("<KeyPress>", lambda e: self.spin_editing.add(spin))
+        spin.bind("<Return>", send)
+        spin.bind("<FocusOut>", lambda e: send() if spin in self.spin_editing else None)
+        return spin
+
+    def show_percent(self, spin, var, fraction):
+        """A polled 0.0-1.0 level into a VOL or PWR box, unless it's being typed in."""
+        if spin not in self.spin_editing:
+            var.set(str(round(fraction * 100)))
+
+    @staticmethod
+    def read_percent(var):
+        """The box's value, clamped to 0-100, or None if it isn't a number
+        (the next poll puts the radio's value back)."""
+        try:
+            return max(0, min(100, round(float(var.get()))))
+        except ValueError:
+            return None
 
     def block_wheel_on_values(self):
-        """The wheel over a menu, slider or the WPM box does nothing, so
-        a scroll meant for the frequency can't change a setting on the
-        way past."""
+        """The wheel over a menu, the mic slider or a number box does
+        nothing, so a scroll meant for the frequency can't change a setting
+        on the way past."""
         for w in (self.band_combo, self.width_combo, self.pitch_combo,
-                  self.span_combo, self.keyer_combo, self.vol_scale, self.power_scale,
+                  self.span_combo, self.keyer_combo, self.vol_spin, self.power_spin,
                   self.micgain_scale, self.wpm_spin):
             for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
                 w.bind(seq, lambda e: "break")
@@ -1580,8 +1604,7 @@ class Panel(tk.Tk):
             self.apply_freq(r["f"])
             self.apply_rit(r["j"])
             self.apply_xit(r["z"])
-            self.apply_float(r["l AF"], lambda v: (self.vol_var.set(v * 100),
-                                                   self.vol_label.configure(text=f"{round(v * 100)}")))
+            self.apply_float(r["l AF"], lambda v: self.show_percent(self.vol_spin, self.vol_var, v))
             self.apply_float(r["l MICGAIN"], lambda v: (self.micgain_var.set(v),
                                                         self.micgain_label.configure(
                                                             text=f"{v:.1f}×")))
@@ -1594,9 +1617,8 @@ class Panel(tk.Tk):
             tone = self.apply_int(r["u TONE"], self.tone_var.set)
             ptt = self.apply_int(r["t"], lambda v: self.ptt_var.set(v != 0))
             self.apply_tx(ptt, tone)
-            self.apply_float(r["l RFPOWER"], lambda v: (self.power_var.set(v * 100),
-                                                        self.power_label.configure(
-                                                            text=f"{round(v * 100)}")))
+            self.apply_float(r["l RFPOWER"],
+                             lambda v: self.show_percent(self.power_spin, self.power_var, v))
             self.apply_float(r["l ALC"], lambda v: (self.alc_bar.configure(
                 value=min(v, ALC_METER_MAX_DB)), self.alc_label.configure(text=f"{v:.1f} dB")))
             self.apply_int(r["u KEYER"], lambda v: self.keyer_var.set(KEYER_MODES[v])
@@ -1902,10 +1924,14 @@ class Panel(tk.Tk):
         self.show_rit()
         self.query_async(f"J {hz}")
 
-    def on_volume_released(self, _event=None):
+    def on_volume_changed(self):
+        percent = self.read_percent(self.vol_var)
+        if percent is None:
+            return
+        self.vol_var.set(str(percent))
         if self.muted:
             self.send_mute(False)   # as turning the radio's volume knob unmutes
-        self.query_async(f"L AF {self.vol_var.get() / 100.0:.3f}")
+        self.query_async(f"L AF {percent / 100.0:.3f}")
 
     def send_mute(self, on):
         self.show_mute(on)
@@ -1926,8 +1952,12 @@ class Panel(tk.Tk):
     def on_micgain_released(self, _event=None):
         self.query_async(f"L MICGAIN {self.micgain_var.get():.3f}")
 
-    def on_power_released(self, _event=None):
-        self.query_async(f"L RFPOWER {self.power_var.get() / 100.0:.3f}")
+    def on_power_changed(self):
+        percent = self.read_percent(self.power_var)
+        if percent is None:
+            return
+        self.power_var.set(str(percent))
+        self.query_async(f"L RFPOWER {percent / 100.0:.3f}")
 
     def on_narrow_toggled(self):
         if not self.syncing:
