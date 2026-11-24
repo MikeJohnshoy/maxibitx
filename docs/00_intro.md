@@ -320,7 +320,7 @@ any computer. It
 uses only maxibitx's public interfaces (rigctld for control, iq_stream
 for a live spectrum and waterfall), so it works on the Pi itself or from
 any computer on the network. It exercises nearly everything the radio
-can do: tuning, RIT, mode, volume, the receive filters, mic gain,
+can do: tuning, RIT, mode, volume, the receive filters, the AGC, mic gain,
 transmit power, the keyer, CW text and the test tones. That also makes
 it a working model for anyone building their own radio out of the
 maxibitx software and sBitx hardware. Running on the zBitx, the
@@ -948,8 +948,8 @@ I/Q consumers have taken their copies.
 ```mermaid
 flowchart TD
     IQ["Baseband I/Q, 96 kHz<br/>from the anti-alias FIR"] --> SEL{"Sideband select<br/>conjugate the input for<br/>CW, USB, DIGITAL"}
-    IQ -.->|"unfiltered magnitude"| AGCE["AGC envelope<br/>attack 5 ms, release 300 ms"]
     SEL --> S1["Stage 1: 327-tap complex FIR<br/>keeps 0 to +3000 Hz<br/>other side 40 to 75 dB down"]
+    S1 -.->|"magnitude"| AGCE["AGC envelope<br/>attack 5 ms; hang and release<br/>fast, medium or slow"]
     S1 --> S2{"Stage 2: demodulate"}
     S2 -->|"USB, LSB, DIGITAL:<br/>real part"| A["Audio, Hz = |RF - dial|"]
     S2 -->|"CW, CWR: mix with<br/>BFO at the pitch"| A
@@ -1062,30 +1062,57 @@ exactly 1024 samples long.
 ### Stage 4: AGC
 
 Band levels vary over many orders of magnitude, so the audio needs
-automatic gain control. The AGC measures the magnitude of the
-**demodulator's input I/Q**, |I + jQ| before any of the demodulator's
-filtering, with a one-pole envelope follower: 5 ms attack, 300 ms release. The gain is
+automatic gain control. The AGC measures the magnitude of **stage 1's
+complex output**, the 3 kHz of the selected sideband, and the gain it
+derives multiplies the output of stage 3 (or stage 2, with the narrow
+filter bypassed):
 
 ```
 gain = 5 × 10⁸ / envelope,   at most 8 × 10¹¹
 ```
 
-and it multiplies the output of stage 3 (or stage 2, with the narrow
-filter bypassed). The target of 5 × 10⁸ sits 12.6 dB below the int32
-full scale of the codec's output words, leaving room for peaks above
-the smoothed envelope. The maximum gain stops a near-silent input from
-being raised to full-scale hiss.
+The target of 5 × 10⁸ sits 12.6 dB below the int32 full scale of the
+codec's output words, leaving room for peaks above the smoothed
+envelope. The maximum gain matters only for a digitally silent input:
+the codec's own noise keeps the gain far below it, so on a quiet band
+the AGC brings the band noise up toward the target, as a receiver's AGC
+does at full gain.
 
-Measuring the envelope before the filters makes it independent of
-frequency, so the AGC cannot undo the selectivity of stages 1 and 3.
-The consequence, as with a front-end AGC in an analog receiver, is
-desensitisation: a strong signal anywhere in the crystal filter's
-27 kHz lowers the gain for everything.
+**Where it measures.** A strong signal outside stage 1's 3 kHz barely
+moves the gain. On the bench (`test-rx-audio` Case M), a station 40 dB
+above the wanted one, 8 kHz away or on the other sideband, lowers it
+about 4.5 dB, which is what stage 1's 40 dB stopband lets through. A
+signal inside the 3 kHz but outside the narrow filter still lowers it,
+as in any receiver whose AGC sits ahead of its narrowest filter. The
+narrow filter's own selectivity reaches the speaker whole, since the
+gain doesn't depend on it.
+
+**Speeds.** Every speed attacks in 5 ms, so a signal keying up doesn't
+clip. They differ in what happens when it drops:
+
+| Speed | Hang | Then releases over | Gain rise in a 120 ms gap / a 700 ms pause | Back within 3 dB after a 40 dB burst |
+|---|---|---|---|---|
+| fast | none | 300 ms | 3 / 16 dB | 1.7 s |
+| medium | 0.5 s | 300 ms | 0 / 8 dB | 1.8 s |
+| slow | 1 s | 1 s | 0 / 0 dB | 5.1 s |
+
+The middle columns are a station 20 dB above the noise keyed like
+speech, 180 ms syllables in groups of four with 700 ms pauses. The hang
+holds the gain while the signal's level, averaged over 5 ms, stays
+within 6 dB of the envelope, and runs down once it drops below that, so
+a phrase keeps the gain steady and a single noise peak can't hold it.
+These values are a starting point, to be tuned by ear.
+
+maxibitx keeps a speed for each of three groups of modes: CW and CWR
+(fast at startup), USB and LSB (medium) and DIGITAL (slow). rigctld's
+`l`/`L AGC`, TCI's `agc_mode` and the control panel read and set the
+current mode's, and each group's comes back with its modes. They are
+not kept across restarts.
 
 ### S-meter
 
-A second envelope follower, with the same time constants, tracks the
-magnitude of stage 3's output (or stage 2's, when stage 3 is out):
+A second envelope follower, with fixed time constants (5 ms attack and
+300 ms release, the fast AGC's), tracks the magnitude of stage 3's output (or stage 2's, when stage 3 is out):
 what is actually audible. It is read
 only and never feeds the gain. rigctld (`l STRENGTH`) reports it in dB
 relative to S9, from S0 (−54 dB) to S9+60 dB; TCI reports the same
@@ -1666,12 +1693,12 @@ real time. Run it before uploading a change.
 | `make test-fft-filter` | `fft_filter.c`: synthetic tones through the overlap-save filter, against passband and stopband targets in dB |
 | `make test-tx-pipeline` | `tx_pipeline.c`: carrier placement for CW and SSB, opposite-sideband suppression, unity gain, phase continuity across blocks, LSB, the limiter and ceiling, placement at other pitches and board values, and the carrier error clk1's trim takes out |
 | `make test-rx-filter` | `rx_filter.c`: the narrow filter's passband, stopband and retuning, linear and minimum phase |
-| `make test-rx-audio` | `rx_audio.c`'s wiring: the two-pass buffering, switching between the narrow filter implementations, and the fallback for odd block sizes |
-| `make test-rx-audio-impulse` | the narrow filter and the AGC together through the real demodulator: how a keyed signal's attack comes out of each filter with the AGC acting on the undelayed input |
+| `make test-rx-audio` | `rx_audio.c`'s wiring: the two-pass buffering, switching between the narrow filter implementations, the fallback for odd block sizes and the sideband choice; and the AGC: its measuring point and its three speeds on speech-like keying |
+| `make test-rx-audio-impulse` | the narrow filter and the AGC together through the real demodulator: how a keyed signal's attack comes out of each filter with the AGC acting a filter delay ahead of the audio |
 | `make test-upsample48k` | `upsample48k.c`: passband gain and rejection of the image the zero-stuffing creates |
 | `make test-cw` | `cw.c`: the keying envelope and its weighting, with key edges arriving through `key_input.c` at their own timestamps, including late capture reads and a codec clock 300 ppm off |
 | `make test-key-input` | `key_input.c`: debounce, bounce trains and glitches, mono-plug detection, paddle reversal, and placing edges in blocks |
-| `make test-radio` | `radio.c`: the receive and transmit clocks RIT and XIT each move, a change mid-transmission, a retune clearing both, the band check at the transmit frequency, SPOT, the narrow filter held out by mode, and clk1 with the codec's rate and each mode's transmit trim |
+| `make test-radio` | `radio.c`: the receive and transmit clocks RIT and XIT each move, a change mid-transmission, a retune clearing both, the band check at the transmit frequency, SPOT, the narrow filter held out by mode, the AGC speed each group of modes keeps, and clk1 with the codec's rate and each mode's transmit trim |
 | `make test-encoder` | `encoder.c` and `knobs.c`: clicks each way through contact bounce, presses and their debounce, the tuning step, speed-up and push, no tuning in TX, volume and mute |
 | `make test-keyer` | `keyer.c`: exact element timing in samples for golden cases, and random paddle input in every mode checked against a sample-by-sample specification model; text, spacing and speed changes |
 | `make test-keyer-straight` | the same tests against `keyer_straight.c`, which must refuse what it does not offer |
