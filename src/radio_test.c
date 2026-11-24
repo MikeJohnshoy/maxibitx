@@ -87,6 +87,8 @@ int rx_audio_get_narrow_pitch(void) { return 700; }
 void rx_audio_set_demod(enum rx_demod d) { (void)d; }
 static int narrow_inhibited = -1; // the last rx_audio_inhibit_narrow_filter()
 void rx_audio_inhibit_narrow_filter(int on) { narrow_inhibited = on; }
+static int agc_set = -1; // the last rx_audio_set_agc()
+void rx_audio_set_agc(enum rx_agc speed) { agc_set = (int)speed; }
 static int decoder_resets = 0;
 void cw_decoder_reset(void) { decoder_resets++; }
 // SPOT's receive half: what the search "found" is set by each check.
@@ -267,6 +269,34 @@ int main(void) {
   check(narrow_inhibited == 1, "LSB: held out");
   radio_set_mode(RADIO_MODE_DIGITAL);
   check(narrow_inhibited == 1, "DIGITAL: held out");
+
+  printf("The AGC speed, by mode\n");
+  radio_set_mode(RADIO_MODE_CW);
+  check(agc_set == RX_AGC_FAST && radio_get_agc() == RX_AGC_FAST, "CW: fast at startup");
+  radio_set_mode(RADIO_MODE_USB);
+  check(agc_set == RX_AGC_MEDIUM && radio_get_agc() == RX_AGC_MEDIUM, "USB: medium at startup");
+  radio_set_mode(RADIO_MODE_DIGITAL);
+  check(agc_set == RX_AGC_SLOW && radio_get_agc() == RX_AGC_SLOW, "DIGITAL: slow at startup");
+  radio_set_mode(RADIO_MODE_LSB);
+  radio_set_agc(RX_AGC_SLOW);
+  check(agc_set == RX_AGC_SLOW, "LSB set to slow: applied at once");
+  radio_set_mode(RADIO_MODE_CWR);
+  check(agc_set == RX_AGC_FAST, "CWR: CW's fast, untouched by LSB's change");
+  radio_set_agc(RX_AGC_MEDIUM);
+  radio_set_mode(RADIO_MODE_CW);
+  check(agc_set == RX_AGC_MEDIUM, "CW comes back with CWR's medium: one setting for the two");
+  radio_set_mode(RADIO_MODE_USB);
+  check(agc_set == RX_AGC_SLOW && radio_get_agc() == RX_AGC_SLOW,
+        "USB comes back with LSB's slow: one setting for the two");
+  radio_set_mode(RADIO_MODE_DIGITAL);
+  check(agc_set == RX_AGC_SLOW, "DIGITAL: still its own slow");
+  radio_set_agc(RX_AGC_FAST);
+  radio_set_mode(RADIO_MODE_CW);
+  radio_set_agc(RX_AGC_FAST);
+  radio_set_mode(RADIO_MODE_USB);
+  radio_set_agc(RX_AGC_MEDIUM);
+  radio_set_mode(RADIO_MODE_DIGITAL);
+  radio_set_agc(RX_AGC_SLOW);
 
   printf("clk1 and the codec's rate\n");
   radio_set_mode(RADIO_MODE_CW);
