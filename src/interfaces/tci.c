@@ -14,7 +14,9 @@
 //
 // One receiver, one VFO: vfo channel B and dds report channel A's frequency,
 // if is always 0, and split, tune and the DSP switches maxibitx lacks report
-// off; RIT and XIT are the radio's (radio.h). No tx_sensors are sent:
+// off; RIT and XIT are the radio's (radio.h). agc_mode is fast or normal:
+// TCI has no word for slow, so medium and slow both read normal, and a
+// normal set only moves fast to medium. No tx_sensors are sent:
 // maxibitx reads no power or SWR measurement on either board. Changes made elsewhere (rigctld, CAT, the panel, the key)
 // have no notification, so a service thread samples the published state
 // every 50 ms and sends what changed; the same thread runs tci_stream.c.
@@ -71,6 +73,7 @@ struct client {
 // State as last sent to the clients.
 struct state {
   int freq, mode, tx, drive, volume_db, mute, rit_on, rit, xit_on, xit, tx_enable, wpm;
+  int agc_normal; // agc_mode: 0 fast, 1 normal
 };
 
 static struct client clients[WS_MAX_CLIENTS];
@@ -170,6 +173,7 @@ static void snapshot(struct state *s) {
   s->xit = radio_get_xit();
   s->tx_enable = radio_tx_allowed(radio_tx_freq()) != 0;
   s->wpm = keyer_get_wpm();
+  s->agc_normal = radio_get_agc() != RX_AGC_FAST;
 }
 
 static const char *tf(int b) { return b ? "true" : "false"; }
@@ -222,6 +226,10 @@ static void pub_tx_enable(const struct state *s) {
   tci_broadcast("tx_enable:0,%s;", tf(s->tx_enable));
   pub.tx_enable = s->tx_enable;
 }
+static void pub_agc(const struct state *s) {
+  tci_broadcast("agc_mode:0,%s;", s->agc_normal ? "normal" : "fast");
+  pub.agc_normal = s->agc_normal;
+}
 static void pub_wpm(const struct state *s) {
   tci_broadcast("cw_macros_speed:%d;", s->wpm);
   tci_broadcast("cw_keyer_speed:%d;", s->wpm);
@@ -256,6 +264,8 @@ static void publish_changes(void) {
     pub_xit(&s);
   if (s.wpm != pub.wpm)
     pub_wpm(&s);
+  if (s.agc_normal != pub.agc_normal)
+    pub_agc(&s);
   if (!s.mute)
     unmute_percent = rx_audio_get_volume();
 }
@@ -622,7 +632,15 @@ static void handle(int slot, char *cmd) {
       c->buffering_ms = (int)v;
     tci_send_to(slot, "tx_stream_audio_buffering:%d;", c->buffering_ms);
   } else if (!strcmp(name, "agc_mode") && trx0) {
-    tci_send_to(slot, "agc_mode:0,normal;");
+    if (argc >= 2 && !strcasecmp(argv[1], "fast"))
+      radio_set_agc(RX_AGC_FAST);
+    else if (argc >= 2 && !strcasecmp(argv[1], "normal") && radio_get_agc() == RX_AGC_FAST)
+      radio_set_agc(RX_AGC_MEDIUM);
+    snapshot(&s);
+    if (argc >= 2)
+      pub_agc(&s);
+    else
+      tci_send_to(slot, "agc_mode:0,%s;", s.agc_normal ? "normal" : "fast");
   } else if (!strcmp(name, "sql_level") && trx0) {
     tci_send_to(slot, "sql_level:0,-140;");
   } else if ((!strcmp(name, "digl_offset") || !strcmp(name, "digu_offset"))) {
@@ -678,6 +696,7 @@ static void send_init(int slot) {
   tci_send_to(slot, "rx_mute:0,%s;", tf(s.mute));
   tci_send_to(slot, "cw_macros_speed:%d;", s.wpm);
   tci_send_to(slot, "cw_keyer_speed:%d;", s.wpm);
+  tci_send_to(slot, "agc_mode:0,%s;", s.agc_normal ? "normal" : "fast");
   tci_send_to(slot, "start;");
   tci_send_to(slot, "ready;");
 }
