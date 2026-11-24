@@ -170,6 +170,32 @@ int radio_xit_enabled(void) {
 // brings rx_audio.c into step with it (radio.h).
 static enum radio_mode current_mode = RADIO_STARTUP_MODE;
 
+// The AGC speed each group of modes comes back with (radio.h).
+enum agc_group { AGC_GROUP_CW, AGC_GROUP_VOICE, AGC_GROUP_DIGITAL };
+static enum rx_agc agc_for_group[] = {
+  [AGC_GROUP_CW]      = RX_AGC_FAST,
+  [AGC_GROUP_VOICE]   = RX_AGC_MEDIUM,
+  [AGC_GROUP_DIGITAL] = RX_AGC_SLOW,
+};
+
+static enum agc_group agc_group_of(enum radio_mode m) {
+  switch (m) {
+  case RADIO_MODE_USB:
+  case RADIO_MODE_LSB:     return AGC_GROUP_VOICE;
+  case RADIO_MODE_DIGITAL: return AGC_GROUP_DIGITAL;
+  default:                 return AGC_GROUP_CW;
+  }
+}
+
+void radio_set_agc(enum rx_agc speed) {
+  agc_for_group[agc_group_of(current_mode)] = speed;
+  rx_audio_set_agc(speed);
+}
+
+enum rx_agc radio_get_agc(void) {
+  return agc_for_group[agc_group_of(current_mode)];
+}
+
 void radio_set_mode(enum radio_mode m) {
   // Entering CW or CWR from another mode: what the decoder heard before
   // wasn't CW.
@@ -200,6 +226,9 @@ void radio_set_mode(enum radio_mode m) {
   // set the mode too. rx_audio.c remembers the operator's own setting and
   // restores it on the way back to CW or CWR.
   rx_audio_inhibit_narrow_filter(m != RADIO_MODE_CW && m != RADIO_MODE_CWR);
+
+  // The AGC speed this mode was last left with.
+  rx_audio_set_agc(agc_for_group[agc_group_of(m)]);
 }
 
 int radio_set_cw_pitch(int hz) {
