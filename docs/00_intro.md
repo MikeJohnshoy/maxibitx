@@ -1184,7 +1184,7 @@ flowchart TD
     MIC["USB, LSB: mic, codec right input<br/>x 2^-31 x mic gain 0 to 64"] --> SRC
     DIG["DIGITAL: USB sound card, 48 kHz<br/>or TCI audio in DIGITAL, USB, LSB"] --> UP["upsample48k.c<br/>zero-stuff, 25-tap FIR, x2"] --> SRC
     TONE["Test tones: 1 kHz, or 700 + 1900 Hz"] --> SRC
-    SRC --> MON["Codec left: monitor<br/>x 1e7, about -47 dBFS"]
+    SRC --> MON["Codec left: monitor<br/>as loud as received audio, x volume<br/>none for the mic"]
     SRC --> PIPE["tx_pipeline.c, 1024 samples, FFT N = 2048<br/>bandpass 300 to 3000 Hz<br/>zero one sideband<br/>rotate: CW 467 bins, SSB 482 bins<br/>inverse FFT"]
     PIPE --> ALC["Peak limiter<br/>gain = min of 1 and ceiling / 2|x|<br/>2 ms look-ahead, 250 ms release"]
     ALC --> RE["2 x real part<br/>IF near 22.6 kHz"]
@@ -1438,9 +1438,12 @@ full-scale output is about 4.4 × 10⁷, 34 dB below the codec's full
 scale, and the codec's analog `Master` right control, at 95, sets the
 level from there. The sample is clamped to ±2 × 10⁹.
 
-The left channel carries the monitor: the source audio itself, not the
-pipeline's output, at a fixed peak of 10⁷ (about 47 dB below full
-scale), to the local speaker. It never reaches the PA.
+The left channel carries the monitor to the local speaker: the source
+audio itself, not the pipeline's output. A full-scale sidetone or test
+tone plays as loud as a received signal held at the AGC's level, times
+the volume control, so the volume and mute set what the speaker plays in
+transmit as in receive. The microphone isn't monitored. The monitor
+never reaches the PA.
 
 ### Setting power
 
@@ -1477,11 +1480,12 @@ around the relay sequence, never a level control.
   is the board's measured rated output, the second the most the
   operator allows. Equal values are the normal setting; a lower
   `max_power` is the same as a lower POWER, kept across restarts.
-- **The monitor** to the local speaker is fixed: the sidetone, the mic
-  and the test tones at `SIDETONE_PEAK_AMPLITUDE`, and a host's
-  transmit audio 20 dB lower (`DIGITAL_MONITOR_PEAK_AMPLITUDE`), since
-  programs such as WSJT-X send near full scale throughout. Neither
-  follows the volume control.
+- **The monitor** to the local speaker follows the volume control and
+  mute: the sidetone and the test tones as loud as a received signal at
+  the AGC's level (`MONITOR_PEAK_AMPLITUDE`), and a host's transmit audio
+  20 dB lower (`DIGITAL_MONITOR_RELATIVE`), since programs such as WSJT-X
+  send near full scale throughout. The microphone isn't monitored: with
+  the speaker near an open mic it would feed back.
 
 `TX_GAIN_CORRECTION` depends on where the wanted product sits on the
 crystal filter, so it is re-measured with a wattmeter on a board whose
@@ -1569,8 +1573,8 @@ the hang ends, the T/R sequence returns the radio to receive.
 whichever sideband the receiver listens to.
 
 **Sidetone.** The same keyed tone goes to the codec's left channel at
-the fixed monitor level, so the operator hears the keying with its real
-envelope and timing. The `MAXIBITX_TR_TIMING` environment variable
+the monitor level, set by the volume control, so the operator hears the
+keying with its real envelope and timing. The `MAXIBITX_TR_TIMING` environment variable
 makes maxibitx report, for each transmission, whether the first keyed
 sample reached the DAC before or after the exciter feed was raised,
 which shows whether any of a first element is lost to the T/R
@@ -1595,8 +1599,8 @@ back smoothly by the limiter, and ALC shows by how much. Raising the
 mic gain raises the average level until the limiter is working on most
 syllables; the ceiling, not the mic gain, limits the peak power.
 
-**Monitor.** A copy of the mic audio goes to the local speaker at the
-fixed monitor level.
+**No monitor.** The speaker is silent while transmitting voice: a copy
+of the mic in a speaker beside it feeds back.
 
 ### Digital
 
