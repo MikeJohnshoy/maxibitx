@@ -114,7 +114,11 @@ static int rx_mute_by_switch = 1;
 // audio thread - fine for a human-speed control, same as rx_audio.c's
 // rx_volume.
 #define SOUND_MIC_TX_GAIN_MAX 64.0
-static double mic_tx_gain = 1.0;
+// The starting mic gain: with the author's mic and voice it puts speech
+// peaks about 3 dB into the limiter, so voice reaches full power without
+// touching it (tx_test_tones_and_alc.md, "On the bench, November 2026").
+#define SOUND_MIC_TX_GAIN_DEFAULT 2.0
+static double mic_tx_gain = SOUND_MIC_TX_GAIN_DEFAULT;
 
 void sound_set_mic_tx_gain(double gain) {
   if (gain < 0.0) gain = 0.0;
