@@ -41,6 +41,11 @@ int rx_audio_get_volume(void);
 void rx_audio_set_mute(int on);
 int rx_audio_get_mute(void);
 
+// The volume control's linear gain on out[], 0 while muted. sound.c
+// scales the transmit monitor by it, so one control sets what the
+// speaker plays in receive and transmit.
+double rx_audio_volume_gain(void);
+
 // Stage 3: the narrow, post-demodulation "single signal" selectivity
 // filter, centred on the selected CW pitch - a separate stage from the wide
 // image-reject filter upstream of it, deliberately independent of it
