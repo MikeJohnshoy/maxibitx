@@ -21,18 +21,21 @@
 // steps, by 150/300/450/600Hz - see rx_audio_set_narrow_pitch()/_width() in
 // rx_audio.h, and radio_set_cw_pitch() for why the pitch is normally moved
 // from radio.c rather than here.
-//   4. AGC, then rx_volume for out[] only.
+//   4. AGC, then rx_volume for out[] only. Fast, medium or slow
+//      (rx_audio_set_agc()).
 //
 // In CW and CWR, stage 2's output also goes to the CW decoder
 // (cw_decoder.c), before stage 3, so what it decodes doesn't depend on the
 // narrow filter's setting: it does its own filtering at the pitch. The
 // same audio, summed to 6 kHz, fills SPOT's buffer (rx_audio_spot()).
 //
-// The AGC measures the RAW input magnitude, not any stage's output: its
-// envelope has to be frequency-independent, or the gain undoes the very
-// selectivity stages 1 and 3 provide. The consequence, by design: a
-// strong signal anywhere in the captured band lowers the gain for
-// everything ("AGC desense"), as with a real front-end AGC.
+// The AGC measures the magnitude of stage 1's complex output - the 3 kHz
+// of the selected sideband - and its gain is applied after stage 3. So a
+// strong signal outside that passband doesn't set the gain, and the
+// narrow filter's selectivity reaches the speaker, since the gain doesn't
+// depend on it. A signal inside the 3 kHz but outside the narrow filter
+// still lowers the gain, as in any receiver whose AGC sits ahead of its
+// narrowest filter.
 //
 // Design rationale, measurements and the history of how each stage got
 // here: docs/dsp_design_notes/rx_audio_demod_design.md (stages 1-4, AGC)
@@ -361,10 +364,29 @@ static double narrow_filter_apply(struct narrow_filter_state *f, double x) {
 // UAC_RX_AUDIO_SCALE is defined relative to this; change them together.
 #define AGC_TARGET_AMPLITUDE 500000000.0
 
-// Fast attack so a strong signal keying up doesn't clip; slow release so
-// gain rides the band level rather than pumping between CW elements.
-#define AGC_ATTACK_MS    5.0
-#define AGC_RELEASE_MS 300.0
+// Every speed attacks in 5 ms, so a strong signal keying up doesn't clip.
+// Fast then releases at once, over 300 ms, which holds the gain across
+// CW's element gaps. Medium and slow first hold the gain for their hang
+// time after the signal drops, so it doesn't climb back up between words,
+// and then release. The values are a starting point, to be tuned by ear.
+#define AGC_ATTACK_MS 5.0
+static const struct { double hang_ms, release_ms; } agc_speeds[] = {
+    [RX_AGC_FAST]   = {    0.0,  300.0 },
+    [RX_AGC_MEDIUM] = {  500.0,  300.0 },
+    [RX_AGC_SLOW]   = { 1000.0, 1000.0 },
+};
+#define AGC_SPEEDS ((int)(sizeof(agc_speeds) / sizeof(agc_speeds[0])))
+
+// The hang restarts while the signal's level, averaged over AGC_LEVEL_MS,
+// is within AGC_HANG_LEVEL of the envelope (-6 dB): speech keeps it held
+// and a pause lets it run out. Single-sample peaks can't restart it, or
+// noise alone would hold the gain down indefinitely.
+#define AGC_LEVEL_MS   5.0
+#define AGC_HANG_LEVEL 0.5
+
+// The S-meter's ballistics, independent of the AGC's speed.
+#define METER_ATTACK_MS    5.0
+#define METER_RELEASE_MS 300.0
 
 // Caps the gain on a near-silent input, so a quiet band doesn't turn into
 // full-scale hiss.
@@ -470,10 +492,21 @@ static enum rx_demod demod = RX_DEMOD_CW;
 // has no shutdown path, and the OS reclaims it at exit.
 static struct rx_filter *rx_fft_filter;
 
-// AGC envelope: smoothed magnitude of the RAW input I/Q (see file
-// header). gain = AGC_TARGET_AMPLITUDE / agc_env.
+// AGC envelope: smoothed magnitude of stage 1's output (see the file
+// header). gain = AGC_TARGET_AMPLITUDE / agc_env. agc_level is the same
+// magnitude averaged over AGC_LEVEL_MS, for the hang; agc_hang counts the
+// samples of hang left.
 static double agc_env = 0.0;
-static double agc_attack_alpha, agc_release_alpha;
+static double agc_level = 0.0;
+static int agc_hang = 0;
+static double agc_attack_alpha, agc_level_alpha;
+static double agc_release_alpha[AGC_SPEEDS];
+static int agc_hang_samples[AGC_SPEEDS];
+static double meter_attack_alpha, meter_release_alpha;
+
+// The selected speed: set by an interface thread, read by the audio
+// thread once a block.
+static atomic_int agc_speed = RX_AGC_FAST;
 
 // S-meter envelope: smoothed |stage 3 output| (or its bypass), i.e. what
 // actually reaches the speaker. Read-only - it never feeds the gain.
@@ -481,7 +514,7 @@ static double agc_attack_alpha, agc_release_alpha;
 static double meter_env = 0.0;
 
 // Time-constant (not cutoff-frequency) one-pole coefficient, for the
-// AGC's attack/release smoothing - alpha such that a step input reaches
+// AGC's and the meter's smoothing - alpha such that a step input reaches
 // ~63% of the way there after time_ms.
 static double onepole_alpha_from_ms(double time_ms) {
     double dt = 1.0 / (double)SAMPLE_RATE_HZ;
@@ -520,9 +553,16 @@ void rx_audio_init(void) {
         narrow_filter.stage[i].y1 = narrow_filter.stage[i].y2 = 0.0;
     }
 
-    agc_attack_alpha  = onepole_alpha_from_ms(AGC_ATTACK_MS);
-    agc_release_alpha = onepole_alpha_from_ms(AGC_RELEASE_MS);
-    agc_env = 0.0;
+    agc_attack_alpha = onepole_alpha_from_ms(AGC_ATTACK_MS);
+    agc_level_alpha  = onepole_alpha_from_ms(AGC_LEVEL_MS);
+    for (int i = 0; i < AGC_SPEEDS; i++) {
+        agc_release_alpha[i] = onepole_alpha_from_ms(agc_speeds[i].release_ms);
+        agc_hang_samples[i] = (int)lround(agc_speeds[i].hang_ms * SAMPLE_RATE_HZ / 1000.0);
+    }
+    meter_attack_alpha  = onepole_alpha_from_ms(METER_ATTACK_MS);
+    meter_release_alpha = onepole_alpha_from_ms(METER_RELEASE_MS);
+    agc_env = agc_level = 0.0;
+    agc_hang = 0;
     meter_env = 0.0;
 
     // Same pitch and width as the elliptic bank entry above, so switching
@@ -684,6 +724,15 @@ enum rx_demod rx_audio_get_demod(void) {
     return demod;
 }
 
+void rx_audio_set_agc(enum rx_agc speed) {
+    if ((int)speed >= 0 && (int)speed < AGC_SPEEDS)
+        atomic_store(&agc_speed, (int)speed);
+}
+
+enum rx_agc rx_audio_get_agc(void) {
+    return (enum rx_agc)atomic_load(&agc_speed);
+}
+
 double rx_audio_debug_agc_envelope(void) {
     return agc_env;
 }
@@ -694,9 +743,9 @@ double rx_audio_debug_meter_envelope(void) {
 
 // --- Signal strength (rigctld "l STRENGTH") ---
 //
-// Reads meter_env, not agc_env: agc_env is wideband by design (see the
-// file header), so it would read the same for a signal at dial center or
-// 10kHz away. meter_env tracks what's actually audible.
+// Reads meter_env, not agc_env: agc_env covers stage 1's whole 3 kHz (see
+// the file header), so it would read the same for a signal at dial center
+// or 2 kHz away. meter_env tracks what's actually audible.
 //
 // Units are dBFS, relative only. RX_STRENGTH_S9_DBFS is a placeholder,
 // not a calibration: calibrating needs a known signal (-73dBm = S9)
@@ -803,10 +852,12 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
     // Two passes. Stages 1-2, and the elliptic filter when it is the one
     // in circuit, run per sample into these buffers; the block-based FFT
     // filter, when it is the one, then runs once over audio_buf; then stage
-    // 4 runs per sample on whichever feeds it.
+    // 4 runs per sample on whichever feeds it, its gain taken from
+    // agc_buf, stage 1's magnitude.
     static float audio_buf[RX_AUDIO_MAX_BLOCK];
     static float elliptic_buf[RX_AUDIO_MAX_BLOCK];
     static float fft_buf[RX_AUDIO_MAX_BLOCK];
+    static float agc_buf[RX_AUDIO_MAX_BLOCK];
 
     if (n > RX_AUDIO_MAX_BLOCK)
         n = RX_AUDIO_MAX_BLOCK;
@@ -853,6 +904,7 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
         double fi, fq;
         double q_in = conjugate ? -q_samples[k] : q_samples[k];
         ssb_filter_apply(&ssb_state, i_samples[k], q_in, &fi, &fq);
+        agc_buf[k] = (float)sqrt(fi * fi + fq * fq);
 
         // Stage 2: demod. CW and CWR mix up to the selected pitch:
         //   Re[(fi + j*fq)(cos + j*sin)] = fi*cos - fq*sin
@@ -885,6 +937,13 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
     if (run == STAGE3_FFT)
         rx_filter_process_block(rx_fft_filter, audio_buf, fft_buf);
 
+    // Stage 4's speed this block.
+    int speed = atomic_load(&agc_speed);
+    double release_alpha = agc_release_alpha[speed];
+    int hang_samples = agc_hang_samples[speed];
+    if (agc_hang > hang_samples)
+        agc_hang = hang_samples;
+
     for (int k = 0; k < n; k++) {
         double audio = audio_buf[k];
         double narrowed;
@@ -895,18 +954,26 @@ void rx_audio_process(const double *i_samples, const double *q_samples,
         else
             narrowed = audio;
 
-        // Stage 4: AGC on the raw input magnitude (see file header) - fast
-        // attack, slow release - applied to stage 3's output.
-        double mag = sqrt(i_samples[k] * i_samples[k] + q_samples[k] * q_samples[k]);
-        double alpha = (mag > agc_env) ? agc_attack_alpha : agc_release_alpha;
-        agc_env += alpha * (mag - agc_env);
+        // Stage 4: AGC on stage 1's magnitude (see the file header),
+        // applied to stage 3's output. Attack whenever the signal is above
+        // the envelope; otherwise hold while the hang lasts, then release.
+        double mag = agc_buf[k];
+        agc_level += agc_level_alpha * (mag - agc_level);
+        if (agc_level >= AGC_HANG_LEVEL * agc_env)
+            agc_hang = hang_samples;
+        if (mag > agc_env)
+            agc_env += agc_attack_alpha * (mag - agc_env);
+        else if (agc_hang > 0)
+            agc_hang--;
+        else
+            agc_env += release_alpha * (mag - agc_env);
 
         double gain = AGC_TARGET_AMPLITUDE / (agc_env > 1e-9 ? agc_env : 1e-9);
         if (gain > AGC_MAX_GAIN) gain = AGC_MAX_GAIN;
 
         // S-meter envelope - see meter_env.
         double meter_mag = fabs(narrowed);
-        double meter_alpha = (meter_mag > meter_env) ? agc_attack_alpha : agc_release_alpha;
+        double meter_alpha = (meter_mag > meter_env) ? meter_attack_alpha : meter_release_alpha;
         meter_env += meter_alpha * (meter_mag - meter_env);
 
         // Post-AGC, pre-volume - see rx_audio.h.
