@@ -9,6 +9,7 @@
 
 #include <stdint.h>
 #include "vfo.h"
+#include "rx_audio.h" // enum rx_agc
 
 extern int freq_hdr;    // current frequency, Hz
 extern int in_tx;       // 0 = RX, 1 = TX
@@ -147,12 +148,20 @@ enum radio_mode {
 // themselves (hamlib.c replies RPRT -1; usb_gadget.c ignores it).
 //
 // Also the one place that decides whether stage 3, the narrow CW filter, is
-// allowed in circuit: DIGITAL holds it out and every other mode releases it
-// (rx_audio_inhibit_narrow_filter()). The operator's own on/off setting is
-// untouched by this and comes back when the mode does. Every mode change -
-// rigctld M, Kenwood MD, the control panel - already funnels through here,
-// which is what makes one call enough.
+// allowed in circuit: CW and CWR release it and every other mode holds it
+// out (rx_audio_inhibit_narrow_filter()). The operator's own on/off setting
+// is untouched by this and comes back when the mode does. And it sets the
+// AGC speed the mode was last left with (radio_set_agc()). Every mode
+// change - rigctld M, Kenwood MD, TCI, the control panel - already funnels
+// through here, which is what makes one call enough.
 void radio_set_mode(enum radio_mode m);
+
+// The AGC speed, remembered for three groups of modes: CW and CWR (FAST at
+// startup), USB and LSB (MEDIUM), and DIGITAL (SLOW). Setting it changes
+// the current mode's group and takes effect at once; each group's setting
+// comes back with its modes. Not kept across restarts.
+void radio_set_agc(enum rx_agc speed);
+enum rx_agc radio_get_agc(void);
 
 // The mode maxibitx starts in, applied by maxibitx.c with radio_set_mode()
 // once rx_audio.c is up. DIGITAL, since most clients are remote SDR and
