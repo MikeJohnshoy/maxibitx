@@ -137,7 +137,7 @@ test-rx-audio: src/rx_audio.c src/rx_audio_test.c src/rx_audio.h src/vfo.c src/v
 
 # Stage 3 and stage 4 together, which neither test-rx-filter (the filter
 # alone) nor test-rx-audio (the plumbing) can see: rx_audio.c derives its AGC
-# gain from the raw undelayed I/Q and applies it to filtered audio that is one
+# gain from stage 1's output and applies it to filtered audio that is one
 # group delay behind, so the gain runs ahead of what it modulates - by a
 # different amount per filter realization. Measures what that does to an
 # interferer the filter removes, and to a keyed CW element's own onset. See
