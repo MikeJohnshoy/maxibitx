@@ -44,8 +44,8 @@
 // settle time, a measurement, and its restarts with room to spare.
 #define READY_WAITS_FOR_CODEC_MS 5000
  
-// set a flag when we get a SIGINT/SIGTERM - the idle loop
-// below does the actual teardown once it notices
+// set a flag when we get a SIGINT/SIGTERM (rigctld's \shutdown_maxibitx
+// sends one) - the idle loop below does the actual teardown once it notices
 static volatile sig_atomic_t shutdown_requested = 0;
 static void handle_shutdown_signal(int sig) {
   (void)sig;
