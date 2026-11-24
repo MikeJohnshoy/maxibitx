@@ -166,6 +166,8 @@ unless `MAXIBITX_RIGCTL_TRACE=1` is in maxibitx's environment.
 | `L AF <0.0-1.0>` | `RPRT 0` | |
 | `u MUTE` / `U MUTE <0\|1>` | `0` / `RPRT 0` | The local speaker muted; the volume is kept and returns on unmute. A push of the volume knob toggles it, and turning that knob unmutes. A real Hamlib function, not advertised in `dump_state` |
 | `l STRENGTH` | `-12` | S-meter, integer dB relative to S9 (−54 to +60). Uncalibrated - relative readings only. |
+| `l AGC` | `5` | AGC speed, in Hamlib's numbers: `2` fast, `5` medium, `3` slow. The current mode's: one is kept for CW and CWR, one for USB and LSB, one for DIGITAL. |
+| `L AGC <2\|5\|3>` | `RPRT 0` | Sets the current mode's group; the name (`FAST`, `MEDIUM`, `SLOW`) works too. Hamlib's other values (off, superfast, user, auto): `RPRT -1`. |
 | `l MICGAIN` | `1.000000` | Mic gain - the TX drive control, USB/LSB only (extension) |
 | `L MICGAIN <value>` | `RPRT 0` | Clamped to 0-64 (extension) |
 | `l RFPOWER` | `1.000000` | TX power, 0.0-1.0 of `max_power` in `data/hw_settings.ini` |
@@ -386,6 +388,7 @@ is ignored. Receiver and transceiver numbers other than 0 are ignored.
 | `xit_enable:0[,…];`, `xit_offset:0[,hz];` | XIT, transmit only, ±9999 Hz; set separately, as RIT is. `tx_enable` follows if XIT moves the transmit frequency into or out of a band. |
 | `cw_macros_speed[:wpm];`, `cw_keyer_speed[:wpm];` | The keyer's one speed, 1-60 WPM. |
 | `rx_smeter:0,0;` | `rx_smeter:0,0,<dBm>;` - rigctld's `STRENGTH` with S9 = -73 dBm; uncalibrated. |
+| `agc_mode:0[,fast\|normal];` | The current mode's AGC: `fast`, or `normal` for medium and slow, which TCI has no separate word for. `fast` sets fast; `normal` moves fast to medium and leaves slow alone. |
 | `rx_sensors_enable:true[,ms];` | `rx_sensors:0,<dBm>;` and `rx_channel_sensors:0,0,<dBm>;` every ms (30-1000, default 200), one decimal place. |
 | `tx_sensors_enable:…;` | Accepted; no `tx_sensors` are sent, since a DE board measures no power or SWR. |
 | `start;` | Answered `start;`. `stop;` is ignored: maxibitx has no stopped state. |
@@ -511,7 +514,7 @@ What an application can't do today without changes to the daemon:
   leaves the radio transmitting. (Transmit *is* refused outside the
   calibrated bands - that check is on the frequency, not on time.)
 - **Split and a second VFO**, a variable receive passband, AGC
-  settings, and a calibrated S-meter.
+  speeds other than fast, medium and slow, and a calibrated S-meter.
 - **HPSDR sample rates other than 96 kHz**, and more than one HPSDR
   client.
 - **TCI's 192 and 384 kHz I/Q**, second receiver, and line-out stream.
