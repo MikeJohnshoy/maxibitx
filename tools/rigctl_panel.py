@@ -36,7 +36,10 @@ The gear (and the RX/TX button) opens Settings: the connection, paddle
 reversal, SPOT after a click, the TX test tones, the spectrum's peak
 line, auto floor and range, the macro texts, and the macro fields. A field is a name and a value, MYCALL and PARK to
 start with, up to eight; a macro's {NAME} is replaced by the value, and
-a macro naming a field with no value isn't sent.
+a macro naming a field with no value isn't sent. Along the bottom of
+Settings: Close panel; Stop radio (\\shutdown_maxibitx, then close); and,
+when the host is this machine, Shut down Pi (stop, then systemctl
+poweroff). The last two want a second tap within 3 s.
 
 The trace is the average of the FFTs since the last frame, so the noise
 floor holds steady without signals widening; a dimmer peak line behind
@@ -110,6 +113,7 @@ rigctld commands used:
     \\get_cw_text <n>        the CW decoder's text from character n on
     l DECODEWPM             the speed the decoder has learned
     \\spot                   SPOT: the dial onto the nearest CW signal, RIT cleared
+    \\shutdown_maxibitx      stop maxibitx (Settings' Stop radio and Shut down Pi)
 
 In CW and CWR the waterfall is shorter, and two lines under it show what
 the CW decoder reads; the status line adds the speed it has learned. Tap
@@ -138,6 +142,7 @@ import os
 import re
 import socket
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -180,6 +185,35 @@ PWR_STEP = 5
 # The MIC box: an arrow's step, and the most it takes (rigctld's MICGAIN limit).
 MIC_STEP = 0.5
 MIC_MAX = 64.0
+# Stop radio and Shut down Pi ask for a second tap within this long.
+CONFIRM_S = 3.0
+# Shut down Pi waits this long for maxibitx to finish its own shutdown.
+STOP_BEFORE_POWEROFF_S = 2.0
+
+
+_local_hosts = {}
+
+
+def is_local(host):
+    """Whether host is this machine: an address the panel can bind to.
+    Only then may it offer to power the machine off. Remembered per name,
+    so a slow lookup happens once."""
+    if host not in _local_hosts:
+        _local_hosts[host] = _is_local(host)
+    return _local_hosts[host]
+
+
+def _is_local(host):
+    try:
+        addr = socket.gethostbyname(host)
+    except OSError:
+        return False
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.bind((addr, 0))
+        return True
+    except OSError:
+        return False
 CW_WIDTHS = ("150", "300", "450", "600")
 # Full scale for the ALC bar. Correctly set mic gain reads a couple of dB
 # on speech peaks, so the useful part of the scale is its bottom third.
@@ -888,6 +922,7 @@ class SettingsDialog(tk.Toplevel):
         else:
             self.geometry(f"{WIN_W - 20}x{WIN_H - 20}+{panel.winfo_rootx() + 10}"
                           f"+{panel.winfo_rooty() + 10}")
+        self.build_quit_row()
         nb = ttk.Notebook(self)
         nb.pack(fill="both", expand=True, padx=6, pady=6)
         nb.add(self.build_radio_tab(nb), text="Radio")
@@ -959,6 +994,56 @@ class SettingsDialog(tk.Toplevel):
         f.columnconfigure(1, weight=1)
         return f
 
+    def build_quit_row(self):
+        """Close panel, Stop radio, and Shut down Pi, under every tab.
+        Stop radio and Shut down Pi want a second tap within CONFIRM_S,
+        so a stray touch can't take the station off the air."""
+        row = ttk.Frame(self, padding=(6, 0, 6, 6))
+        row.pack(side="bottom", fill="x")
+        self.quit_note = ttk.Label(row, text="", style="Muted.TLabel")
+        self.quit_note.pack(side="left")
+        # Wide enough for "Tap to confirm", so a button doesn't move
+        # between the two taps.
+        self.poweroff_btn = ttk.Button(row, text="Shut down Pi", width=13,
+                                       command=lambda: self.confirm("poweroff"))
+        self.stop_btn = ttk.Button(row, text="Stop radio", width=13,
+                                   command=lambda: self.confirm("stop"))
+        self.stop_btn.pack(side="right", padx=(6, 0))
+        ttk.Button(row, text="Close panel", command=self.panel.on_close).pack(side="right")
+        self.armed, self.armed_job = None, None
+
+    def confirm(self, what):
+        """A first tap arms the button; a second within CONFIRM_S acts."""
+        button = self.stop_btn if what == "stop" else self.poweroff_btn
+        if self.armed != what:
+            self.disarm()
+            self.armed = what
+            button.configure(text="Tap to confirm", style="Accent.TButton")
+            self.armed_job = self.after(int(CONFIRM_S * 1000), self.disarm)
+            return
+        self.disarm()
+        if what == "stop":
+            self.panel.stop_radio()
+        else:
+            self.panel.power_off()
+
+    def disarm(self):
+        if self.armed_job is not None:
+            self.after_cancel(self.armed_job)
+        self.armed, self.armed_job = None, None
+        self.stop_btn.configure(text="Stop radio", style="TButton")
+        self.poweroff_btn.configure(text="Shut down Pi", style="TButton")
+
+    def refresh_quit_row(self):
+        """Stop radio needs a connection; Shut down Pi shows only when the
+        panel's host is this machine."""
+        p = self.panel
+        self.stop_btn.state(["!disabled"] if p.client.connected() else ["disabled"])
+        if is_local(p.host_var.get().strip() or DEFAULT_HOST):
+            self.poweroff_btn.pack(side="right", padx=(6, 0), before=self.stop_btn)
+        else:
+            self.poweroff_btn.pack_forget()
+
     def build_macro_tab(self, nb):
         p = self.panel
         f = ttk.Frame(nb, padding=8)
@@ -1008,6 +1093,7 @@ class SettingsDialog(tk.Toplevel):
         else:
             self.conn_btn.configure(text="Connect")
             self.conn_status.configure(text=p.connect_error or "not connected")
+        self.refresh_quit_row()
 
     def close(self):
         self.panel.save_settings()
@@ -1533,6 +1619,53 @@ class Panel(tk.Tk):
         self.want_connection = False
         self.disconnect()
         self.destroy()
+
+    def stop_radio(self, then=None):
+        """Stops maxibitx (rigctld's \\shutdown_maxibitx, its clean shutdown),
+        then closes the panel, or calls then() instead."""
+        def run():
+            reply = self.client.query("\\shutdown_maxibitx")
+            self.after(0, lambda: done(reply))
+
+        def done(reply):
+            if reply != "RPRT 0":
+                self.note_quit(f"maxibitx didn't stop: {reply or 'no reply'}")
+                return
+            self.want_connection = False
+            if then is None:
+                self.on_close()
+            else:
+                then()
+        threading.Thread(target=run, daemon=True).start()
+
+    def power_off(self):
+        """Stops maxibitx if connected, waits for its shutdown, then powers
+        this machine off with systemctl, which Raspberry Pi OS allows the
+        desktop's user without a password."""
+        def run():
+            time.sleep(STOP_BEFORE_POWEROFF_S if stopped else 0)
+            try:
+                r = subprocess.run(["systemctl", "poweroff"], capture_output=True, text=True,
+                                   timeout=10)
+                error = None if r.returncode == 0 else (r.stderr.strip() or f"exit {r.returncode}")
+            except (OSError, subprocess.TimeoutExpired) as e:
+                error = str(e)
+            if error:
+                self.after(0, lambda: self.note_quit(f"couldn't power off: {error}"))
+
+        stopped = self.client.connected()
+        go = lambda: (self.note_quit("powering off..."),
+                      threading.Thread(target=run, daemon=True).start())
+        if stopped:
+            self.stop_radio(then=go)
+        else:
+            go()
+
+    def note_quit(self, text):
+        """A line beside the quit buttons in Settings, and the status line."""
+        self.say(text, 8)
+        if self.settings is not None:
+            self.settings.quit_note.configure(text=text)
 
     # ---- settings ----
 
