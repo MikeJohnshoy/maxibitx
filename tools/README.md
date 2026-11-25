@@ -208,6 +208,15 @@ field's value, and a macro naming a field with no value isn't sent, so a
 CQ never goes out without your call. Settings, the last host and the
 band memory are kept in `~/.maxibitx_panel.json`.
 
+**Status**, the fourth Settings tab, shows what maxibitx reports about
+itself (rigctld `\interfaces` and `\radio_status`), asked again every
+2 s while it shows. Interfaces: rigctld, TCI, HPSDR, iq_stream and the
+USB gadget, each active (green, with who is connected and what they
+take), waiting for a client, down (red: it didn't start, see the
+startup log) or off. Radio: the board, how long maxibitx has been
+running, the codec's start-up check, audio xruns, receive clipping, TCI
+transmit audio, and the frequency and power settings in use.
+
 Along the bottom of Settings, under every tab: **Close panel**; **Stop
 radio**, which stops maxibitx (rigctld `\shutdown_maxibitx`, its clean
 shutdown) and then closes the panel; and **Shut down Pi**, shown only
