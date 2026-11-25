@@ -74,6 +74,15 @@ double sound_get_tx_power(void);
    MICGAIN - a couple of dB on speech peaks is right. */
 double sound_get_alc_db(void);
 
+/* Since start, for rigctld's \radio_status: ALSA xruns on capture and
+   playback, and clipping on the receive ADC - episodes at least a second
+   apart, with the dial frequency of the last. */
+struct sound_health {
+  unsigned xruns_capture, xruns_playback, clips;
+  int last_clip_hz;
+};
+void sound_get_health(struct sound_health *h);
+
 /* Re-derives the TX IF placement (the CW and SSB shifts) from this
    board's bfo_freq/xtal_filter_center and whatever tone cw.c is currently
    generating, so the two cancel to a key-down carrier on the dial. Called
