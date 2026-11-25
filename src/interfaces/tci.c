@@ -64,6 +64,7 @@
 
 struct client {
   int in_use, id;
+  char peer[48]; // the client's address, for tci_status()
   struct tci_stream_cfg cfg;
   int buffering_ms;
   int rx_sensors, rx_sensors_ms;
@@ -80,6 +81,7 @@ static struct client clients[WS_MAX_CLIENTS];
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static struct state pub;
 static int tx_owner = -1;    // slot whose trx holds TX, -1 none
+static int max_clients_set;  // tci_init()'s max_clients, for tci_status()
 static long long drain_until; // trx false waiting for queued audio: its deadline, else 0
 static int unmute_percent = TCI_UNMUTE_DEFAULT_PERCENT;
 static int trace;            // MAXIBITX_TCI_TRACE: print every message
@@ -708,6 +710,7 @@ static void on_open(int id, const char *peer) {
   memset(c, 0, sizeof(*c));
   c->in_use = 1;
   c->id = id;
+  snprintf(c->peer, sizeof(c->peer), "%s", peer);
   c->cfg.audio_rate = 48000;
   c->cfg.audio_type = TCI_FLOAT32;
   c->cfg.audio_channels = 2;
@@ -812,6 +815,7 @@ int tci_init(const char *bind_addr, int port, int max_clients) {
     unmute_percent = rx_audio_get_volume();
   if (ws_server_start(bind_addr, port, max_clients, &cb) < 0)
     return -1;
+  max_clients_set = max_clients;
   atomic_store(&running, 1);
   if (pthread_create(&service_thread, NULL, service_main, NULL) != 0) {
     atomic_store(&running, 0);
@@ -819,6 +823,44 @@ int tci_init(const char *bind_addr, int port, int max_clients) {
     return -1;
   }
   return 0;
+}
+
+void tci_status(struct iface_status *s) {
+  if (tci_port == 0) {
+    s->state = IFACE_OFF;
+    snprintf(s->detail, sizeof(s->detail), "off: tci_port=0 in hw_settings.ini");
+    return;
+  }
+  if (!atomic_load(&running)) {
+    s->state = IFACE_DOWN;
+    snprintf(s->detail, sizeof(s->detail), "didn't start - see the startup log");
+    return;
+  }
+  char list[IFACE_DETAIL_LEN] = "";
+  size_t len = 0;
+  int n = 0;
+  pthread_mutex_lock(&lock);
+  for (int slot = 0; slot < WS_MAX_CLIENTS; slot++) {
+    const struct client *c = &clients[slot];
+    if (!c->in_use)
+      continue;
+    n++;
+    // The address without its port, then what this client takes.
+    int host_len = (int)strcspn(c->peer, ":");
+    int w = snprintf(list + len, sizeof(list) - len, "%s%.*s%s%s%s", n > 1 ? ", " : " ",
+                     host_len, c->peer, c->cfg.audio_on ? " audio" : "",
+                     c->cfg.iq_on ? " I/Q" : "", tx_owner == slot ? " TX" : "");
+    if (w > 0)
+      len += (size_t)w < sizeof(list) - len ? (size_t)w : sizeof(list) - len - 1;
+  }
+  pthread_mutex_unlock(&lock);
+  if (n == 0) {
+    s->state = IFACE_WAITING;
+    snprintf(s->detail, sizeof(s->detail), "listening, up to %d clients", max_clients_set);
+  } else {
+    s->state = IFACE_ACTIVE;
+    snprintf(s->detail, sizeof(s->detail), "%d of %d:%s", n, max_clients_set, list);
+  }
 }
 
 void tci_stop(void) {
