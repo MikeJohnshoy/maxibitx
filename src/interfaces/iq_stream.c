@@ -335,6 +335,37 @@ void iq_stream_poll(void) {
   }
 }
 
+void iq_stream_status(struct iface_status *s) {
+  if (!running) {
+    s->state = IFACE_DOWN;
+    snprintf(s->detail, sizeof(s->detail), "didn't start - see the startup log");
+    return;
+  }
+  char list[IFACE_DETAIL_LEN] = "";
+  size_t len = 0;
+  int n = 0;
+  time_t now = monotonic_now_sec();
+  pthread_mutex_lock(&subscribers_lock);
+  for (int i = 0; i < MAX_SUBSCRIBERS; i++) {
+    if (!subscribers[i].in_use || now - subscribers[i].last_seen > SUBSCRIBER_TIMEOUT_SEC)
+      continue;
+    char ip[INET_ADDRSTRLEN] = "?";
+    inet_ntop(AF_INET, &subscribers[i].addr.sin_addr, ip, sizeof(ip));
+    int w = snprintf(list + len, sizeof(list) - len, "%s%s", n ? ", " : " ", ip);
+    if (w > 0)
+      len += (size_t)w < sizeof(list) - len ? (size_t)w : sizeof(list) - len - 1;
+    n++;
+  }
+  pthread_mutex_unlock(&subscribers_lock);
+  if (n == 0) {
+    s->state = IFACE_WAITING;
+    snprintf(s->detail, sizeof(s->detail), "listening, up to %d subscribers", MAX_SUBSCRIBERS);
+  } else {
+    s->state = IFACE_ACTIVE;
+    snprintf(s->detail, sizeof(s->detail), "%d of %d:%s", n, MAX_SUBSCRIBERS, list);
+  }
+}
+
 void iq_stream_stop(void) {
   running = 0;
 
