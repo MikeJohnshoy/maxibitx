@@ -55,10 +55,14 @@ long tci_stream_tx_queued_frames(void);
 // max_gap_ms: the longest wait between two of the client's TX audio frames;
 // first_audio_ms: from TX on to the first, -1 if none came; held_ms: how
 // long TX stayed up after the client's trx false, playing out what was
-// queued; unplayed_ms: what was still queued when TX dropped.
+// queued; unplayed_ms: what was still queued when TX dropped. And since
+// start: transmissions, those in which audio came, and dry_transmissions,
+// those of them in which it ran dry. Read from another thread, a copy can
+// mix two transmissions' figures if one ends at that moment.
 struct tci_tx_stats {
   unsigned long dry_events;
   double silence_ms, max_gap_ms, first_audio_ms, held_ms, unplayed_ms;
+  unsigned long transmissions, dry_transmissions;
 };
 void tci_stream_tx_stats(struct tci_tx_stats *s);
 
