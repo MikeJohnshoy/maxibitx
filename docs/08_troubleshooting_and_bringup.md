@@ -515,6 +515,12 @@ the lead. The background:
 
 ## What the console shows
 
+The control panel's Settings has a Status tab: each interface, whether
+it's running and who is connected, and the radio's health since
+start-up (xruns, clipping, TCI transmit audio, the codec check) with the
+settings it is using. It's the quickest first look, and the console has
+the detail.
+
 Once start-up is done, the console reports what happens to the radio:
 tuning, mode, PTT and its refusals, filter and keyer changes, LPF
 switching, clients connecting and leaving, xruns. It does not report what
