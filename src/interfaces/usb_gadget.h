@@ -50,6 +50,8 @@
 #ifndef USB_GADGET_H
 #define USB_GADGET_H
 
+#include "iface_status.h"
+
 /* Creates the composite gadget via configfs and opens both directions of
  * the UAC2 PCM. Call once, after hpsdr_init(). Returns 0 if the gadget and
  * the playback (RX) PCM are up, -1 otherwise (e.g. no UDC) - not fatal;
@@ -87,5 +89,10 @@ int uac_is_active(void);
  * other dependency on it. */
 int cat_init(void);
 void cat_stop(void);
+
+/* For rigctld's \interfaces: not available, waiting for a host (with the
+ * USB controller's own state: "not attached", "suspended" ...), or a host
+ * connected, with the audio directions and the CAT port that are up. */
+void uac_status(struct iface_status *s);
 
 #endif /* USB_GADGET_H */
