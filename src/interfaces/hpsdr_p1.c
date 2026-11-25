@@ -8,6 +8,7 @@
 // docs/dsp_design_notes/interfaces_and_codec_bringup_notes.md §2, and
 // docs/06_api.md for what a client sees.
 
+#include "hpsdr_p1.h"
 #include "cw.h"
 #include <arpa/inet.h>
 #include <pthread.h>
@@ -514,6 +515,23 @@ void hpsdr_stop(void) {
 }
 
 int hpsdr_is_connected(void) { return client_active; }
+
+// stream_dest is written by the listener thread without a lock; a status
+// read racing a client change can show the old address once.
+void hpsdr_status(struct iface_status *s) {
+  if (!running) {
+    s->state = IFACE_DOWN;
+    snprintf(s->detail, sizeof(s->detail), "not running");
+  } else if (client_active) {
+    char ip[INET_ADDRSTRLEN] = "?";
+    inet_ntop(AF_INET, &stream_dest.sin_addr, ip, sizeof(ip));
+    s->state = IFACE_ACTIVE;
+    snprintf(s->detail, sizeof(s->detail), "streaming to %s:%d", ip, ntohs(stream_dest.sin_port));
+  } else {
+    s->state = IFACE_WAITING;
+    snprintf(s->detail, sizeof(s->detail), "listening, one client at a time");
+  }
+}
 
 void hpsdr_poll(void) {
   static int started = 0;
