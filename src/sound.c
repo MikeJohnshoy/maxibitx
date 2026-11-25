@@ -610,6 +610,12 @@ static int xrun_recover(snd_pcm_t *pcm, int err) {
 #define XRUN_FLOOD_WINDOW_NS 1000000000LL /* 1 second */
 #define XRUN_FLOOD_THRESHOLD 10          /* xruns within the window = "flooding" */
 
+// Since start, for rigctld's \radio_status (sound_get_health()). The
+// audio thread counts; an interface thread reads.
+static atomic_uint xruns_capture, xruns_playback;
+static atomic_uint clip_episodes;
+static atomic_int clip_last_hz;
+
 struct xrun_tracker {
   int count;
   struct timespec window_start;
@@ -662,10 +668,22 @@ static void xrun_note(struct xrun_tracker *t, const char *label) {
 // Clip guard on the raw ADC sample - the one signal RX_CAPTURE_GAIN_PERCENT
 // acts on directly. Logs only the rising edge of a clip. Costs one fabs()
 // and one compare per sample. See rx_gain_and_level_calibration.md §7.
+// clip_episodes counts clips at least a second (96,000 samples) after the
+// last, so a station clipping on every peak counts once.
 static int rx_clipping = 0;
+static long samples_since_clip = 96000;
 
 static void rx_clip_check(double rf) {
   int clipped_now = fabs(rf) >= 0.999;
+  if (clipped_now) {
+    if (samples_since_clip >= 96000) {
+      atomic_fetch_add_explicit(&clip_episodes, 1, memory_order_relaxed);
+      atomic_store_explicit(&clip_last_hz, freq_hdr, memory_order_relaxed);
+    }
+    samples_since_clip = 0;
+  } else if (samples_since_clip < 96000) {
+    samples_since_clip++;
+  }
   if (clipped_now && !rx_clipping) {
     fprintf(stderr,
             "sound: *** CLIPPING *** freq=%d capture=%d%% - RF front "
@@ -674,6 +692,13 @@ static void rx_clip_check(double rf) {
             freq_hdr, RX_CAPTURE_GAIN_PERCENT);
   }
   rx_clipping = clipped_now;
+}
+
+void sound_get_health(struct sound_health *h) {
+  h->xruns_capture = atomic_load_explicit(&xruns_capture, memory_order_relaxed);
+  h->xruns_playback = atomic_load_explicit(&xruns_playback, memory_order_relaxed);
+  h->clips = atomic_load_explicit(&clip_episodes, memory_order_relaxed);
+  h->last_clip_hz = atomic_load_explicit(&clip_last_hz, memory_order_relaxed);
 }
 
 static void sound_process(int32_t *input_rx, int32_t *input_mic, int32_t *output_speaker,
@@ -964,6 +989,7 @@ static void *audio_loop(void *arg) {
     int64_t read_ns = ns_between(&t_read0, &t_read1);
     if (frames < 0) {
       xrun_note(&capture_xrun, "capture");
+      atomic_fetch_add_explicit(&xruns_capture, 1, memory_order_relaxed);
       codec_check_gap(); // frames lost: the check's 128-sample phase with them
       if (xrun_recover(pcm_capture, (int)frames) < 0) {
         fprintf(stderr, "sound: capture recovery failed\n");
@@ -1188,6 +1214,7 @@ static void *audio_loop(void *arg) {
         // On unrecoverable failure, disable playback rather than stop RX
         // too (docs/08_troubleshooting_and_bringup.md).
         xrun_note(&playback_xrun, "playback");
+        atomic_fetch_add_explicit(&xruns_playback, 1, memory_order_relaxed);
         if (xrun_recover(pcm_playback, (int)wframes) < 0) {
           fprintf(stderr, "sound: playback recovery failed - disabling local "
                           "audio and TX output (restart maxibitx to "
