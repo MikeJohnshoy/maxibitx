@@ -207,6 +207,9 @@ the next start
 From then on the console reports what happens to the radio, not what
 clients ask about it
 ([`08_troubleshooting_and_bringup.md`](08_troubleshooting_and_bringup.md#what-the-console-shows)).
+The state of every interface, and the radio's health since start-up,
+can be asked for at any time: rigctld's `\interfaces` and
+`\radio_status`, shown by the control panel's Status tab.
 
 ---
 
