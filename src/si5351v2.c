@@ -298,6 +298,10 @@ void si5351_set_calibration(int32_t cal){
     xtal_freq_calibrated = cal;
 }
 
+int32_t si5351_get_calibration(void) {
+    return xtal_freq_calibrated;
+}
+
 int si5351bx_init(int preferred_bus){
   int i2c_bus = i2c_find_bus(preferred_bus, SI5351_ADDR);
   if (i2c_bus < 0) {
