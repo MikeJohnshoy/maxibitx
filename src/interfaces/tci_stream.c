@@ -498,6 +498,11 @@ static void tx_report(void) {
   s->first_audio_ms = tx.first_ns ? (tx.first_ns - tx.begin_ns) / 1e6 : -1.0;
   s->held_ms = tx.draining ? (now_ns() - tx.drain_ns) / 1e6 : 0.0;
   s->unplayed_ms = tci_stream_tx_queued_frames() / 48.0;
+  if (tx.first_ns) {
+    s->transmissions++;
+    if (s->dry_events)
+      s->dry_transmissions++;
+  }
   if (!s->dry_events && !(report_every && tx.first_ns))
     return;
   if (s->dry_events)
