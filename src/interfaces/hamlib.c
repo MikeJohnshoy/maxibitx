@@ -28,10 +28,24 @@
 #include "keyer.h"       // l/L KEYSPD, u/U KEYER, b and \stop_morse below
 #include "morse.h"       // b's text
 #include "knobs.h"       // n/N, the tuning knob's step
+#include "codec_check.h" // \radio_status
+#include "tci.h"         // \interfaces
+#include "tci_stream.h"  // \radio_status, TCI transmit audio
+#include "hpsdr_p1.h"    // \interfaces
+#include "iq_stream.h"   // \interfaces
+#include "usb_gadget.h"  // \interfaces
 
 static int listen_fd = -1;
 static volatile int running = 0;
 static pthread_t accept_thread;
+static int listen_port;
+static struct timespec started; // hamlib_init(), at startup: \radio_status's uptime
+
+// The connected clients' addresses, for \interfaces.
+#define RIG_CLIENTS_MAX 8
+static struct { int fd; char ip[INET_ADDRSTRLEN]; } rig_clients[RIG_CLIENTS_MAX];
+static int rig_client_count;
+static pthread_mutex_t rig_clients_lock = PTHREAD_MUTEX_INITIALIZER;
 
 // Mode lives in radio.c (radio_get_mode()/radio_set_mode()); these
 // translate to and from Hamlib's RIG_MODE names. DIGITAL goes out as
@@ -790,6 +804,81 @@ static int handle_line(int fd, char *line)
         return 0;
     }
 
+    if (strcmp(cmd, "\\interfaces") == 0) {
+        // Extension: every interface's state on one line, for the control
+        // panel's Status tab. Records separated by '|', each
+        // name;where;state;detail with state off, down, waiting or active
+        // (iface_status.h); detail is for a person.
+        char out[1024];
+        size_t len = 0;
+        char rig[IFACE_DETAIL_LEN] = "";
+        size_t rlen = 0;
+        pthread_mutex_lock(&rig_clients_lock);
+        int n = rig_client_count;
+        for (int i = 0; i < n; i++) {
+            int w = snprintf(rig + rlen, sizeof(rig) - rlen, "%s%s", i ? ", " : "",
+                             rig_clients[i].ip);
+            if (w > 0)
+                rlen += (size_t)w < sizeof(rig) - rlen ? (size_t)w : sizeof(rig) - rlen - 1;
+        }
+        pthread_mutex_unlock(&rig_clients_lock);
+        len += (size_t)snprintf(out + len, sizeof(out) - len, "rigctld;TCP %d;active;%d client%s: %s",
+                                listen_port, n, n == 1 ? "" : "s", rig);
+        static const char *state_names[] = {"off", "down", "waiting", "active"};
+        struct { const char *name; char where[24]; void (*fn)(struct iface_status *); } others[] = {
+            {"TCI", "", tci_status},
+            {"HPSDR", "", hpsdr_status},
+            {"iq_stream", "", iq_stream_status},
+            {"USB gadget", "USB", uac_status},
+        };
+        snprintf(others[0].where, sizeof(others[0].where), "TCP %d", tci_port);
+        snprintf(others[1].where, sizeof(others[1].where), "UDP %d", HPSDR_PORT);
+        snprintf(others[2].where, sizeof(others[2].where), "UDP %d", IQ_STREAM_PORT);
+        for (size_t i = 0; i < sizeof(others) / sizeof(others[0]) && len < sizeof(out); i++) {
+            struct iface_status st = {IFACE_DOWN, ""};
+            others[i].fn(&st);
+            len += (size_t)snprintf(out + len, sizeof(out) - len, "|%s;%s;%s;%s", others[i].name,
+                                    others[i].where, state_names[st.state], st.detail);
+        }
+        if (len >= sizeof(out) - 1)
+            len = sizeof(out) - 2;
+        out[len] = '\n';
+        out[len + 1] = '\0';
+        send_line(fd, out);
+        get_log("rigctl: \\interfaces -> sent\n");
+        return 0;
+    }
+
+    if (strcmp(cmd, "\\radio_status") == 0) {
+        // Extension: the radio's health and settings on one line, for the
+        // control panel's Status tab: key=value fields separated by '|'.
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        struct sound_health h;
+        sound_get_health(&h);
+        struct tci_tx_stats t;
+        tci_stream_tx_stats(&t);
+        int outcome = codec_check_outcome();
+        const char *codec = outcome == CODEC_CHECK_CLEAN       ? "clean"
+                            : outcome == CODEC_CHECK_BAD_STATE ? "bad state"
+                            : outcome == CODEC_CHECK_RUNNING   ? "checking"
+                                                               : "not measured";
+        char out[768];
+        snprintf(out, sizeof(out),
+                 "board=%s|uptime_s=%ld|codec=%s|xruns_capture=%u|xruns_playback=%u|clips=%u"
+                 "|last_clip_hz=%d|tci_tx=%lu|tci_tx_dry=%lu|tci_last_longest_wait_ms=%.0f"
+                 "|cal_hz=%ld|codec_rate_hz=%d|xtal_center_hz=%d|bfo_hz=%d"
+                 "|full_scale_w=%g|max_power_w=%g|power_pct=%.0f\n",
+                 radio_hw_board_name(), (long)(now.tv_sec - started.tv_sec), codec,
+                 h.xruns_capture, h.xruns_playback, h.clips, h.last_clip_hz, t.transmissions,
+                 t.dry_transmissions, t.transmissions ? t.max_gap_ms : 0.0,
+                 (long)si5351_get_calibration(), codec_rate, radio_get_xtal_filter_center(),
+                 bfo_freq, tx_full_scale_power, tx_max_power, sound_get_tx_power() * 100.0);
+        send_line(fd, out);
+        get_log("rigctl: \\radio_status -> sent\n");
+        return 0;
+    }
+
     if (strcmp(cmd, "\\shutdown_maxibitx") == 0) {
         // Extension: stops maxibitx as SIGTERM or Ctrl-C does, by sending
         // itself one: maxibitx.c's shutdown drops PTT and the relays first.
@@ -911,6 +1000,14 @@ static void *client_thread(void *arg)
     }
 
     close(fd);
+    pthread_mutex_lock(&rig_clients_lock);
+    for (int i = 0; i < rig_client_count; i++) {
+        if (rig_clients[i].fd == fd) {
+            rig_clients[i] = rig_clients[--rig_client_count];
+            break;
+        }
+    }
+    pthread_mutex_unlock(&rig_clients_lock);
     printf("hamlib: client disconnected\n");
     return NULL;
 }
@@ -932,6 +1029,14 @@ static void *accept_thread_fn(void *arg)
 
         printf("hamlib: client connected from %s:%d\n",
                inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+        pthread_mutex_lock(&rig_clients_lock);
+        if (rig_client_count < RIG_CLIENTS_MAX) {
+            rig_clients[rig_client_count].fd = fd;
+            inet_ntop(AF_INET, &client_addr.sin_addr, rig_clients[rig_client_count].ip,
+                      sizeof(rig_clients[rig_client_count].ip));
+            rig_client_count++;
+        }
+        pthread_mutex_unlock(&rig_clients_lock);
 
         pthread_t tid;
         if (pthread_create(&tid, NULL, client_thread, (void *)(intptr_t)fd) == 0) {
@@ -974,6 +1079,8 @@ int hamlib_init(int port)
         return -1;
     }
 
+    listen_port = port;
+    clock_gettime(CLOCK_MONOTONIC, &started);
     running = 1;
     if (pthread_create(&accept_thread, NULL, accept_thread_fn, NULL) != 0) {
         printf("hamlib: failed to start accept thread\n");
