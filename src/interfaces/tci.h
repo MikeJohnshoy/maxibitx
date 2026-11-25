@@ -10,6 +10,8 @@
 #ifndef TCI_H
 #define TCI_H
 
+#include "iface_status.h"
+
 #define TCI_DEFAULT_PORT 50001 // Hamlib's and ExpertSDR3's default
 #define TCI_DEFAULT_MAX_CLIENTS 4
 
@@ -20,6 +22,11 @@ int tci_init(const char *bind_addr, int port, int max_clients);
 // Disconnects every client (releasing a TX one of them holds) and stops.
 // Call after sound_thread_stop().
 void tci_stop(void);
+
+// For rigctld's \interfaces: off (tci_port=0), not started, listening, or
+// the clients connected - each one's address and whether it takes receive
+// audio or I/Q or holds TX.
+void tci_status(struct iface_status *s);
 
 // ---- Audio thread ---------------------------------------------------------
 //
