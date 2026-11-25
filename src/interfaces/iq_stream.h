@@ -15,6 +15,8 @@
 #ifndef IQ_STREAM_H
 #define IQ_STREAM_H
 
+#include "iface_status.h"
+
 #define IQ_STREAM_PORT 4536
 
 // Call once at startup (after hpsdr_init(), order doesn't otherwise
@@ -40,5 +42,9 @@ void iq_stream_send(const double *i_samples, const double *q_samples, int n);
 // so nothing is still trying to produce samples into a torn-down stream,
 // same ordering hpsdr_stop() already follows.
 void iq_stream_stop(void);
+
+// For rigctld's \interfaces: not started, listening, or the subscribers'
+// addresses (those heard from within the timeout).
+void iq_stream_status(struct iface_status *s);
 
 #endif /* IQ_STREAM_H */
