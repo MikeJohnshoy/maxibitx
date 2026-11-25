@@ -1049,17 +1049,31 @@ class SettingsDialog(tk.Toplevel):
         else:
             self.poweroff_btn.pack_forget()
 
+    @staticmethod
+    def two_columns(n):
+        """(row, first grid column) for item i of n, in two columns of
+        ceil(n/2) rows under a heading row: the first half down the left,
+        the rest down the right, so a page of finger-height rows fits the
+        480-line screen."""
+        half = (n + 1) // 2
+        return lambda i: (i % half + 1, 0 if i < half else 2)
+
     def build_macro_tab(self, nb):
         p = self.panel
         f = ttk.Frame(nb, padding=8)
         ttk.Label(f, text="Button", style="Muted.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(f, text="Text sent: {NAME} is filled in from the Fields tab",
-                  style="Muted.TLabel").grid(row=0, column=1, sticky="w", padx=(6, 0))
+                  style="Muted.TLabel").grid(row=0, column=1, columnspan=3, sticky="w",
+                                             padx=(6, 0))
+        place = self.two_columns(len(p.macro_vars))
         for i, (lab_var, text_var) in enumerate(p.macro_vars):
-            ttk.Entry(f, textvariable=lab_var, width=9).grid(row=i + 1, column=0, pady=1)
-            ttk.Entry(f, textvariable=text_var).grid(row=i + 1, column=1, sticky="ew",
+            row, col = place(i)
+            ttk.Entry(f, textvariable=lab_var, width=9).grid(row=row, column=col, pady=1,
+                                                             padx=(12 if col else 0, 0))
+            ttk.Entry(f, textvariable=text_var).grid(row=row, column=col + 1, sticky="ew",
                                                     padx=(6, 0), pady=1)
         f.columnconfigure(1, weight=1)
+        f.columnconfigure(3, weight=1)
         return f
 
     def build_fields_tab(self, nb):
@@ -1067,18 +1081,21 @@ class SettingsDialog(tk.Toplevel):
         f = ttk.Frame(nb, padding=8)
         ttk.Label(f, text="Field", style="Muted.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(f, text="Value: a macro's {FIELD} becomes this", style="Muted.TLabel").grid(
-            row=0, column=1, sticky="w", padx=(6, 0))
+            row=0, column=1, columnspan=3, sticky="w", padx=(6, 0))
+        place = self.two_columns(len(p.field_vars))
         for i, (name_var, value_var) in enumerate(p.field_vars):
+            row, col = place(i)
             e = ttk.Entry(f, textvariable=name_var, width=10)
-            e.grid(row=i + 1, column=0, pady=1)
+            e.grid(row=row, column=col, pady=1, padx=(12 if col else 0, 0))
             # Show the name as it will be stored: "park" becomes PARK.
             e.bind("<FocusOut>", lambda _e, v=name_var: v.set(field_name(v.get())))
-            ttk.Entry(f, textvariable=value_var).grid(row=i + 1, column=1, sticky="ew",
+            ttk.Entry(f, textvariable=value_var).grid(row=row, column=col + 1, sticky="ew",
                                                      padx=(6, 0), pady=1)
         ttk.Label(f, text="Names are upper case letters, digits and _. An empty name is unused.",
-                  style="Muted.TLabel").grid(row=MAX_FIELDS + 1, column=0, columnspan=2,
+                  style="Muted.TLabel").grid(row=MAX_FIELDS + 1, column=0, columnspan=4,
                                              sticky="w", pady=(6, 0))
         f.columnconfigure(1, weight=1)
+        f.columnconfigure(3, weight=1)
         return f
 
     def toggle_connection(self):
