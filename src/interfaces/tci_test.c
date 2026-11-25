@@ -41,6 +41,7 @@
 /* ---- Radio stubs ---------------------------------------------------------- */
 
 int freq_hdr = 14074000;
+int tci_port = TCI_DEFAULT_PORT; // hw_settings.c's, for tci_status()
 int in_tx;
 static enum radio_mode stub_mode = RADIO_MODE_USB;
 static int stub_rit, stub_rit_on, stub_xit, stub_xit_on, stub_volume = 67, stub_tx_allowed = 1;
@@ -442,6 +443,10 @@ static void test_rx_audio(void) {
   }
   CHECK(ok && worst < 1e-6, "samples exact, left = right, AGC target at -15 dBFS (error %.1e)", worst);
   free(f.data);
+  struct iface_status st;
+  tci_status(&st);
+  CHECK(st.state == IFACE_ACTIVE && strstr(st.detail, "of 4: 127.0.0.1 audio") != NULL,
+        "tci_status: active, the client's address, taking audio (\"%s\")", st.detail);
   send_text(a, "audio_stop:0;");
   drain(a);
 
