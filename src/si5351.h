@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 void si5351_set_calibration(int32_t cal);
+int32_t si5351_get_calibration(void); // the reference frequency in use, Hz
 // Finds the si5351 - on preferred_bus, the board's usual bus or
 // hw_settings.ini's i2c_bus, or failing that on whichever other bus it
 // answers - brings that bus up, resets it and stops all three clocks.
