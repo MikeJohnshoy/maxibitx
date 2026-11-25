@@ -95,6 +95,7 @@ static snd_pcm_t *uac_pcm_handle = NULL;         // ALSA PCM write handle (playb
 static snd_pcm_t *uac_pcm_capture_handle = NULL; // ALSA PCM read handle (capture/TX) -
                                                   // owned by uac_reader_thread() only
 static int uac_gadget_up = 0;                    // 1 after configfs gadget is created
+static char uac_udc[64];                         // the USB controller it's bound to, for uac_status()
 static volatile int uac_active = 0;              // 1 while the RX/playback stream is up
 static volatile int uac_capture_active = 0;      // 1 while the TX/capture stream is up
 static pthread_t uac_writer_tid;
@@ -316,6 +317,7 @@ static int uac_gadget_create(void) {
   }
 
   printf("init: USB gadget bound to UDC '%s' (UAC2 audio + ACM CAT)\n", udc_name);
+  snprintf(uac_udc, sizeof(uac_udc), "%s", udc_name);
   return 0;
 }
 
@@ -1445,4 +1447,31 @@ void cat_stop(void) {
   // with it; §14's rmdir() workaround doesn't depend on this thread
   // having fully exited first, so nothing downstream needs that
   // guarantee.
+}
+
+// The USB controller's state, from /sys/class/udc/<udc>/state:
+// "configured" once a host has set the gadget up.
+void uac_status(struct iface_status *s) {
+  if (!uac_gadget_up || !uac_active || !uac_udc[0]) {
+    s->state = IFACE_DOWN;
+    snprintf(s->detail, sizeof(s->detail), "not available - see the startup log");
+    return;
+  }
+  char path[128], state[32] = "unknown";
+  snprintf(path, sizeof(path), "/sys/class/udc/%s/state", uac_udc);
+  FILE *f = fopen(path, "r");
+  if (f) {
+    if (fgets(state, sizeof(state), f))
+      state[strcspn(state, "\n")] = '\0';
+    fclose(f);
+  }
+  if (strcmp(state, "configured") != 0) {
+    s->state = IFACE_WAITING;
+    snprintf(s->detail, sizeof(s->detail), "no host (%s)", state);
+    return;
+  }
+  s->state = IFACE_ACTIVE;
+  snprintf(s->detail, sizeof(s->detail), "host connected: receive audio%s%s",
+           uac_capture_active ? ", transmit audio" : "",
+           cat_running && cat_fd >= 0 ? ", CAT port" : "");
 }
