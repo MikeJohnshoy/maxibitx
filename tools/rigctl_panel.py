@@ -34,7 +34,9 @@ the new frequency, putting the station exactly on the pitch.
 
 The gear (and the RX/TX button) opens Settings: the connection, paddle
 reversal, SPOT after a click, the TX test tones, the spectrum's peak
-line, auto floor and range, the macro texts, and the macro fields. A field is a name and a value, MYCALL and PARK to
+line, auto floor and range, the macro texts, the macro fields, and a
+Status tab: each interface's state and the radio's health, from
+\\interfaces and \\radio_status every 2 s. A field is a name and a value, MYCALL and PARK to
 start with, up to eight; a macro's {NAME} is replaced by the value, and
 a macro naming a field with no value isn't sent. Along the bottom of
 Settings: Close panel; Stop radio (\\shutdown_maxibitx, then close); and,
@@ -114,6 +116,8 @@ rigctld commands used:
     l DECODEWPM             the speed the decoder has learned
     \\spot                   SPOT: the dial onto the nearest CW signal, RIT cleared
     \\shutdown_maxibitx      stop maxibitx (Settings' Stop radio and Shut down Pi)
+    \\interfaces             every interface's state (Settings' Status tab)
+    \\radio_status           the radio's health and settings (Settings' Status tab)
 
 In CW and CWR the waterfall is shorter, and two lines under it show what
 the CW decoder reads; the status line adds the speed it has learned. Tap
@@ -187,6 +191,8 @@ MIC_STEP = 0.5
 MIC_MAX = 64.0
 # Stop radio and Shut down Pi ask for a second tap within this long.
 CONFIRM_S = 3.0
+# The Status tab asks again this often while it's showing.
+STATUS_REFRESH_MS = 2000
 # Shut down Pi waits this long for maxibitx to finish its own shutdown.
 STOP_BEFORE_POWEROFF_S = 2.0
 
@@ -672,6 +678,14 @@ def setup_style(root):
     s.configure("MuteOn.TLabel", foreground=AMBER, font=(ui, usz(10), "bold"))
     s.configure("Status.TLabel", foreground=MUTED, font=(ui, usz(10)))
     s.configure("PanelMuted.TLabel", background=PANEL, foreground=MUTED, font=(ui, usz(10)))
+    s.configure("PanelText.TLabel", background=PANEL, foreground=TEXT, font=(ui, usz(11)))
+    s.configure("PanelName.TLabel", background=PANEL, foreground=TEXT, font=(ui, usz(11), "bold"))
+    # The Status tab's interface states.
+    s.configure("StateActive.TLabel", background=PANEL, foreground=RIT_GREEN,
+                font=(ui, usz(11), "bold"))
+    s.configure("StateWaiting.TLabel", background=PANEL, foreground=TEXT, font=(ui, usz(11)))
+    s.configure("StateDown.TLabel", background=PANEL, foreground=TX_RED, font=(ui, usz(11), "bold"))
+    s.configure("StateOff.TLabel", background=PANEL, foreground=MUTED, font=(ui, usz(11)))
     s.configure("Readout.TLabel", font=(ui, usz(13), "bold"))
     s.configure("TLabelframe", background=PANEL, bordercolor=LINE, relief="solid", borderwidth=1)
     s.configure("TLabelframe.Label", background=PANEL, foreground=MUTED, font=(ui, usz(10)))
@@ -933,6 +947,12 @@ class SettingsDialog(tk.Toplevel):
         nb.add(self.build_radio_tab(nb), text="Radio")
         nb.add(self.build_macro_tab(nb), text="Macros")
         nb.add(self.build_fields_tab(nb), text="Fields")
+        self.status_tab = self.build_status_tab(nb)
+        nb.add(self.status_tab, text="Status")
+        self.status_job = None
+        nb.bind("<<NotebookTabChanged>>", lambda e: self.status_refresh()
+                if nb.select() == str(self.status_tab) else None)
+        self.nb = nb
         ttk.Button(self, text="Close", command=self.close).place(relx=1.0, x=-8, y=6, anchor="ne")
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.refresh_connection()
@@ -1098,6 +1118,126 @@ class SettingsDialog(tk.Toplevel):
         f.columnconfigure(3, weight=1)
         return f
 
+    # The interfaces' rows, in \interfaces' order, and what each state looks like.
+    STATUS_INTERFACES = ("rigctld", "TCI", "HPSDR", "iq_stream", "USB gadget")
+    STATE_STYLES = {"active": "StateActive.TLabel", "waiting": "StateWaiting.TLabel",
+                    "down": "StateDown.TLabel", "off": "StateOff.TLabel"}
+    # The radio summary: (key in \radio_status, label), left column then right.
+    STATUS_RADIO = (("board", "Board"), ("uptime_s", "Running for"), ("codec", "Codec at start-up"),
+                    ("xruns", "Audio xruns"), ("clips", "Receive clipping"), ("tci", "TCI transmit audio"),
+                    ("cal_hz", "si5351 reference"), ("codec_rate_hz", "Codec sample rate"),
+                    ("xtal_center_hz", "Crystal filter centre"), ("bfo_hz", "BFO (transmit)"),
+                    ("power", "Power"))
+
+    def build_status_tab(self, nb):
+        """What maxibitx reports about each interface and itself (rigctld's
+        \\interfaces and \\radio_status), asked for every
+        STATUS_REFRESH_MS while this tab is showing."""
+        f = ttk.Frame(nb, padding=8)
+        f.columnconfigure(0, weight=1)
+        ifs = ttk.LabelFrame(f, text="Interfaces", padding=(8, 4))
+        ifs.grid(row=0, column=0, sticky="ew")
+        ifs.columnconfigure(3, weight=1)
+        self.iface_cells = {}
+        for r, name in enumerate(self.STATUS_INTERFACES):
+            cells = [ttk.Label(ifs, text=name, style="PanelName.TLabel"),
+                     ttk.Label(ifs, text="", style="PanelMuted.TLabel"),
+                     ttk.Label(ifs, text="", style="StateOff.TLabel", width=8),
+                     ttk.Label(ifs, text="", style="PanelText.TLabel", wraplength=440)]
+            for c, w in enumerate(cells):
+                w.grid(row=r, column=c, sticky="w", padx=(0, 10), pady=1)
+            self.iface_cells[name] = cells
+        radio = ttk.LabelFrame(f, text="Radio", padding=(8, 4))
+        radio.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        radio.columnconfigure(1, weight=1)
+        radio.columnconfigure(3, weight=1)
+        self.radio_cells = {}
+        half = (len(self.STATUS_RADIO) + 1) // 2
+        for i, (key, label) in enumerate(self.STATUS_RADIO):
+            row, col = i % half, 0 if i < half else 2
+            ttk.Label(radio, text=label, style="PanelMuted.TLabel").grid(
+                row=row, column=col, sticky="w", padx=(0, 8), pady=1)
+            value = ttk.Label(radio, text="", style="PanelText.TLabel")
+            value.grid(row=row, column=col + 1, sticky="w", padx=(0, 12), pady=1)
+            self.radio_cells[key] = value
+        self.status_note = ttk.Label(f, text="", style="Muted.TLabel")
+        self.status_note.grid(row=2, column=0, sticky="w", pady=(6, 0))
+        return f
+
+    def status_refresh(self):
+        """Asks for both reports on a background thread, shows them, and
+        asks again in STATUS_REFRESH_MS while the tab is showing."""
+        if self.status_job is not None:
+            self.after_cancel(self.status_job)
+            self.status_job = None
+        if not self.winfo_exists() or self.nb.select() != str(self.status_tab):
+            return
+        p = self.panel
+        if not p.client.connected():
+            self.status_note.configure(text="not connected")
+        else:
+            def run():
+                ifs = p.client.query("\\interfaces")
+                radio = p.client.query("\\radio_status")
+                p.after(0, lambda: self.show_status(ifs, radio))
+            threading.Thread(target=run, daemon=True).start()
+        self.status_job = self.after(STATUS_REFRESH_MS, self.status_refresh)
+
+    def show_status(self, ifs, radio):
+        if not self.winfo_exists():
+            return
+        if not ifs or ifs.startswith("RPRT") or not radio or radio.startswith("RPRT"):
+            self.status_note.configure(text="this maxibitx doesn't report its status - "
+                                            "it needs updating")
+            return
+        for record in ifs.split("|"):
+            parts = record.split(";", 3)
+            if len(parts) == 4 and parts[0] in self.iface_cells:
+                cells = self.iface_cells[parts[0]]
+                cells[1].configure(text=parts[1])
+                cells[2].configure(text=parts[2], style=self.STATE_STYLES.get(parts[2],
+                                                                              "StateOff.TLabel"))
+                cells[3].configure(text=parts[3])
+        v = dict(field.split("=", 1) for field in radio.split("|") if "=" in field)
+        for key, text in self.radio_texts(v).items():
+            self.radio_cells[key].configure(text=text)
+        self.status_note.configure(text=f"updated {time.strftime('%H:%M:%S')}, "
+                                        f"every {STATUS_REFRESH_MS // 1000} s while this tab shows")
+
+    @staticmethod
+    def radio_texts(v):
+        """\\radio_status's fields as the Radio box shows them."""
+        def num(key, default=0.0):
+            try:
+                return float(v.get(key, default))
+            except ValueError:
+                return default
+
+        def hz(key):
+            return f"{int(num(key)):,} Hz" if key in v else "-"
+        up = int(num("uptime_s"))
+        uptime = (f"{up // 3600} h {up % 3600 // 60:02d} min" if up >= 3600
+                  else f"{up // 60} min" if up >= 60 else f"{up} s")
+        clips = int(num("clips"))
+        tx, dry = int(num("tci_tx")), int(num("tci_tx_dry"))
+        return {
+            "board": v.get("board", "-"),
+            "uptime_s": uptime,
+            "codec": v.get("codec", "-"),
+            "xruns": f"{int(num('xruns_capture'))} capture, {int(num('xruns_playback'))} playback",
+            "clips": "none" if clips == 0 else
+                     f"{clips}, the last on {num('last_clip_hz') / 1e6:.3f} MHz",
+            "tci": "none yet" if tx == 0 else
+                   f"{tx} transmission{'s' if tx != 1 else ''}, {dry} ran dry; last: "
+                   f"longest wait {num('tci_last_longest_wait_ms'):.0f} ms",
+            "cal_hz": hz("cal_hz"),
+            "codec_rate_hz": hz("codec_rate_hz"),
+            "xtal_center_hz": hz("xtal_center_hz"),
+            "bfo_hz": hz("bfo_hz"),
+            "power": f"{num('full_scale_w'):g} W full scale, {num('max_power_w'):g} W max, "
+                     f"POWER {num('power_pct'):.0f}%",
+        }
+
     def toggle_connection(self):
         p = self.panel
         if p.client.connected():
@@ -1118,6 +1258,9 @@ class SettingsDialog(tk.Toplevel):
         self.refresh_quit_row()
 
     def close(self):
+        if self.status_job is not None:
+            self.after_cancel(self.status_job)
+            self.status_job = None
         self.panel.save_settings()
         self.panel.refresh_macro_labels()
         self.panel.settings = None
