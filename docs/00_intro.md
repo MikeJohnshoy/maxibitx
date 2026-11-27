@@ -1741,6 +1741,7 @@ The `docs/` folder holds the rest of the documentation.
 
 | Document | Content |
 |---|---|
+| [`01_user_manual.md`](01_user_manual.md) | operating the radio: installing, the control panel, CW, SSB and the digital modes (an outline for now) |
 | [`06_api.md`](06_api.md) | the reference for external software: every interface's commands and formats, the radio model, WSJT-X setup, what is not available yet |
 | [`08_troubleshooting_and_bringup.md`](08_troubleshooting_and_bringup.md) | hardware bring-up and troubleshooting |
 | [`09_faq.md`](09_faq.md) | common questions, each pointing to the document with the full story |
