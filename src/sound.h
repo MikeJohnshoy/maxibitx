@@ -5,8 +5,26 @@
 
 #include <stdint.h>
 
+/* The WM8731 codec's ALSA card id, as its overlay
+   (dtoverlay=audioinjector-wm8731-audio) names it on the sBitx and the
+   zBitx. The card is found by this id, not its number: which number it
+   gets depends on what other sound cards the OS image enables (HDMI, the
+   Pi's headphone jack), so an image set up for other sBitx software can
+   put it anywhere. */
+#define SOUND_CODEC_CARD_ID "audioinjectorpi"
+
+/* Finds the codec's card, for setup_audio_codec(), the mixer calls and
+   sound_thread_start(NULL). Returns its number, or -1, listing the cards
+   that are present, if there is none: the codec's overlay isn't loaded.
+   Touches no hardware. */
+int sound_find_codec(void);
+
+/* The codec's PCM as ALSA names it ("hw:N,0"), once found. */
+const char *sound_codec_pcm(void);
+
 /* Start the full-duplex ALSA audio thread (capture + playback).
-   device_name is the ALSA PCM name, e.g. "hw:0,0".
+   device_name is the ALSA PCM name, or NULL for the codec
+   sound_find_codec() found.
    Returns 0 on success, -1 on failure. */
 int  sound_thread_start(const char *device_name);
 
