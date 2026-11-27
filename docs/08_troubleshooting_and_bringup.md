@@ -19,6 +19,9 @@ Hardware bring-up gotchas that don't belong in the design docs proper:
 - maxibitx refusing to start because `hw_settings.ini` doesn't name the
   board, and the zBitx's `RX_LINE` needing the UART off
   ([below](#the-radio-board-at-startup)).
+- The codec's sound card not found, and running maxibitx on a Pi set up
+  for other sBitx software such as jeSDR
+  ([below](#the-codecs-sound-card)).
 - A receiver whose spectrum is full of ghosts: the codec's start-up
   timing pattern, maxibitx's check for it, and the raw-capture dump for
   looking at what the codec delivers
@@ -73,6 +76,41 @@ knobs.
 `b_pin`, or change its `edges_per_detent`, in `radio_hw.c`
 ([`00_intro.md`](00_intro.md#the-front-panel-knobs)). Tests:
 `make test-encoder`.
+
+## The codec's sound card
+
+maxibitx finds the WM8731 codec by its ALSA card id, `audioinjectorpi`,
+and says which card it is at start-up:
+
+```
+sound: codec is card 3 ('audioinjectorpi')
+```
+
+The number varies and doesn't matter. An OS image can enable other sound
+cards first - the Pi's two HDMI outputs and its headphone jack - and on
+an image set up for other sBitx software the codec was card 3. `aplay -l`
+lists them.
+
+**maxibitx exits straight after the board line** with:
+
+```
+sound: no 'audioinjectorpi' sound card - is dtoverlay=audioinjector-wm8731-audio in /boot/firmware/config.txt? Cards present: card 0 vc4-hdmi-0, card 1 vc4-hdmi-1, card 2 bcm2835 Headphones
+init: the audio codec's sound card wasn't found - maxibitx will not start without it
+```
+
+The codec's overlay isn't loaded. Add
+`dtoverlay=audioinjector-wm8731-audio` to `/boot/firmware/config.txt`
+and reboot; `aplay -l` should then list `audioinjectorpi`. It has
+touched no GPIO line or clock by then.
+
+**Alongside jeSDR or another sbitx.** maxibitx can be installed on a Pi
+that runs the mainstream sBitx software, and that image has the
+overlays it needs. The two can't run at the same time: each claims the
+same GPIO lines, I2C devices and sound card. With the other one running,
+maxibitx stops at `init: GPIO setup failed`, after a `gpio: cannot
+request BCM...: Device or resource busy` line, or fails to open the
+codec. Stop the other program first, and if it starts at boot, turn
+that off while using maxibitx.
 
 ## GPIO pin numbers
 
@@ -228,7 +266,7 @@ line input to prevent that; start-up says how:
 sound: TX mutes RX capture with the line-input mute ('Line' LEFT)
 ```
 
-To check it during a transmission, `amixer -c 0 sget 'Line'` should show
+To check it during a transmission, `amixer -c audioinjectorpi sget 'Line'` should show
 the left channel `[off]` and the right (mic) `[on]`. If start-up instead
 says `'Line' has no separate LEFT capture switch`, TX is only turning
 `'Capture'` LEFT down (-34.5 dB), and a strong line at -1400 Hz with its
