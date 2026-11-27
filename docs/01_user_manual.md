@@ -88,11 +88,16 @@ within 50 ms; the panel polls several times a second).
 
 ### Prepare the Pi
 
-maxibitx runs on Raspberry Pi OS. The Pi needs:
+maxibitx runs on Raspberry Pi OS. **A Pi already set up for the
+mainstream sBitx software (jeSDR) has everything below except the
+build libraries**, and maxibitx can be installed beside it
+([below](#alongside-jesdr)). On a fresh install, the Pi needs:
 
-- **The codec's overlay**, so the WM8731 audio codec appears as sound
-  card `hw:0,0`: `dtoverlay=audioinjector-wm8731-audio` in
-  `/boot/firmware/config.txt`.
+- **The codec's overlay**, so the WM8731 audio codec appears as a sound
+  card: `dtoverlay=audioinjector-wm8731-audio` in
+  `/boot/firmware/config.txt`. Other sound cards (HDMI, the headphone
+  jack) can stay: maxibitx finds the codec by its name,
+  `audioinjectorpi`, whatever number it gets.
 - **The si5351's I2C bus.** On an sBitx that is the `i2c-rtc-gpio`
   overlay it shares with the clock chip (it shows up as bus 22). On a
   zBitx it is bus 3.
@@ -110,8 +115,20 @@ maxibitx runs on Raspberry Pi OS. The Pi needs:
   Optional, for checking hardware by hand: `i2c-tools gpiod`.
 
 **[TO BE COMPLETED: the exact `config.txt` lines for a fresh Raspberry
-Pi OS install on each board, or which existing sBitx/zBitx image to
-start from and what to change on it.]**
+Pi OS install on each board, without jeSDR.]**
+
+### Alongside jeSDR
+
+maxibitx can live on the same Pi as jeSDR, the mainstream sBitx
+software, as a second choice: install it as below, in its own folder.
+The two **can't run at the same time**: both use the same GPIO lines,
+clock chip and sound card. Quit jeSDR before starting maxibitx, and
+quit maxibitx before starting jeSDR. If jeSDR is still running,
+maxibitx stops at start-up with `Device or resource busy` and
+`init: GPIO setup failed`.
+
+**[TO BE COMPLETED: how jeSDR starts at boot on its image, how to turn
+that off while using maxibitx, and how to switch back.]**
 
 ### Get the code and build it
 
@@ -211,8 +228,9 @@ will see, in this order:
    `bfo_freq`, `xtal_filter_center`, power, `cal`, `codec_rate`, and
    `9 TX band scale entries loaded`.
 2. **The board and its hardware**: `init: radio board: sBitx (DE, v2
-   or v3)`, the GPIO lines parked in receive, the si5351 found on its
-   I2C bus.
+   or v3)`, the codec's sound card (`sound: codec is card N
+   ('audioinjectorpi')`; any number is fine), the GPIO lines parked in
+   receive, the si5351 found on its I2C bus.
 3. **Receive and the key**: tuned to 7.030 MHz, the key's two lines, the
    keyer (`keyer straight, 20 WPM`), and the start-up mode, DIGITAL.
 4. **The interfaces**: rigctld on TCP 4532, TCI on 50001, HPSDR on UDP
@@ -1078,6 +1096,8 @@ while the tab is open.
 | Symptom | Likely cause | What to do |
 |---|---|---|
 | maxibitx stops straight away with `hw_settings.ini must name the radio board` | No `sbitx_version` line, or the file wasn't found | Run it from `~/maxibitx`; add the board line ([§2](#make-your-settings-file)) |
+| maxibitx stops with `no 'audioinjectorpi' sound card` | The codec's overlay isn't loaded | Add it to `config.txt` and reboot ([§2](#prepare-the-pi)) |
+| maxibitx stops with `Device or resource busy` and `GPIO setup failed` | Other sBitx software, such as jeSDR, is running | Quit it first ([§2](#alongside-jesdr)) |
 | No audio from the speaker | VOL at 0 or muted; or the audio didn't start | Tap VOL; check the console for audio errors |
 | The panel says not connected | maxibitx isn't running, or the host is wrong | Start maxibitx; check Settings → Radio → Connection |
 | Controls work, but the spectrum says `waiting for I/Q on UDP 4536` | The I/Q stream is down, or a firewall blocks UDP 4536 | Check the Status tab; allow the panel through the firewall |
