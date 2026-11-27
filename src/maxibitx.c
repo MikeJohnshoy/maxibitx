@@ -44,8 +44,11 @@
 // settle time, a measurement, and its restarts with room to spare.
 #define READY_WAITS_FOR_CODEC_MS 5000
  
-// set a flag when we get a SIGINT/SIGTERM (rigctld's \shutdown_maxibitx
-// sends one) - the idle loop below does the actual teardown once it notices
+// set a flag when we get a SIGINT, SIGTERM (rigctld's \shutdown_maxibitx
+// sends one) or SIGHUP (the terminal it was started from closed, or an SSH
+// session dropped) - the idle loop below does the actual teardown once it
+// notices. After a SIGHUP its console lines go nowhere; the teardown
+// doesn't depend on them.
 static volatile sig_atomic_t shutdown_requested = 0;
 static void handle_shutdown_signal(int sig) {
   (void)sig;
@@ -84,6 +87,7 @@ int main(int argc, char **argv) {
   sigemptyset(&sa.sa_mask);
   sigaction(SIGINT, &sa, NULL);
   sigaction(SIGTERM, &sa, NULL);
+  sigaction(SIGHUP, &sa, NULL);
  
   // Board-specific calibration (xtal_filter_center and bfo_freq) lives
   // in data/hw_settings.ini, not in source - the crystal filter center
