@@ -191,18 +191,59 @@ compare yours with them after an update.
 
 ### The USB gadget (optional)
 
-For single-cable digital operation, the Pi's USB-C port can appear to
-a computer as a USB sound card plus a serial port for CAT. It needs a
-few one-time changes to the Pi's boot files, and the Pi must then be
-powered some other way than through that port. The steps are in
-[`usb_gadget_OS_setup.md`](dsp_design_notes/usb_gadget_OS_setup.md) §3
-to §5.
+For single-cable digital operation, the Pi 4's USB-C port can appear to
+a computer as a USB sound card plus a serial port for CAT. You don't
+need it for the control panel, for SDR programs, or for digital modes
+over TCI. Without it, maxibitx starts normally and says:
 
-**[TO BE COMPLETED: confirm the sBitx powers its Pi through the GPIO
-header, so nothing else is needed once the USB-C port is a gadget.]**
+```
+uac: cannot create gadget root /sys/kernel/config/usb_gadget/sbitx_iq: No such file or directory
+init: USB gadget unavailable, continuing without it
+```
 
-You don't need the gadget for the control panel, for SDR programs, or
-for digital modes over TCI.
+To turn it on, three one-time changes, then a reboot:
+
+1. In `/boot/firmware/config.txt`, add a line:
+
+   ```
+   dtoverlay=dwc2,dr_mode=peripheral
+   ```
+
+2. In `/boot/firmware/cmdline.txt`, add ` modules-load=dwc2` to the end
+   of the line. That file must stay **one line**: add it with a space,
+   not on a new line.
+3. Create `/etc/modules-load.d/maxibitx-usb-gadget.conf` containing the
+   one line `libcomposite`:
+
+   ```
+   echo libcomposite | sudo tee /etc/modules-load.d/maxibitx-usb-gadget.conf
+   ```
+
+After the reboot, check before starting maxibitx:
+
+```
+ls /sys/kernel/config/usb_gadget/     # no error (an empty listing is right)
+ls /sys/class/udc/                    # one entry, such as fe980000.usb
+```
+
+Then maxibitx's start-up shows the gadget instead of the lines above:
+`init: USB gadget bound to UDC 'fe980000.usb' (UAC2 audio + ACM CAT)`,
+the sound device `sBitx Audio` opened both ways, and the CAT port. Plug
+a USB cable from the Pi's USB-C port to the computer: it appears as
+"sBitx Audio" and a new serial (COM) port.
+
+- **Power.** Once the USB-C port is a gadget, it no longer powers the
+  Pi; the Pi must be powered some other way.
+  **[TO BE COMPLETED: confirm the sBitx powers its Pi through the GPIO
+  header, so nothing else is needed.]**
+- **The other USB ports** (the Pi 4's USB-A ports) are unaffected and
+  stay host ports for a keyboard, mouse or memory stick.
+- **Alongside jeSDR**, the change only affects the USB-C port.
+  **[TO BE COMPLETED: confirm jeSDR still runs normally after it.]**
+
+The details, and what to do when Windows doesn't recognise the device,
+are in [`usb_gadget_OS_setup.md`](dsp_design_notes/usb_gadget_OS_setup.md)
+§3 to §5 and §10.
 
 ---
 
@@ -1098,6 +1139,7 @@ while the tab is open.
 | maxibitx stops straight away with `hw_settings.ini must name the radio board` | No `sbitx_version` line, or the file wasn't found | Run it from `~/maxibitx`; add the board line ([§2](#make-your-settings-file)) |
 | maxibitx stops with `no 'audioinjectorpi' sound card` | The codec's overlay isn't loaded | Add it to `config.txt` and reboot ([§2](#prepare-the-pi)) |
 | maxibitx stops with `Device or resource busy` and `GPIO setup failed` | Other sBitx software, such as jeSDR, is running | Quit it first ([§2](#alongside-jesdr)) |
+| `init: USB gadget unavailable` at start-up; WSJT-X sees no sBitx Audio device | The gadget's one-time setup isn't done | [§2](#the-usb-gadget-optional) (needed only for single-cable USB) |
 | No audio from the speaker | VOL at 0 or muted; or the audio didn't start | Tap VOL; check the console for audio errors |
 | The panel says not connected | maxibitx isn't running, or the host is wrong | Start maxibitx; check Settings → Radio → Connection |
 | Controls work, but the spectrum says `waiting for I/Q on UDP 4536` | The I/Q stream is down, or a firewall blocks UDP 4536 | Check the Status tab; allow the panel through the firewall |
