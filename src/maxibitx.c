@@ -104,6 +104,14 @@ int main(int argc, char **argv) {
   }
   printf("init: radio board: %s%s\n", radio_hw_board_name(),
          radio_hw_tx_permitted() ? "" : " - receive only, transmit is not enabled on this board");
+
+  // The codec's sound card, by name (sound.h), before any hardware is
+  // touched: without it there is no receive, so there's no point starting.
+  if (sound_find_codec() < 0) {
+    fprintf(stderr, "init: the audio codec's sound card wasn't found - maxibitx will not "
+                    "start without it\n");
+    return 1;
+  }
  
   // Claim the board's output lines via the kernel's GPIO character-device
   // API (src/gpio.c), each in its receive state; radio_hw_gpio_init()
@@ -253,11 +261,11 @@ int main(int argc, char **argv) {
   setup_audio_codec();
   printf("init: WM8731 audio codec configured\n");
   // this starts the background audio thread which repeatedly calls sound_process()
-  if (sound_thread_start("hw:0,0") < 0) {
+  if (sound_thread_start(NULL) < 0) {
     fprintf(stderr, "init: audio capture failed to start\n");
     return -1;
   }
-  printf("init: audio capture running (hw:0,0 @ 96000 Hz)\n");
+  printf("init: audio capture running (%s @ 96000 Hz)\n", sound_codec_pcm());
 
   // The codec's start-up check (codec_check.h) says whether its sampling
   // is clean, restarting its interface if not, about a second and a
