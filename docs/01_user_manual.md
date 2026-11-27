@@ -41,15 +41,46 @@ connected to a simulated radio, so the band activity is made up.
 
 ## 3. Starting and stopping
 
-- Start maxibitx from the repository folder; what the console prints
-  when all is well (the ready line), and the codec check line.
-- Start the panel: on the Pi's screen, or on another computer with
-  `--host`.
-- Starting both at boot *(new)*: a systemd unit for maxibitx and a
-  desktop autostart entry for the panel - to be decided and tested.
-- Stopping: Stop radio and Shut down Pi in the panel's Settings, or
-  Ctrl-C at the console. Why the clean stop matters (PTT and relays
-  dropped first).
+### Starting maxibitx from a console
+
+- Open a terminal on the Pi (or SSH in), `cd` to the repository
+  folder, and run `./maxibitx`. It has to start there, where it finds
+  `data/hw_settings.ini`.
+- What the console prints when all is well: the board it found, the
+  codec check, the interfaces that came up, and the ready line,
+  `maxiBitx: radio hardware initialization complete, ready to serve!`
+  A sample start-up, line by line.
+- What it prints afterwards while you operate: one line for each thing
+  that happens to the radio (tuning settled, mode, PTT), not for every
+  request a program makes.
+- Leave the terminal open while you operate: closing it, or an SSH
+  session dropping, stops maxibitx, cleanly, as Ctrl-C does.
+
+### Starting the control panel
+
+- On the Pi's own screen: in a second terminal,
+  `python3 tools/rigctl_panel.py`. On the sBitx's 800×480 screen it
+  opens full screen; F11 switches to a window and back, Escape leaves
+  full screen.
+- On another computer: copy `tools/rigctl_panel.py`, install Python 3
+  with tkinter and numpy, and run it with `--host` and the Pi's name or
+  address. It remembers the last host.
+- Start them in either order: the panel keeps trying to connect every
+  5 s, and reconnects by itself when maxibitx restarts.
+
+### Starting at boot *(placeholder - for later)*
+
+- A systemd unit for maxibitx, so it starts with the Pi and restarts
+  if it stops.
+- A desktop autostart entry for the panel on the Pi's screen.
+- To be written and tested before this section is filled in.
+
+### Stopping
+
+- Stop radio or Shut down Pi along the bottom of the panel's Settings
+  (each wants a second tap), or Ctrl-C at the console.
+- Why the clean stop matters: PTT and the T/R relays are dropped
+  first, before anything else stops.
 
 ## 4. The control panel
 
@@ -65,35 +96,51 @@ connected to a simulated radio, so the band activity is made up.
 - Reading the spectrum: the noise floor, Range, the peak line, what
   span to use for what.
 - The number boxes (VOL, PWR, WPM, MIC): arrows, typing, Return.
-
-### Settings
-
-![Settings, Radio tab](images/settings_radio.png)
-
-- **Radio:** the connection, paddle reversal, SPOT after a click, the
-  test tones, the spectrum's options.
-- **Macros** and **Fields:** writing your own macros with `{MYCALL}`
-  and the other fields; why a macro with an empty field isn't sent.
-
-![Settings, Macros tab](images/settings_macros.png)
-
-![Settings, Fields tab](images/settings_fields.png)
-
-- **Status:** what each interface line and radio line means, and which
-  ones to act on.
-
-![Settings, Status tab](images/settings_status.png)
-
-- The bottom row: Close panel, Stop radio, Shut down Pi, and the second
-  tap they want.
+- Settings, from the gear: what's there, in one line, with a pointer
+  to the reference section for each tab.
 
 ## 5. Operating CW
 
 - Plugging in: paddles (tip dot, ring dash) or a straight key; the
   mono-plug message; reversing the paddles.
 - Keyer type and speed; sending from the text box; Stop.
-- Macros for a typical exchange: a CQ, a POTA activation, a contest
-  *(to check: macros that suit each)*.
+- Macros for a typical exchange, with two complete sets to type into
+  Settings → Macros and Fields *(to check on air)*:
+
+  **A POTA activation.** Fields: MYCALL, PARK (the park reference),
+  STATE.
+
+  | Button | Sends |
+  |---|---|
+  | CQ POTA | `CQ POTA CQ POTA DE {MYCALL} {MYCALL} K` |
+  | QRZ? | `QRZ?` |
+  | 5NN | `TU UR 5NN 5NN {STATE} {STATE} BK` |
+  | AGN? | `AGN?` |
+  | RR | `RR` |
+  | TU 72 | `TU 72 {MYCALL} POTA` |
+  | PARK | `{PARK} {PARK}` |
+  | CALL | `{MYCALL}` |
+  | QRL? | `QRL?` |
+  | EE | `EE` |
+
+  **A CW contest** with a fixed exchange (a zone, state or power;
+  serial numbers aren't supported - the panel has no counter). Fields:
+  MYCALL, EXCH.
+
+  | Button | Sends |
+  |---|---|
+  | CQ TEST | `CQ TEST {MYCALL} {MYCALL} TEST` |
+  | EXCH | `5NN {EXCH}` |
+  | TU | `TU {MYCALL}` |
+  | CALL | `{MYCALL}` |
+  | MY EXCH | `TU 5NN {EXCH}` (answering a CQ) |
+  | AGN? | `AGN?` |
+  | NR? | `NR?` |
+  | CALL? | `CL?` |
+  | EXCH x2 | `{EXCH} {EXCH}` |
+  | QRL? | `QRL?` |
+
+  How to use each in a run and in search and pounce.
 - Finding and answering a station: the CW filter's width and centre,
   SPOT, RIT and XIT, and when to use each.
 - The decoder: what it copies well, what it doesn't (very slow or
@@ -156,9 +203,33 @@ connected to a simulated radio, so the band activity is made up.
 - Every `hw_settings.ini` line: what it does, its default and range.
 - Console messages an operator may see, what each means, and whether to
   act - drawn from 08's "What the console shows".
-- The Status tab's lines.
 - Keyboard and mouse shortcuts in the panel (F11, Escape, the digit
   keys).
+
+### The Settings tabs
+
+![Settings, Radio tab](images/settings_radio.png)
+
+- **Radio:** the connection, paddle reversal, SPOT after a click, the
+  test tones, the spectrum's options.
+
+![Settings, Macros tab](images/settings_macros.png)
+
+- **Macros:** a button label and the text it sends, ten of them;
+  `{MYCALL}` and the other fields; why a macro with an empty field
+  isn't sent. Example sets are in §5.
+
+![Settings, Fields tab](images/settings_fields.png)
+
+- **Fields:** eight in all, MYCALL and PARK to start with; the allowed
+  names.
+
+![Settings, Status tab](images/settings_status.png)
+
+- **Status:** what each interface line and radio line means, and which
+  ones to act on.
+- The bottom row: Close panel, Stop radio, Shut down Pi, and the second
+  tap they want.
 
 ## 11. When something's wrong
 
