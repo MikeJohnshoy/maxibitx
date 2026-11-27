@@ -1157,8 +1157,8 @@ and any retune, RIT, pitch or mode change empties it
 and clamped to ±2 × 10⁹, then written to the codec's left output, whose
 `Master` level is fixed at 100%. Volume is a logarithmic control: 1% to
 100% spread evenly over −49.5 dB to 0 dB relative to a maximum gain of
-0.20, so each 1% is 0.5 dB, and 0% is a true mute. The default, 67%, is
-0.03, comfortable listening on this hardware. The local speaker is the
+0.20, so each 1% is 0.5 dB, and 0% is a true mute. The default, 40%, is
+0.0063, comfortable listening on this hardware. The local speaker is the
 only output the volume affects.
 
 **USB sound card and TCI.** These take the audio after the AGC and
