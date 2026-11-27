@@ -46,7 +46,7 @@
 #define PERIOD_FRAMES 1024 /* frames per period (matches old cfg) */
 #define MAX_FRAMES 4096
 
-// WM8731 'Line' is an on/off switch, not a gain (`amixer -c 0 sget
+// WM8731 'Line' is an on/off switch, not a gain (`amixer -c audioinjectorpi sget
 // 'Line'` shows cswitch only). The real analog gain is
 // RX_CAPTURE_GAIN_PERCENT.
 #define RX_LINE_INPUT_ON 1
@@ -55,9 +55,15 @@
 // setup_audio_codec() found that switch unusable (sound_set_rx_capture()).
 static int rx_mute_by_switch = 1;
 
+// The codec's card as ALSA names it, set by sound_find_codec(): "hw:N" for
+// the mixer, "hw:N,0" for the PCM.
+static char codec_ctl[16] = "hw:0";
+static char codec_pcm[16] = "hw:0,0";
+
 // WM8731 'Capture': the only analog gain ahead of the ADC (there's no RF
-// preamp). sound_mixer() maps percent onto the 0-31 raw range; 70 is step
-// 21, ~-3.0dB. Bench-derived, not a final calibration - see
+// preamp). sound_mixer() maps percent onto the 0-31 raw range; 95 is step
+// 29, +9.0 dB (step 23 is 0 dB, 1.5 dB a step). Bench-derived, not a
+// final calibration - see
 // docs/dsp_design_notes/rx_gain_and_level_calibration.md. rx_clip_check()
 // warns if it turns out too hot.
 #define RX_CAPTURE_GAIN_PERCENT 95
@@ -66,7 +72,7 @@ static int rx_mute_by_switch = 1;
 // not calibrated - and possibly inert on this board: 'Input Mux' is fixed
 // to 'Line', so the mic most likely reaches the ADC on Line-In RIGHT,
 // making 'Capture' the real mic level control (see
-// sound_set_rx_capture()). Check with `amixer -c 0 sget 'Mic'`.
+// sound_set_rx_capture()). Check with `amixer -c audioinjectorpi sget 'Mic'`.
 #define MIC_CAPTURE_GAIN_PERCENT 50
 
 // WM8731 'Master' has independent L/R volumes, and here they feed
@@ -232,7 +238,7 @@ void sound_mixer(char *card_name, char *element, int make_on) {
     // below into a silent no-op. sound_mixer_dump() shows what an element
     // actually supports.
     fprintf(stderr,
-            "sound_mixer: '%s' not found on %s (check `amixer -c 0 scontrols`)\n",
+            "sound_mixer: '%s' not found on %s (check `amixer -c audioinjectorpi scontrols`)\n",
             element, card_name);
     snd_mixer_close(handle);
     return;
@@ -383,7 +389,7 @@ static void sound_mixer_capture_channel(char *card_name, char *element,
       fprintf(stderr,
               "sound_mixer_capture_channel: '%s' on %s rejected a per-channel "
               "capture write (%s) - this control may be a single shared/ganged "
-              "register rather than independent L/R; check `amixer -c 0 sget "
+              "register rather than independent L/R; check `amixer -c audioinjectorpi sget "
               "'%s'` before trusting per-channel capture behavior here\n",
               element, card_name, snd_strerror(err), element);
     }
@@ -430,26 +436,56 @@ static int sound_mixer_capture_switch(const char *card_name, const char *element
 /* ------------------------------------------------------------------ */
 /*  Codec hardware setup - barebones WM8731 init                      */
 /* ------------------------------------------------------------------ */
+int sound_find_codec(void) {
+  int card = snd_card_get_index(SOUND_CODEC_CARD_ID);
+  if (card < 0) {
+    char present[256] = "";
+    size_t used = 0;
+    for (int c = -1; snd_card_next(&c) == 0 && c >= 0;) {
+      char *name = NULL;
+      if (snd_card_get_name(c, &name) == 0 && used < sizeof(present)) {
+        int n = snprintf(present + used, sizeof(present) - used, "%scard %d %s",
+                         used ? ", " : "", c, name);
+        if (n > 0)
+          used += (size_t)n;
+      }
+      free(name);
+    }
+    fprintf(stderr, "sound: no '%s' sound card - is dtoverlay=audioinjector-wm8731-audio "
+                    "in /boot/firmware/config.txt? Cards present: %s\n",
+            SOUND_CODEC_CARD_ID, used ? present : "none");
+    return -1;
+  }
+  snprintf(codec_ctl, sizeof(codec_ctl), "hw:%d", card);
+  snprintf(codec_pcm, sizeof(codec_pcm), "hw:%d,0", card);
+  printf("sound: codec is card %d ('%s')\n", card, SOUND_CODEC_CARD_ID);
+  return card;
+}
+
+const char *sound_codec_pcm(void) {
+  return codec_pcm;
+}
+
 void setup_audio_codec(void) {
-  sound_mixer("hw:0", "Input Mux",
+  sound_mixer(codec_ctl, "Input Mux",
               0); // 'Line In' (bench-confirmed)
-  sound_mixer("hw:0", "Line", RX_LINE_INPUT_ON); // un-mutes the line path (a switch)
-  sound_mixer("hw:0", "Capture", RX_CAPTURE_GAIN_PERCENT); // both channels; afterwards only
+  sound_mixer(codec_ctl, "Line", RX_LINE_INPUT_ON); // un-mutes the line path (a switch)
+  sound_mixer(codec_ctl, "Capture", RX_CAPTURE_GAIN_PERCENT); // both channels; afterwards only
                                                             // L changes (sound_set_rx_capture())
-  sound_mixer("hw:0", "Mic", MIC_CAPTURE_GAIN_PERCENT); // possibly inert - see its #define
+  sound_mixer(codec_ctl, "Mic", MIC_CAPTURE_GAIN_PERCENT); // possibly inert - see its #define
 
   // 'Master' L (local speaker) is set once, here. R (exciter feed) starts
   // muted and is raised only during TX - see LOCAL_SPEAKER_GAIN_PERCENT.
   sound_set_local_monitor(LOCAL_SPEAKER_GAIN_PERCENT);
-  sound_mixer_channel("hw:0", "Master", SND_MIXER_SCHN_FRONT_RIGHT, 0);
+  sound_mixer_channel(codec_ctl, "Master", SND_MIXER_SCHN_FRONT_RIGHT, 0);
 
-  sound_mixer("hw:0", "Output Mixer HiFi", 1);
-  sound_mixer("hw:0", "Output Mixer Line Bypass", 0);
-  sound_mixer("hw:0", "Output Mixer Mic Sidetone", 0);
+  sound_mixer(codec_ctl, "Output Mixer HiFi", 1);
+  sound_mixer(codec_ctl, "Output Mixer Line Bypass", 0);
+  sound_mixer(codec_ctl, "Output Mixer Mic Sidetone", 0);
 
   // Say now how TX will mute RX capture, by trying it: setting 'Line' LEFT
   // to the on it already is changes nothing if it works.
-  if (sound_mixer_capture_switch("hw:0", "Line", SND_MIXER_SCHN_FRONT_LEFT, 1) == 0) {
+  if (sound_mixer_capture_switch(codec_ctl, "Line", SND_MIXER_SCHN_FRONT_LEFT, 1) == 0) {
     printf("sound: TX mutes RX capture with the line-input mute ('Line' LEFT)\n");
   } else {
     rx_mute_by_switch = 0;
@@ -475,9 +511,9 @@ void setup_audio_codec(void) {
 // (ARCHITECTURE.md §10 step 8).
 void sound_set_rx_capture(int enable) {
   if (rx_mute_by_switch &&
-      sound_mixer_capture_switch("hw:0", "Line", SND_MIXER_SCHN_FRONT_LEFT, enable) == 0)
+      sound_mixer_capture_switch(codec_ctl, "Line", SND_MIXER_SCHN_FRONT_LEFT, enable) == 0)
     return;
-  sound_mixer_capture_channel("hw:0", "Capture", SND_MIXER_SCHN_FRONT_LEFT,
+  sound_mixer_capture_channel(codec_ctl, "Capture", SND_MIXER_SCHN_FRONT_LEFT,
                                enable ? RX_CAPTURE_GAIN_PERCENT : 0);
 }
 
@@ -485,14 +521,14 @@ void sound_set_rx_capture(int enable) {
 // LOCAL_SPEAKER_GAIN_PERCENT). Called once at startup; public so a future
 // physical volume control can use it.
 void sound_set_local_monitor(int percent) {
-  sound_mixer_channel("hw:0", "Master", SND_MIXER_SCHN_FRONT_LEFT, percent);
+  sound_mixer_channel(codec_ctl, "Master", SND_MIXER_SCHN_FRONT_LEFT, percent);
 }
 
 // Sets 'Master' RIGHT only - the exciter feed. radio_tx_apply() sets
 // TX_MASTER_VOL for TX and 0 as the relay drops. Never touches LEFT, so
 // there's nothing to restore after TX.
 void sound_set_tx_drive(int percent) {
-  sound_mixer_channel("hw:0", "Master", SND_MIXER_SCHN_FRONT_RIGHT, percent);
+  sound_mixer_channel(codec_ctl, "Master", SND_MIXER_SCHN_FRONT_RIGHT, percent);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1247,7 +1283,7 @@ static void describe_for_capture(char *out, int max) {
 /*  Public API                                                        */
 /* ------------------------------------------------------------------ */
 int sound_thread_start(const char *device_name) {
-  const char *dev = device_name ? device_name : "hw:0,0";
+  const char *dev = device_name ? device_name : codec_pcm;
 
   // SIGUSR1 writes a second of the raw capture to /tmp (capture_dump.h)
   if (capture_dump_init("/tmp", SAMPLE_RATE, CHANNELS) == 0)
