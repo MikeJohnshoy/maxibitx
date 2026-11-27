@@ -170,25 +170,30 @@ network.
 2. Select the board named by the file's `sbitx_version` line. Without
    that line, or with a value maxibitx does not know, it prints the
    valid lines and exits before touching any GPIO line or clock.
-3. Claim the board's GPIO output lines and park them in the
+3. Find the codec's sound card by its ALSA id, `audioinjectorpi`, not
+   its number, which depends on what other sound cards the OS image
+   enables. Without it maxibitx exits, again before touching the
+   hardware.
+4. Claim the board's GPIO output lines and park them in the
    receive-safe state, with the T/R relay and PTT low.
-4. Start the si5351 on the board's I2C bus, with clk1 at its receive
+5. Start the si5351 on the board's I2C bus, with clk1 at its receive
    frequency, and configure the INA260 power monitor if one answers.
-5. Build the software oscillator's table and tune to the startup
+6. Build the software oscillator's table and tune to the startup
    frequency (7.030 MHz).
-6. Initialise the CW tone generator and start the key input thread.
-7. Initialise the receive demodulator, and select the startup mode,
+7. Initialise the CW tone generator and start the key input thread.
+8. Initialise the receive demodulator, and select the startup mode,
    DIGITAL, since most clients are remote SDR and digital-mode programs.
-8. Start rigctld, TCI, HPSDR, iq_stream, the USB gadget and its CAT
+9. Start rigctld, TCI, HPSDR, iq_stream, the USB gadget and its CAT
    port.
-9. Configure the codec's mixer and start the audio thread.
+10. Configure the codec's mixer and start the audio thread.
 
 GPIO comes before anything that could key the transmitter exists, and
 only once the board is known, so no line is ever driven with another
 board's meaning.
 
-Board selection, the GPIO lines, HPSDR's UDP port and audio capture must
-all come up, or maxibitx exits. Everything else is best effort: if
+Board selection, the codec's sound card, the GPIO lines, HPSDR's UDP
+port and audio capture must all come up, or maxibitx exits. Everything
+else is best effort: if
 rigctld, TCI, iq_stream, the USB gadget (or either of its audio
 directions), CAT, the INA260 or audio playback can't start, the log says
 so and maxibitx runs without it. Without playback there is no local
