@@ -99,6 +99,7 @@ The USB gadget needs a device-mode USB port and a few kernel options:
 | Doc | Content |
 |---|---|
 | [`docs/00_intro.md`](docs/00_intro.md) | How maxibitx works: the hardware, the code, and the receive and transmit chains in detail. The one description of the current system |
+| [`docs/01_user_manual.md`](docs/01_user_manual.md) | Operating the radio: installing, the control panel, CW, SSB and the digital modes, setting up, and what to do when something's wrong (an outline for now) |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | How it was designed and built, step by step, with measurements: a historical record |
 | [`docs/06_api.md`](docs/06_api.md) | The external interfaces - rigctld, I/Q streams, USB audio and CAT, TCI - for building an app on maxibitx, plus WSJT-X setup |
 | [`docs/08_troubleshooting_and_bringup.md`](docs/08_troubleshooting_and_bringup.md) | Bring-up and troubleshooting: what goes wrong and how to tell |
