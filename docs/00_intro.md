@@ -46,7 +46,7 @@ codec samples a low intermediate frequency; on transmit it generates
 one. Everything between those converters and the operator is software.
 
 maxibitx is that software. It is a single Linux process, started at boot
-or from a shell, that runs until it receives SIGINT or SIGTERM. It owns
+or from a shell, that runs until it receives SIGINT, SIGTERM or SIGHUP. It owns
 the radio hardware outright: nothing else on the Pi touches the GPIO
 lines, the si5351 or the codec while it runs.
 
@@ -195,8 +195,9 @@ so and maxibitx runs without it. Without playback there is no local
 audio and no transmit. A key `hw_settings.ini` leaves out takes its
 default, except `sbitx_version`.
 
-Shutdown, on SIGINT or SIGTERM (which rigctld's `\shutdown_maxibitx`
-sends, for the control panel's Stop radio), runs roughly in reverse: drop PTT and
+Shutdown, on SIGINT, SIGTERM (which rigctld's `\shutdown_maxibitx`
+sends, for the control panel's Stop radio) or SIGHUP (its terminal
+closed, or an SSH session dropped), runs roughly in reverse: drop PTT and
 the relay and wait 50 ms for them, stop the audio thread first so no
 consumer is left racing a producer, then stop CAT, the USB gadget, HPSDR,
 iq_stream, TCI (disconnecting its clients) and rigctld. SIGKILL, or a
