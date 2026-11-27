@@ -1480,7 +1480,7 @@ class Panel(tk.Tk):
         self.span_combo.grid(row=0, column=1)
         self.span_combo.bind("<<ComboboxSelected>>", lambda e: self.clear_waterfall())
         ttk.Label(bar, text="AGC", style="Muted.TLabel").grid(row=0, column=2, padx=(10, 4))
-        self.agc_combo = ttk.Combobox(bar, textvariable=self.agc_var, width=5, state="readonly",
+        self.agc_combo = ttk.Combobox(bar, textvariable=self.agc_var, width=6, state="readonly",
                                       values=[name for name, _ in AGC_SPEEDS],
                                       font=(self.ui, usz(12), "bold"))
         self.agc_combo.grid(row=0, column=3)
